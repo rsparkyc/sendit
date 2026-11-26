@@ -1,0 +1,14 @@
+{
+  "name": "sendit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.2"
+  }
+}
