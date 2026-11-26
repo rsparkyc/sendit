@@ -1,0 +1,36 @@
+{
+  "description": "Published payload capacities used to calibrate and check the ascent model (src/mission/ascent.ts). All figures are SECONDARY: taken from Wikipedia infoboxes (which cite the operators' user's guides), fetched 2026-11-26; not checked against the guides themselves. Altitudes are not stated by the sources; LEO is taken as 185-200 km (the usual user's-guide reference), an assumption. GTO is a 185 km x 35786 km transfer (250 km perigee for Ariane), the 'GTO-1800' / standard GTO the figures refer to.",
+  "sites": {
+    "cape": { "latDeg": 28.56, "source": "src/mission/data/launch-sites.json" },
+    "kourou": { "latDeg": 5.24, "source": "src/mission/data/launch-sites.json" },
+    "baikonur": { "latDeg": 45.92, "source": "src/mission/data/launch-sites.json" },
+    "plesetsk": { "latDeg": 62.93, "source": "https://en.wikipedia.org/wiki/Plesetsk_Cosmodrome" },
+    "vostochny": { "latDeg": 51.88, "source": "https://en.wikipedia.org/wiki/Vostochny_Cosmodrome" },
+    "mahia": { "latDeg": -39.26, "source": "src/mission/data/launch-sites.json" }
+  },
+  "points": [
+    { "id": "f9-leo", "vehicle": "falcon-9", "site": "cape", "incDeg": 28.5, "altitudeKm": 185, "orbit": "leo", "payloadKg": 22800, "note": "expendable", "source": "https://en.wikipedia.org/wiki/Falcon_9_Block_5" },
+    { "id": "f9-gto", "vehicle": "falcon-9", "site": "cape", "incDeg": 28.5, "altitudeKm": 185, "orbit": "gto", "payloadKg": 8300, "note": "expendable, GTO 27 deg", "source": "https://en.wikipedia.org/wiki/Falcon_9_Block_5" },
+    { "id": "atlas-leo", "vehicle": "atlas-v-401", "site": "cape", "incDeg": 28.5, "altitudeKm": 185, "orbit": "leo", "payloadKg": 9797, "source": "https://en.wikipedia.org/wiki/Atlas_V" },
+    { "id": "atlas-gto", "vehicle": "atlas-v-401", "site": "cape", "incDeg": 28.5, "altitudeKm": 185, "orbit": "gto", "payloadKg": 4750, "source": "https://en.wikipedia.org/wiki/Atlas_V" },
+    { "id": "a5-gto", "vehicle": "ariane-5-eca", "site": "kourou", "incDeg": 6, "altitudeKm": 250, "orbit": "gto", "payloadKg": 10865, "note": "infobox figure (also the flown record, VA237)", "source": "https://en.wikipedia.org/wiki/Ariane_5" },
+    { "id": "soyuz-baikonur-51", "vehicle": "soyuz-2-1b", "site": "baikonur", "incDeg": 51.6, "altitudeKm": 200, "orbit": "leo", "payloadKg": 8670, "source": "https://en.wikipedia.org/wiki/Soyuz-2" },
+    { "id": "soyuz-baikonur-98", "vehicle": "soyuz-2-1b", "site": "baikonur", "incDeg": 98, "altitudeKm": 200, "orbit": "leo", "payloadKg": 7030, "source": "https://en.wikipedia.org/wiki/Soyuz-2" },
+    { "id": "soyuz-plesetsk-72", "vehicle": "soyuz-2-1b", "site": "plesetsk", "incDeg": 72, "altitudeKm": 200, "orbit": "leo", "payloadKg": 7730, "source": "https://en.wikipedia.org/wiki/Soyuz-2" },
+    { "id": "soyuz-plesetsk-98", "vehicle": "soyuz-2-1b", "site": "plesetsk", "incDeg": 98, "altitudeKm": 200, "orbit": "leo", "payloadKg": 7270, "source": "https://en.wikipedia.org/wiki/Soyuz-2" },
+    { "id": "soyuz-vostochny-51", "vehicle": "soyuz-2-1b", "site": "vostochny", "incDeg": 51.6, "altitudeKm": 200, "orbit": "leo", "payloadKg": 8600, "source": "https://en.wikipedia.org/wiki/Soyuz-2" },
+    { "id": "soyuz-vostochny-98", "vehicle": "soyuz-2-1b", "site": "vostochny", "incDeg": 98, "altitudeKm": 200, "orbit": "leo", "payloadKg": 7260, "source": "https://en.wikipedia.org/wiki/Soyuz-2" },
+    { "id": "electron-leo", "vehicle": "electron", "site": "mahia", "incDeg": 45, "altitudeKm": 185, "orbit": "leo", "payloadKg": 300, "note": "stage masses of the vehicle are estimated", "source": "https://en.wikipedia.org/wiki/Rocket_Lab_Electron" },
+    { "id": "electron-sso", "vehicle": "electron", "site": "mahia", "incDeg": 97.4, "altitudeKm": 500, "orbit": "leo", "payloadKg": 200, "note": "500 km SSO; stage masses estimated", "source": "https://en.wikipedia.org/wiki/Rocket_Lab_Electron" }
+  ],
+  "trends": [
+    { "id": "soyuz inclination 98/51.6 (Baikonur)", "num": "soyuz-baikonur-98", "den": "soyuz-baikonur-51" },
+    { "id": "soyuz site+inclination Plesetsk 72 / Baikonur 51.6", "num": "soyuz-plesetsk-72", "den": "soyuz-baikonur-51" },
+    { "id": "soyuz site Vostochny/Baikonur at 51.6", "num": "soyuz-vostochny-51", "den": "soyuz-baikonur-51" },
+    { "id": "soyuz site Vostochny/Baikonur at 98", "num": "soyuz-vostochny-98", "den": "soyuz-baikonur-98" },
+    { "id": "soyuz site Plesetsk/Baikonur at 98", "num": "soyuz-plesetsk-98", "den": "soyuz-baikonur-98" },
+    { "id": "falcon 9 GTO/LEO", "num": "f9-gto", "den": "f9-leo" },
+    { "id": "atlas v 401 GTO/LEO", "num": "atlas-gto", "den": "atlas-leo" },
+    { "id": "electron SSO 500 / LEO (altitude + inclination)", "num": "electron-sso", "den": "electron-leo" }
+  ]
+}

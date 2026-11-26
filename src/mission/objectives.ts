@@ -40,7 +40,7 @@
 import type { TrajectoryEvent } from './events';
 import { cos, DEG, PI } from '../physics/dmath';
 import { DEFAULT_ASCENT_TIME_S, DEFAULT_DOWNRANGE_DEG, launchToParams } from './launch';
-import { makePlan, type MissionPlan, type Spacecraft } from './plan';
+import { isVehicleLaunch, makePlan, type MissionPlan, type Spacecraft, type Stage } from './plan';
 import type { ReplayOptions, ReplayResult } from './replay';
 import { bodyIndexOf, bodyPoleAt, type MissionWorld } from './world';
 
@@ -124,6 +124,31 @@ export function fixedLaunch(altitudeM: number): FixedLaunchRule {
   return { kind: 'fixed', altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S, downrangeDeg: DEFAULT_DOWNRANGE_DEG, circularization: 'j2-mean' };
 }
 
+/**
+ * A vehicle launch (plan start 'launch' with ascent: 'vehicle'): the mission
+ * fixes the launch vehicle below the spacecraft (bit for bit, like the
+ * spacecraft) and the ascent time, downrange angle and circularisation; the
+ * player chooses the parking altitude inside `altitude`, the site, liftoff
+ * time and azimuth, and pays for them in the upper stage's propellant
+ * (ascent.ts). Part three moves the campaign to this rule; `rules.launch`
+ * (FixedLaunchRule, a free delivery) keeps working until then.
+ */
+export interface VehicleLaunchRule {
+  readonly kind: 'vehicle';
+  /** The stages below the mission spacecraft, firing order. */
+  readonly lowerStages: readonly Stage[];
+  /** Allowed parking-orbit altitudes [lo, hi], m. */
+  readonly altitude: Band;
+  readonly ascentTimeS: number;
+  readonly downrangeDeg: number;
+  readonly circularization: 'j2-mean' | 'two-body';
+}
+
+/** The vehicle-launch rule with the launch model's default ascent time, downrange and circularisation. */
+export function vehicleLaunch(lowerStages: readonly Stage[], altitude: Band): VehicleLaunchRule {
+  return { kind: 'vehicle', lowerStages, altitude, ascentTimeS: DEFAULT_ASCENT_TIME_S, downrangeDeg: DEFAULT_DOWNRANGE_DEG, circularization: 'j2-mean' };
+}
+
 /** Restrictions on the start a player may choose. Absent fields: unrestricted. */
 export interface StartRules {
   /** Launch sites the player may use (with `launchSites`, exactly the offered ones). */
@@ -134,8 +159,14 @@ export interface StartRules {
   readonly altitude?: Band;
   /** True: the plan must launch (a free 'state' start is not allowed). */
   readonly launchOnly?: boolean;
-  /** Launch parameters the mission fixes (see FixedLaunchRule). */
+  /** Launch parameters the mission fixes (see FixedLaunchRule): a free delivery to the parking orbit. */
   readonly launch?: LaunchRule;
+  /**
+   * The mission is flown with this launch vehicle (VehicleLaunchRule); the
+   * plan must be a vehicle launch. Not combined with `launch`. (A separate
+   * field so that code reading the fixed rule's fields keeps compiling.)
+   */
+  readonly vehicle?: VehicleLaunchRule;
 }
 
 export interface MissionDefinition {
@@ -510,7 +541,9 @@ export type ConformanceCode =
   | 'launch-window'
   | 'launch-altitude'
   /** Ascent time, downrange angle or circularisation differ from the mission's fixed launch. */
-  | 'launch-ascent';
+  | 'launch-ascent'
+  /** The stages below the spacecraft differ from the mission's vehicle (or a mission without one gets stages). */
+  | 'vehicle';
 
 export interface ConformanceIssue {
   readonly code: ConformanceCode;
@@ -545,6 +578,15 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
       if (!sameBits(p.engines[i].isp, e.isp)) add('spacecraft', `spacecraft.engines[${i}].isp`, `engine ${i} Isp must be ${e.isp} s, got ${p.engines[i].isp}`);
     });
   }
+  const V = mission.rules?.vehicle;
+  const pl = plan.lowerStages ?? [];
+  if (V) {
+    const stageSame = (a: Stage, b: Stage) => sameBits(a.wetMass, b.wetMass) && sameBits(a.dryMass, b.dryMass) && a.engines.length === b.engines.length && a.engines.every((e, i) => sameBits(e.thrust, b.engines[i].thrust) && sameBits(e.isp, b.engines[i].isp));
+    if (pl.length !== V.lowerStages.length) add('vehicle', 'lowerStages', `the mission vehicle has ${V.lowerStages.length} stage(s) below the spacecraft, the plan has ${pl.length}`);
+    else V.lowerStages.forEach((st, k) => { if (!stageSame(pl[k], st)) add('vehicle', `lowerStages[${k}]`, `stage ${k} must be the mission vehicle's (wet ${st.wetMass} kg, dry ${st.dryMass} kg, ${st.engines.length} engine(s)), bit for bit`); });
+    if (!isVehicleLaunch(plan.start)) add('start-kind', 'start.ascent', 'this mission launches on its vehicle (a vehicle launch)');
+  } else if (sc && pl.length > 0) add('vehicle', 'lowerStages', 'this mission has no launch vehicle: the plan may not add stages');
+  if (!V && isVehicleLaunch(plan.start) && (mission.rules?.launch || mission.start?.kind === 'launch')) add('start-kind', 'start.ascent', 'this mission delivers the spacecraft to its parking orbit (not a vehicle launch)');
   if (mission.maxDuration !== undefined && !(plan.duration <= mission.maxDuration)) add('duration', 'duration', `duration ${plan.duration} s exceeds the mission limit ${mission.maxDuration} s`);
   const st = plan.start;
   const r = mission.rules;
@@ -577,6 +619,16 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
       if (!sameBits(ascent, L.ascentTimeS)) add('launch-ascent', 'start.params[3]', `this mission fixes the ascent time at ${L.ascentTimeS} s, got ${ascent}`);
       if (!sameBits(downrange, L.downrangeDeg)) add('launch-ascent', 'start.params[4]', `this mission fixes the downrange angle at ${L.downrangeDeg}°, got ${downrange}`);
       if (circ !== L.circularization) add('launch-ascent', 'start.params[5]', `this mission fixes the circularisation at ${L.circularization}, got ${circ}`);
+    }
+    if (V && st.kind === 'launch') {
+      const p = st.params;
+      const ascent = p[3] ?? DEFAULT_ASCENT_TIME_S;
+      const downrange = p[4] ?? DEFAULT_DOWNRANGE_DEG;
+      const circ = (p[5] ?? 0) === 1 ? 'two-body' : 'j2-mean';
+      if (!(p[2] >= V.altitude[0] && p[2] <= V.altitude[1])) add('launch-altitude', 'start.params[2]', `parking altitude ${p[2] / 1000} km outside this mission's ${V.altitude[0] / 1000}..${V.altitude[1] / 1000} km`);
+      if (!sameBits(ascent, V.ascentTimeS)) add('launch-ascent', 'start.params[3]', `this mission fixes the ascent time at ${V.ascentTimeS} s, got ${ascent}`);
+      if (!sameBits(downrange, V.downrangeDeg)) add('launch-ascent', 'start.params[4]', `this mission fixes the downrange angle at ${V.downrangeDeg}°, got ${downrange}`);
+      if (circ !== V.circularization) add('launch-ascent', 'start.params[5]', `this mission fixes the circularisation at ${V.circularization}, got ${circ}`);
     }
   }
   return out;

@@ -60,7 +60,7 @@ import { DEG, atan2, sincos } from '../physics/dmath';
 import { J2000_BODIES, bodyIndex, type BodyData } from '../physics/solar-system';
 import type { Ephemeris } from '../physics/spacecraft';
 import sitesData from './data/launch-sites.json';
-import { EARTH_ROTATION, WGS84, geodeticToBodyFixed, poleAt, siteIcrf } from './earth-orientation';
+import { EARTH_ROTATION, WGS84, geodeticToBodyFixed, poleAt, siteIcrf, spinRate } from './earth-orientation';
 
 export interface LaunchSite {
   readonly id: string;
@@ -151,6 +151,19 @@ export function launchPlane(site: LaunchSite, t: number, azimuthDeg: number): { 
   const [sa, ca] = sincos(azimuthDeg * DEG);
   const d: V3 = [ca * f.north[0] + sa * f.east[0], ca * f.north[1] + sa * f.east[1], ca * f.north[2] + sa * f.east[2]];
   return { up: f.up, downrange: d, normal: cross(f.up, d), pole: f.pole };
+}
+
+/**
+ * The pad's inertial velocity (Earth's rotation, omega pole x r) split along
+ * the launch direction and across the orbit plane, at liftoff: what the
+ * ascent model (ascent.ts) is given. Deterministic (replay path).
+ */
+export function launchGeometry(site: LaunchSite, t: number, azimuthDeg: number): { alongTrack: number; crossTrack: number } {
+  const f = siteFrame(site, t);
+  const w = spinRate(EARTH_ROTATION);
+  const vp = scale(cross(f.pole, f.r), w);
+  const p = launchPlane(site, t, azimuthDeg);
+  return { alongTrack: dot(vp, p.downrange), crossTrack: dot(vp, p.normal) };
 }
 
 function earthData(bodies: readonly BodyData[]): BodyData {

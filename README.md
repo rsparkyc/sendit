@@ -65,6 +65,155 @@ Left out on purpose:
 The measurements are in the header comments of `solar-system.ts` (`MASSIVE_BODY_FIELDS`)
 and in `test/gravity-field.test.ts`.
 
+## Launch vehicles and the ascent (`src/mission/plan.ts`, `ascent.ts`, `vehicles.ts`)
+
+Not used by any mission yet. Part three switches the campaign over. Until then, every
+mission, score, digest and leaderboard entry is unchanged.
+
+**Plan format 2.** A plan can carry a staged vehicle: `lowerStages`, listed in firing
+order, sit below `spacecraft`, which is the top stage. Every burn names its `stage` and
+an engine of that stage. `separations` lists times at which the active stage is dropped,
+along with whatever propellant it still holds. On the wire, burns and separations form
+one time-ordered list of actions. At equal times a separation comes before a burn; any
+other order is refused, so each plan has exactly one string. The format's limits are 6
+stages, 8 engines per stage, 200 burns and 5 separations, and the decoder is fuzzed.
+
+Plans are written in the format they carry. `makePlan` picks the lowest format that can
+hold the plan (`requiredFormat`), so a one-stage plan is still format 1, byte for byte.
+Every shared link and every stored leaderboard plan therefore keeps its exact string,
+along with any key made from it, and an older build still opens it.
+
+**Staging in the simulator.** The active stage is the lowest one remaining.
+
+- A burn draws on the active stage and cuts off when that stage's tanks are empty, at
+  mass = (stages above) + (its dry mass).
+- At a separation the mass becomes exactly the wet mass of the stages above, which have
+  never fired. The integrator restarts there, as it does at burn boundaries: there is one
+  `propagate` call per stretch between separations.
+- A plan without separations runs the very same single call it always did.
+- A separated stage simply stops existing. It is not tracked.
+- `ReplayResult.stages` reports, for each stage, the propellant used and left, the
+  delta-v (rocket equation over its real mass change, with everything above it as
+  payload) and the separation time.
+- Validation codes: `burn-stage`, `burn-spans-separation`, `separation-last`,
+  `separation-before-insertion`, `action-order`, `stages`.
+
+**Start kinds.** A `launch` start with no `ascent` field is the free delivery to the
+parking orbit, as before. `ascent: 'vehicle'` is a vehicle launch: the lower stages fly
+the ascent analytically and the flight starts at insertion. The stage that reached orbit
+keeps what it has left, and the spacecraft never fires during the ascent.
+
+**Ascent model** (`ascent.ts`, header for details):
+
+- *What it is.* A planar point-mass ascent: vertical rise, a pitch-over kick solved so
+  that orbital speed is reached at the insertion altitude (at most 185 km; higher orbits
+  coast up to apogee and circularise), then a gravity turn.
+- *What it accounts for.*
+  - Gravity, from the integrated g sin γ; the climb is reported separately.
+  - Drag in an exponential atmosphere, with CdA scaling as liftoff mass^(2/3).
+  - Nozzle back-pressure.
+  - A steering loss where a low-thrust upper stage must hold level flight.
+  - Earth's rotation. The target is |v d − v_pad|, so the along-track component helps
+    and the cross-track component costs.
+- *What the losses depend on.* Thrust-to-weight, target altitude and vehicle size.
+- *Body data.* Constants are per body (`ASCENT_BODIES`; the Moon has no atmosphere).
+- *Determinism.* It is deterministic: exact operations, `dmath`, `exactLn`, and a new
+  `exactExp` built from + − × ÷ alone. Its outputs are pinned in `test/ascent.test.ts`.
+  Changing the constants changes replays, so it needs a `PHYSICS_MODEL` bump.
+- *Assumptions.* No winds, no throttling, no optimal steering, and one drag scale and
+  one back-pressure fraction for every vehicle. Parallel boosters are given as their
+  serial equivalent, and fairings are counted with stage 1.
+
+**Validation** (`test/ascent-validation.test.ts`; cited data in
+`test/fixtures/launch-performance.json`). The sources are Wikipedia figures, which are
+secondary, and the stage data is approximate. The Electron's stage masses are estimated.
+
+| Point | Published kg | Model kg | Model/published |
+|---|---|---|---|
+| Falcon 9 LEO 28.5° | 22 800 | 24 323 | 1.07 |
+| Falcon 9 GTO | 8 300 | 9 778 | 1.18 |
+| Atlas V 401 LEO 28.5° | 9 797 | 7 258 | 0.74 |
+| Atlas V 401 GTO | 4 750 | 4 315 | 0.91 |
+| Ariane 5 ECA GTO (Kourou) | 10 865 | 11 145 | 1.03 |
+| Soyuz-2.1b Baikonur 51.6° | 8 670 | 10 730 | 1.24 |
+| Soyuz-2.1b Baikonur 98° | 7 030 | 9 180 | 1.31 |
+| Soyuz-2.1b Plesetsk 72° | 7 730 | 10 046 | 1.30 |
+| Electron LEO / 500 km SSO | 300 / 200 | 286 / 195 | 0.95 / 0.97 |
+
+**How well it fits.**
+
+- *Absolute payloads.* Within −26 % to +31 %. Soyuz comes out optimistic; its fairing
+  and the boosters' large sea-level thrust loss are not modelled per vehicle. Atlas comes
+  out pessimistic in LEO, because its single-RL10 Centaur has very low thrust-to-weight.
+- *Inclination and site trends.* Within 3–6 %:
+  - Soyuz at 98° relative to 51.6°: published 0.81, model 0.86.
+  - Vostochny relative to Baikonur at 51.6°: published 0.99, model 1.00.
+- *Where it does not fit.*
+  - The published few-percent advantage of higher-latitude sites for polar orbits is not
+    reproduced.
+  - The GTO/LEO ratios are off by 10–23 %. They depend on the upper stage, and possibly
+    on LEO figures that are structural limits.
+
+**Scoring quantity.** `ReplayResult.totalDeltaV` is the ascent's delivered delta-v plus
+`deltaV`, the delta-v flown after insertion. The per-stage breakdown is in `stages` and
+`ascent`. No mission is scored on it yet: `evaluate` still uses `deltaV`.
+
+**Rules.** `rules.vehicle = vehicleLaunch(lowerStages, [lo, hi])` fixes the vehicle bit
+for bit (`checkPlanConformance` code `vehicle`) and allows a band of parking altitudes.
+The ascent time, downrange angle and circularisation stay at their defaults. A mission
+without a vehicle refuses extra stages and vehicle launches. `rules.launch` /
+`fixedLaunch` work as before.
+
+**Catalogue** (`vehicles.ts`). All entries are approximations:
+
+- Falcon 9 and Atlas V 401 (medium, two stages).
+- Ariane 5 ECA (heavy, with a hydrogen upper stage).
+- Soyuz-2.1b.
+- Electron (small).
+
+Use `withSpacecraft(vehicle, spacecraft)` to put a spacecraft on top. Direct injection
+(no parking orbit) is left for later: `LaunchSpec` already has room for another mode.
+
+### Hand-off to part three
+
+**UI**
+
+- *Stage list.* Use `vehicleStages(plan)` to get the stages. After a replay,
+  `result.stages[k]` (a `StageReport`) gives `propellantUsed`, `propellantLeft`,
+  `deltaV`, `ascentDeltaV`, `separatedAt` and `droppedInAscent`.
+- *Planning before a replay.* `computeAscent(vehicleStages(plan), { gm, radius,
+  altitudeM }, launchGeometry(launchSite(id), t, azimuthDeg), ASCENT_BODIES.earth)`
+  returns `AscentResult`, which includes `upperStage`, `upperPropellant`, `deltaV`, the
+  `losses` breakdown and `stages[]`. Call it as the player drags altitude or azimuth to
+  show upper-stage propellant at insertion. It takes about 1 ms.
+- *Burns and separations.*
+  - A burn needs `stage`.
+  - A separation is `{ time }` in `plan.separations`.
+  - `flightActions(plan)` gives the merged, time-ordered list.
+  - `validatePlanIssues` and `stagingIssues(plan, firstStage)` give coded errors.
+- *Plan construction.*
+  - Build plans with `makePlan`, so the format is chosen for you.
+  - A vehicle launch is `start: { kind: 'launch', site, params, ascent: 'vehicle' }`.
+  - Check with `isVehicleLaunch(start)`.
+- *Sandbox vehicle editor.* Edit `lowerStages` (start from `VEHICLES`) and `spacecraft`
+  freely, subject to `LIMITS.maxStages`, `maxEngines` and `maxSeparations`.
+- *Missions.* Set `rules.vehicle` (`vehicleLaunch`). Then make `initialMissionPlan` and
+  the editor's launch fields use its altitude band and `lowerStages`; today they read
+  only `rules.launch`.
+
+**Leaderboard server**
+
+- *Start kind.* `engine.ts` `checkRules` requires `start.kind === 'launch'`. Vehicle
+  launches pass, because they are `launch` starts.
+- *Delta-v used for scoring.* Change what is scored and stored to `totalDeltaV` once
+  missions move to it (`evaluate` / `leaderboardKeys`).
+- *New mission versions.* The change re-scores everything, so bump mission versions and
+  re-verify. Format-2 plans are longer: the 16 384-character `maxEncodedLength` holds
+  them, but check any storage-size limits.
+- *Integrator tolerance.* `SERVER_RULES` limits apply unchanged.
+- *Physics model.* The ascent constants are part of the physics model: a change needs a
+  `PHYSICS_MODEL` bump.
+
 ## Flight-plan editor (`src/app/`)
 
 The main page is the game's core loop: an editable mission plan, replayed live.

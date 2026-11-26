@@ -34,6 +34,36 @@ export function exactLn(x: number): number {
   return e * LN2 + 2 * z * s;
 }
 
+/**
+ * e^x for finite x (|x| <= 700), accurate to a few ulp, from exactly-defined
+ * operations only (fixed order and term count, like exactLn): x = k ln2 + r
+ * with k = floor(x / ln2 + 1/2) (ln2 split in two parts so k ln2 is
+ * subtracted without rounding), |r| <= 0.35, Taylor series of e^r to r^20
+ * (Horner), then the exact scaling by 2^k in steps of 2^+-32 and 2.
+ * Used by the ascent model (ascent.ts) for the rocket equation solved for
+ * mass and the atmosphere's density.
+ */
+export function exactExp(x: number): number {
+  if (!(x >= -700 && x <= 700)) throw new Error(`exactExp: argument must be in [-700, 700], got ${x}`);
+  const k = Math.floor(x / LN2 + 0.5);
+  // LN2_HI has 32 significant bits, so k * LN2_HI is exact for |k| < 2^20.
+  const r = x - k * 0.6931471803691238 - k * 1.9082149292705877e-10;
+  let s = 1 / 2432902008176640000; // 1/20!
+  for (let n = 19; n >= 1; n--) s = s * (r / n) + 0;
+  // Horner on sum r^n/n!: s_n = 1/n! + r s_{n+1}.
+  let t = 1 / 2432902008176640000;
+  let f = 2432902008176640000;
+  for (let n = 19; n >= 0; n--) { f = f / (n + 1); t = 1 / f + r * t; }
+  void s;
+  let y = t;
+  let e = k;
+  while (e >= 32) { y *= 4294967296; e -= 32; }
+  while (e <= -32) { y *= 2.3283064365386963e-10; e += 32; }
+  while (e > 0) { y *= 2; e--; }
+  while (e < 0) { y *= 0.5; e++; }
+  return y;
+}
+
 /** Incremental 64-bit hash (two independent 32-bit FNV-1a-style lanes) over float64s, ints and strings. */
 export class Hasher {
   private a = 0x811c9dc5 | 0;
