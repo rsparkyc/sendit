@@ -54,7 +54,7 @@
 +          HeadersConfig: { HeaderBehavior: none }
 +          QueryStringsConfig: { QueryStringBehavior: all }
 +
-+  # Forward the viewer's address (rate limiting) and the body hash OAC needs to sign POSTs. No Host header (function URLs reject it).
++  # Forward the viewer address (rate limiting). x-amz-content-sha256, which OAC needs to sign POSTs, is passed by CloudFront itself and is not allowed in a policy. No Host header (function URLs reject it).
 +  ApiOriginRequestPolicy:
 +    Type: AWS::CloudFront::OriginRequestPolicy
 +    Condition: HasLeaderboard
@@ -64,7 +64,7 @@
 +        CookiesConfig: { CookieBehavior: none }
 +        HeadersConfig:
 +          HeaderBehavior: whitelist
-+          Headers: [CloudFront-Viewer-Address, x-amz-content-sha256, content-type]
++          Headers: [CloudFront-Viewer-Address, content-type]
 +        QueryStringsConfig: { QueryStringBehavior: all }
 +
    Distribution:

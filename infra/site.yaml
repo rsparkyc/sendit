@@ -12,6 +12,20 @@ Parameters:
   HostedZoneId:
     Type: AWS::Route53::HostedZone::Id
     Description: Route 53 hosted zone that contains DomainName
+  # Leaderboard API (infra/leaderboard.yaml outputs). Empty: no /api/* routes (the site as before).
+  LeaderboardSubmitOrigin:
+    Type: String
+    Default: ''
+    Description: Leaderboard stack output SubmitOriginDomain (<id>.lambda-url.us-east-1.on.aws), or empty
+  LeaderboardReadOrigin:
+    Type: String
+    Default: ''
+    Description: Leaderboard stack output ReadOriginDomain, or empty
+
+Conditions:
+  HasLeaderboard: !And
+    - !Not [!Equals [!Ref LeaderboardSubmitOrigin, '']]
+    - !Not [!Equals [!Ref LeaderboardReadOrigin, '']]
 
 Rules:
   RequireUsEast1:
@@ -107,6 +121,47 @@ Resources:
           QueryStringsConfig:
             QueryStringBehavior: none
 
+  # Signs CloudFront's requests to the leaderboard function URLs (AuthType AWS_IAM).
+  LambdaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Condition: HasLeaderboard
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-lambda-oac'
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # /api/*: cache only what the function marks cacheable (boards: max-age=10), keyed on the query string.
+  ApiCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Condition: HasLeaderboard
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub '${AWS::StackName}-api'
+        MinTTL: 0
+        DefaultTTL: 0
+        MaxTTL: 60
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          CookiesConfig: { CookieBehavior: none }
+          HeadersConfig: { HeaderBehavior: none }
+          QueryStringsConfig: { QueryStringBehavior: all }
+
+  # Forward the viewer address (rate limiting). x-amz-content-sha256, which OAC needs to sign POSTs, is passed by CloudFront itself and is not allowed in a policy. No Host header (function URLs reject it).
+  ApiOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Condition: HasLeaderboard
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub '${AWS::StackName}-api'
+        CookiesConfig: { CookieBehavior: none }
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers: [CloudFront-Viewer-Address, content-type]
+        QueryStringsConfig: { QueryStringBehavior: all }
+
   Distribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -123,12 +178,51 @@ Resources:
           AcmCertificateArn: !Ref Certificate
           SslSupportMethod: sni-only
           MinimumProtocolVersion: TLSv1.2_2021
-        Origins:
-          - Id: s3-site
-            DomainName: !GetAtt SiteBucket.RegionalDomainName
-            OriginAccessControlId: !GetAtt OriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ''
+        Origins: !If
+          - HasLeaderboard
+          - - Id: s3-site
+              DomainName: !GetAtt SiteBucket.RegionalDomainName
+              OriginAccessControlId: !GetAtt OriginAccessControl.Id
+              S3OriginConfig:
+                OriginAccessIdentity: ''
+            - Id: leaderboard-submit
+              DomainName: !Ref LeaderboardSubmitOrigin
+              OriginAccessControlId: !GetAtt LambdaOriginAccessControl.Id
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols: [TLSv1.2]
+                OriginReadTimeout: 60
+            - Id: leaderboard-read
+              DomainName: !Ref LeaderboardReadOrigin
+              OriginAccessControlId: !GetAtt LambdaOriginAccessControl.Id
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols: [TLSv1.2]
+                OriginReadTimeout: 30
+          - - Id: s3-site
+              DomainName: !GetAtt SiteBucket.RegionalDomainName
+              OriginAccessControlId: !GetAtt OriginAccessControl.Id
+              S3OriginConfig:
+                OriginAccessIdentity: ''
+        CacheBehaviors: !If
+          - HasLeaderboard
+          - - PathPattern: /api/leaderboard/submit
+              TargetOriginId: leaderboard-submit
+              ViewerProtocolPolicy: https-only
+              AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+              CachedMethods: [GET, HEAD]
+              Compress: true
+              CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # AWS managed CachingDisabled (global id)
+              OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            - PathPattern: /api/*
+              TargetOriginId: leaderboard-read
+              ViewerProtocolPolicy: https-only
+              AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+              CachedMethods: [GET, HEAD]
+              Compress: true
+              CachePolicyId: !Ref ApiCachePolicy
+              OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+          - !Ref AWS::NoValue
         DefaultCacheBehavior:
           TargetOriginId: s3-site
           ViewerProtocolPolicy: redirect-to-https
