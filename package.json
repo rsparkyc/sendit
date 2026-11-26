@@ -3,12 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
+    "vite": "^8.3.8",
     "vitest": "^5.1.2"
   }
 }
