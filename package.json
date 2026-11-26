@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "gen:checkpoints": "node scripts/gen-checkpoints.mjs",
     "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts",
-    "test:browsers": "playwright test --config e2e/playwright.config.ts"
+    "test:browsers": "playwright test --config e2e/playwright.config.ts",
+    "bench:ephemeris": "BENCH=1 vitest run test/ephemeris-bench.test.ts --silent=false"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",

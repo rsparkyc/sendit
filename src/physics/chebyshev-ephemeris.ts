@@ -424,31 +424,96 @@ function reconstruct(L: ChebyshevLayout, pos: Float64Array, vel: Float64Array | 
   const { sysPlanet, sysStart, sysMoons, weight } = L;
   const s0 = only >= 0 ? only : 0;
   const s1 = only >= 0 ? only + 1 : sysPlanet.length;
+  // The three components are independent; each sees exactly the operations
+  // of the per-component form x -= w_k * r_k (k ascending), r_k += B.
   for (let s = s0; s < s1; s++) {
     const p = 3 * sysPlanet[s];
     const a = sysStart[s];
     const b = sysStart[s + 1];
-    for (let c = 0; c < 3; c++) {
-      const B = pos[p + c];
-      let x = B;
+    const Bx = pos[p];
+    const By = pos[p + 1];
+    const Bz = pos[p + 2];
+    let x = Bx;
+    let y = By;
+    let z = Bz;
+    for (let k = a; k < b; k++) {
+      const m = sysMoons[k];
+      const w = weight[m];
+      const i = 3 * m;
+      const rx = pos[i];
+      const ry = pos[i + 1];
+      const rz = pos[i + 2];
+      x -= w * rx;
+      y -= w * ry;
+      z -= w * rz;
+      pos[i] = rx + Bx;
+      pos[i + 1] = ry + By;
+      pos[i + 2] = rz + Bz;
+    }
+    pos[p] = x;
+    pos[p + 1] = y;
+    pos[p + 2] = z;
+    if (vel !== null) {
+      const Vx = vel[p];
+      const Vy = vel[p + 1];
+      const Vz = vel[p + 2];
+      let u = Vx;
+      let v = Vy;
+      let w3 = Vz;
       for (let k = a; k < b; k++) {
-        const i = 3 * sysMoons[k] + c;
-        x -= weight[sysMoons[k]] * pos[i];
-        pos[i] += B;
+        const m = sysMoons[k];
+        const w = weight[m];
+        const i = 3 * m;
+        const rx = vel[i];
+        const ry = vel[i + 1];
+        const rz = vel[i + 2];
+        u -= w * rx;
+        v -= w * ry;
+        w3 -= w * rz;
+        vel[i] = rx + Vx;
+        vel[i + 1] = ry + Vy;
+        vel[i + 2] = rz + Vz;
       }
-      pos[p + c] = x;
-      if (vel !== null) {
-        const V = vel[p + c];
-        let u = V;
-        for (let k = a; k < b; k++) {
-          const i = 3 * sysMoons[k] + c;
-          u -= weight[sysMoons[k]] * vel[i];
-          vel[i] += V;
-        }
-        vel[p + c] = u;
-      }
+      vel[p] = u;
+      vel[p + 1] = v;
+      vel[p + 2] = w3;
     }
   }
+}
+
+/**
+ * Evaluation plan: bodies of equal segment length share the segment index,
+ * the normalised argument x and so the whole sequence T_k(x), T_k'(x) at any
+ * time. Pairs (a, b) of such bodies are evaluated in one loop that runs the
+ * recurrence once and keeps both bodies' sums in registers; b has the lower
+ * (or equal) degree, -1 if a is alone. Each body's own sums see exactly the
+ * operations, in the order, of evalBody.
+ */
+function pairPlan(L: ChebyshevLayout): { a: Int32Array; b: Int32Array } {
+  const n = L.count;
+  const used = new Uint8Array(n);
+  const A: number[] = [];
+  const B: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (used[i]) continue;
+    used[i] = 1;
+    let j = -1;
+    for (let k = i + 1; k < n; k++) {
+      if (!used[k] && L.segLen[k] === L.segLen[i] && L.segCount[k] === L.segCount[i] && L.twoOverLen[k] === L.twoOverLen[i]) {
+        j = k;
+        break;
+      }
+    }
+    if (j >= 0) used[j] = 1;
+    if (j >= 0 && L.degree[j] > L.degree[i]) {
+      A.push(j);
+      B.push(i);
+    } else {
+      A.push(i);
+      B.push(j);
+    }
+  }
+  return { a: Int32Array.from(A), b: Int32Array.from(B) };
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +879,11 @@ export class ChebyshevEphemeris implements Ephemeris {
     for (const cp of opts.checkpoints ?? []) this.addCheckpoint(cp);
     this.tmpP = new Float64Array(3 * this.count);
     this.tmpV = new Float64Array(3 * this.count);
+    this.need = new Uint8Array(this.count);
+    this.sysNeed = new Uint8Array(this.layout.sysPlanet.length);
+    const plan = pairPlan(this.layout);
+    this.pairA = plan.a;
+    this.pairB = plan.b;
   }
 
   /** Chunk index containing t. */
@@ -880,6 +950,7 @@ export class ChebyshevEphemeris implements Ephemeris {
   addChunk(k: number, coeffs: Float64Array, end?: Checkpoint): void {
     if (coeffs.length !== this.layout.chunkLength) throw new Error('chunk size does not match layout');
     this.chunks.set(k, coeffs);
+    this.lastCoeffs = null;
     if (end) this.addCheckpoint(end);
   }
 
@@ -891,6 +962,7 @@ export class ChebyshevEphemeris implements Ephemeris {
   evict(chunks: Iterable<number>): number {
     let n = 0;
     for (const k of chunks) if (this.chunks.delete(k)) n++;
+    this.lastCoeffs = null;
     return n;
   }
 
@@ -903,10 +975,17 @@ export class ChebyshevEphemeris implements Ephemeris {
 
   /** Coefficients of chunk k, building it (and any chunks between it and the nearest checkpoint) if needed. */
   private chunk(k: number): Float64Array {
-    const c = this.chunks.get(k);
-    if (c !== undefined) return c;
-    return this.extendTo(k);
+    // Successive evaluations nearly always fall in the same chunk.
+    if (k === this.lastK && this.lastCoeffs !== null) return this.lastCoeffs;
+    let c = this.chunks.get(k);
+    if (c === undefined) c = this.extendTo(k);
+    this.lastK = k;
+    this.lastCoeffs = c;
+    return c;
   }
+  /** One-entry cache of chunk(k); cleared whenever a chunk is replaced or evicted. */
+  private lastK = 0;
+  private lastCoeffs: Float64Array | null = null;
 
   private extendTo(k: number): Float64Array {
     const dir: 1 | -1 = k >= 0 ? 1 : -1;
@@ -937,32 +1016,168 @@ export class ChebyshevEphemeris implements Ephemeris {
    * Positions (and optionally velocities) of a subset of bodies: body
    * `bodies[j]` goes to pos[3j..3j+2] (vel likewise). Same bits as evaluate for
    * those bodies; costs only the bodies asked for (plus, for a planet or moon,
-   * the rest of its satellite system). Builds the chunk if needed.
+   * the rest of its satellite system, once per system). Builds the chunk if needed.
    */
   evaluateBodies(t: number, bodies: ArrayLike<number>, pos: Float64Array, vel: Float64Array | null): void {
-    const v = vel ?? this.tmpV;
-    for (let j = 0; j < bodies.length; j++) {
-      this.bodyState(bodies[j], t, this.one);
-      pos[3 * j] = this.one[0];
-      pos[3 * j + 1] = this.one[1];
-      pos[3 * j + 2] = this.one[2];
-      if (vel !== null) {
-        v[3 * j] = this.one[3];
-        v[3 * j + 1] = this.one[4];
-        v[3 * j + 2] = this.one[5];
-      }
-    }
-  }
-  private readonly one = new Float64Array(6);
-
-  /** Positions (and optionally velocities) of all bodies at t. No allocation once the chunk exists. */
-  evaluate(t: number, pos: Float64Array, vel: Float64Array | null): void {
     const L = this.layout;
     const rel = t - this.t0;
     const k = Math.floor(rel / L.chunkSpan);
     const coeffs = this.chunk(k);
     const local = rel - k * L.chunkSpan;
-    for (let b = 0; b < this.count; b++) evalBody(L, coeffs, b, local, pos, 3 * b, vel, 3 * b);
+    const p = this.tmpP;
+    const v = vel === null ? null : this.tmpV;
+    const need = this.need;
+    const sysNeed = this.sysNeed;
+    need.fill(0);
+    sysNeed.fill(0);
+    for (let j = 0; j < bodies.length; j++) {
+      const b = bodies[j];
+      const s = L.systemOf[b];
+      if (s < 0) need[b] = 1;
+      else sysNeed[s] = 1;
+    }
+    for (let s = 0; s < sysNeed.length; s++) {
+      if (sysNeed[s] === 0) continue;
+      need[L.sysPlanet[s]] = 1;
+      for (let i = L.sysStart[s]; i < L.sysStart[s + 1]; i++) need[L.sysMoons[i]] = 1;
+    }
+    // A body's evaluated value depends only on its own coefficients (a
+    // position never on whether its velocity is computed), and a system's
+    // reconstruction only on that system's values: evaluating each body and
+    // reconstructing each system once gives the bits bodyState gives.
+    for (let b = 0; b < this.count; b++) if (need[b] !== 0) evalBody(L, coeffs, b, local, p, 3 * b, v, 3 * b);
+    for (let s = 0; s < sysNeed.length; s++) if (sysNeed[s] !== 0) reconstruct(L, p, v, s);
+    for (let j = 0; j < bodies.length; j++) {
+      const b = 3 * bodies[j];
+      pos[3 * j] = p[b];
+      pos[3 * j + 1] = p[b + 1];
+      pos[3 * j + 2] = p[b + 2];
+      if (v !== null) {
+        vel![3 * j] = v[b];
+        vel![3 * j + 1] = v[b + 1];
+        vel![3 * j + 2] = v[b + 2];
+      }
+    }
+  }
+  private readonly need: Uint8Array;
+  private readonly sysNeed: Uint8Array;
+  /** See pairPlan. */
+  private readonly pairA: Int32Array;
+  private readonly pairB: Int32Array;
+
+  /** Positions (and optionally velocities) of all bodies at t. No allocation once the chunk exists. */
+  evaluate(t: number, pos: Float64Array, vel: Float64Array | null): void {
+    if (vel === null) {
+      // Same arithmetic as evalBody(..., null) for every body, then reconstruct.
+      this.positions(t, pos);
+      return;
+    }
+    const L = this.layout;
+    const rel = t - this.t0;
+    const k = Math.floor(rel / L.chunkSpan);
+    const coeffs = this.chunk(k);
+    const local = rel - k * L.chunkSpan;
+    // Same arithmetic as evalBody(..., vel), two bodies of one segment length at a time (see pairPlan).
+    const segLen = L.segLen;
+    const segCount = L.segCount;
+    const twoOverLen = L.twoOverLen;
+    const offset = L.offset;
+    const stride3 = L.stride3;
+    const degree = L.degree;
+    const PA = this.pairA;
+    const PB = this.pairB;
+    const np = PA.length;
+    for (let q = 0; q < np; q++) {
+      const a = PA[q];
+      const b = PB[q];
+      const len = segLen[a];
+      let s = Math.floor(local / len);
+      const nseg = segCount[a];
+      if (s < 0) s = 0;
+      else if (s >= nseg) s = nseg - 1;
+      const x = (local - s * len) * twoOverLen[a] - 1;
+      let o = offset[a] + s * stride3[a];
+      let px = coeffs[o] + x * coeffs[o + 3];
+      let py = coeffs[o + 1] + x * coeffs[o + 4];
+      let pz = coeffs[o + 2] + x * coeffs[o + 5];
+      let vx = coeffs[o + 3];
+      let vy = coeffs[o + 4];
+      let vz = coeffs[o + 5];
+      const x2 = 2 * x;
+      let tPrev = 1;
+      let tc = x;
+      let dPrev = 0;
+      let d = 1;
+      const end = o + 3 * degree[a];
+      o += 6;
+      if (b >= 0) {
+        let ob = offset[b] + s * stride3[b];
+        let qx = coeffs[ob] + x * coeffs[ob + 3];
+        let qy = coeffs[ob + 1] + x * coeffs[ob + 4];
+        let qz = coeffs[ob + 2] + x * coeffs[ob + 5];
+        let wx = coeffs[ob + 3];
+        let wy = coeffs[ob + 4];
+        let wz = coeffs[ob + 5];
+        const endB = ob + 3 * degree[b];
+        for (ob += 6; ob <= endB; ob += 3, o += 3) {
+          const tn = x2 * tc - tPrev;
+          const dn = 2 * tc + x2 * d - dPrev;
+          tPrev = tc;
+          tc = tn;
+          dPrev = d;
+          d = dn;
+          const cx = coeffs[o];
+          const cy = coeffs[o + 1];
+          const cz = coeffs[o + 2];
+          px += tn * cx;
+          py += tn * cy;
+          pz += tn * cz;
+          vx += dn * cx;
+          vy += dn * cy;
+          vz += dn * cz;
+          const ex = coeffs[ob];
+          const ey = coeffs[ob + 1];
+          const ez = coeffs[ob + 2];
+          qx += tn * ex;
+          qy += tn * ey;
+          qz += tn * ez;
+          wx += dn * ex;
+          wy += dn * ey;
+          wz += dn * ez;
+        }
+        const sb = twoOverLen[b];
+        vel[3 * b] = wx * sb;
+        vel[3 * b + 1] = wy * sb;
+        vel[3 * b + 2] = wz * sb;
+        pos[3 * b] = qx;
+        pos[3 * b + 1] = qy;
+        pos[3 * b + 2] = qz;
+      }
+      for (; o <= end; o += 3) {
+        const tn = x2 * tc - tPrev;
+        const dn = 2 * tc + x2 * d - dPrev;
+        tPrev = tc;
+        tc = tn;
+        dPrev = d;
+        d = dn;
+        const cx = coeffs[o];
+        const cy = coeffs[o + 1];
+        const cz = coeffs[o + 2];
+        px += tn * cx;
+        py += tn * cy;
+        pz += tn * cz;
+        vx += dn * cx;
+        vy += dn * cy;
+        vz += dn * cz;
+      }
+      const sa = twoOverLen[a];
+      vel[3 * a] = vx * sa;
+      vel[3 * a + 1] = vy * sa;
+      vel[3 * a + 2] = vz * sa;
+      pos[3 * a] = px;
+      pos[3 * a + 1] = py;
+      pos[3 * a + 2] = pz;
+    }
     reconstruct(L, pos, vel);
   }
 
@@ -972,30 +1187,57 @@ export class ChebyshevEphemeris implements Ephemeris {
     const k = Math.floor(rel / L.chunkSpan);
     const coeffs = this.chunk(k);
     const local = rel - k * L.chunkSpan;
-    // Same arithmetic as evalBody(..., null), inlined: this is the hot path.
+    // Same arithmetic as evalBody(..., null), inlined, two bodies of one
+    // segment length at a time (see pairPlan): this is the hot path.
     const segLen = L.segLen;
     const segCount = L.segCount;
     const twoOverLen = L.twoOverLen;
     const offset = L.offset;
     const stride3 = L.stride3;
     const degree = L.degree;
-    const n = this.count;
-    for (let b = 0; b < n; b++) {
-      const len = segLen[b];
+    const PA = this.pairA;
+    const PB = this.pairB;
+    const np = PA.length;
+    for (let q = 0; q < np; q++) {
+      const a = PA[q];
+      const b = PB[q];
+      const len = segLen[a];
       let s = Math.floor(local / len);
-      const nseg = segCount[b];
+      const nseg = segCount[a];
       if (s < 0) s = 0;
       else if (s >= nseg) s = nseg - 1;
-      const x = (local - s * len) * twoOverLen[b] - 1;
-      let o = offset[b] + s * stride3[b];
+      const x = (local - s * len) * twoOverLen[a] - 1;
+      let o = offset[a] + s * stride3[a];
       let px = coeffs[o] + x * coeffs[o + 3];
       let py = coeffs[o + 1] + x * coeffs[o + 4];
       let pz = coeffs[o + 2] + x * coeffs[o + 5];
       const x2 = 2 * x;
       let tPrev = 1;
       let tc = x;
-      const end = o + 3 * degree[b];
-      for (o += 6; o <= end; o += 3) {
+      const end = o + 3 * degree[a];
+      o += 6;
+      if (b >= 0) {
+        let ob = offset[b] + s * stride3[b];
+        let qx = coeffs[ob] + x * coeffs[ob + 3];
+        let qy = coeffs[ob + 1] + x * coeffs[ob + 4];
+        let qz = coeffs[ob + 2] + x * coeffs[ob + 5];
+        const endB = ob + 3 * degree[b];
+        for (ob += 6; ob <= endB; ob += 3, o += 3) {
+          const tn = x2 * tc - tPrev;
+          tPrev = tc;
+          tc = tn;
+          px += tn * coeffs[o];
+          py += tn * coeffs[o + 1];
+          pz += tn * coeffs[o + 2];
+          qx += tn * coeffs[ob];
+          qy += tn * coeffs[ob + 1];
+          qz += tn * coeffs[ob + 2];
+        }
+        out[3 * b] = qx;
+        out[3 * b + 1] = qy;
+        out[3 * b + 2] = qz;
+      }
+      for (; o <= end; o += 3) {
         const tn = x2 * tc - tPrev;
         tPrev = tc;
         tc = tn;
@@ -1003,9 +1245,9 @@ export class ChebyshevEphemeris implements Ephemeris {
         py += tn * coeffs[o + 1];
         pz += tn * coeffs[o + 2];
       }
-      out[3 * b] = px;
-      out[3 * b + 1] = py;
-      out[3 * b + 2] = pz;
+      out[3 * a] = px;
+      out[3 * a + 1] = py;
+      out[3 * a + 2] = pz;
     }
     if (L.sysPlanet.length > 0) reconstruct(L, out, null);
   }

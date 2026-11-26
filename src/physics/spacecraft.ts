@@ -148,12 +148,53 @@ export function propagate(
   const rtol = opts.rtol ?? 1e-12;
   const dryMass = opts.dryMass ?? 0;
   const nBodies = ephem.count;
-  const gm = ephem.gm;
+  // GM copied into a Float64Array (same values) for a monomorphic hot loop.
+  const gm = Float64Array.from(ephem.gm as ArrayLike<number>);
   const bodyPos = new Float64Array(3 * nBodies);
   const ref = new Float64Array(6);
   const oblateness = ephem.oblateness;
   const relBody = ephem.relativity ? ephem.relativity.body : -1;
   const sunState = new Float64Array(6);
+
+  // Zonal bodies only, ascending (the order the terms are summed in). The
+  // constant prefactors are the same left-to-right products the per-call
+  // expressions start with, so they round identically:
+  // -1.5 * j2 * gm * R * R and 0.125 * j4 * gm * R2 * R2.
+  const zBody: number[] = [];
+  const zF2: number[] = [];
+  const zF4: number[] = [];
+  const zPole: number[] = [];
+  if (oblateness !== undefined) {
+    for (let i = 0; i < nBodies; i++) {
+      const ob = oblateness[i];
+      if (ob === null || ob === undefined) continue;
+      zBody.push(i);
+      zF2.push(-1.5 * ob.j2 * gm[i] * ob.radius * ob.radius);
+      const j4 = ob.j4;
+      const R2 = ob.radius * ob.radius;
+      zF4.push(j4 !== undefined && j4 !== 0 ? 0.125 * j4 * gm[i] * R2 * R2 : 0);
+      zPole.push(ob.pole[0], ob.pole[1], ob.pole[2]);
+    }
+  }
+  const nZonal = zBody.length;
+  const zBodyA = Int32Array.from(zBody);
+  const zF2A = Float64Array.from(zF2);
+  const zF4A = Float64Array.from(zF4);
+  const zHasJ4 = Uint8Array.from(zF4, (f, k) => {
+    const j4 = oblateness![zBody[k]]!.j4;
+    return j4 !== undefined && j4 !== 0 ? 1 : 0;
+  });
+  const zPoleA = Float64Array.from(zPole);
+
+  // Ephemeris answers are functions of t alone, and the integrator asks for
+  // the same t twice per step (stage 11 at t + 1.0*h and the FSAL stage at
+  // t + h), after every refresh() and for every rejected step's first stage:
+  // reuse the last answer. Keys compare with Object.is so that -0 and 0 stay
+  // distinct calls, as before.
+  let posT = NaN;
+  let sunT = NaN;
+  let refT = NaN;
+  let refBody = -1;
 
   // Burn currently firing, with its direction pre-normalised.
   let active: Burn | null = null;
@@ -170,7 +211,10 @@ export function propagate(
     let ay = 0;
     let az = 0;
 
-    ephem.positions(t, bodyPos);
+    if (!Object.is(t, posT)) {
+      ephem.positions(t, bodyPos);
+      posT = t;
+    }
     for (let i = 0; i < nBodies; i++) {
       const dx = bodyPos[3 * i] - x;
       const dy = bodyPos[3 * i + 1] - yy;
@@ -184,37 +228,32 @@ export function propagate(
 
     // Zonal J2 of every body that has one. r = spacecraft - body, s = r.pole:
     // a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ].
-    if (oblateness !== undefined) {
-      for (let i = 0; i < nBodies; i++) {
-        const ob = oblateness[i];
-        if (ob === null || ob === undefined) continue;
-        const rx = x - bodyPos[3 * i];
-        const ry = yy - bodyPos[3 * i + 1];
-        const rz = z - bodyPos[3 * i + 2];
-        const px = ob.pole[0];
-        const py = ob.pole[1];
-        const pz = ob.pole[2];
-        const r2 = rx * rx + ry * ry + rz * rz;
-        const sp = rx * px + ry * py + rz * pz;
-        const f = (-1.5 * ob.j2 * gm[i] * ob.radius * ob.radius) / (r2 * r2 * Math.sqrt(r2));
-        const c1 = 1 - (5 * sp * sp) / r2;
-        ax += f * (c1 * rx + 2 * sp * px);
-        ay += f * (c1 * ry + 2 * sp * py);
-        az += f * (c1 * rz + 2 * sp * pz);
-        // J4, u = s/r: a += J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
-        const j4 = ob.j4;
-        if (j4 !== undefined && j4 !== 0) {
-          const R2 = ob.radius * ob.radius;
-          const r = Math.sqrt(r2);
-          const u = sp / r;
-          const u2 = u * u;
-          const f4 = (0.125 * j4 * gm[i] * R2 * R2) / (r2 * r2 * r2 * r);
-          const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
-          const cp = f4 * r * u * (140 * u2 - 60);
-          ax += cr * rx - cp * px;
-          ay += cr * ry - cp * py;
-          az += cr * rz - cp * pz;
-        }
+    for (let q = 0; q < nZonal; q++) {
+      const i = zBodyA[q];
+      const rx = x - bodyPos[3 * i];
+      const ry = yy - bodyPos[3 * i + 1];
+      const rz = z - bodyPos[3 * i + 2];
+      const px = zPoleA[3 * q];
+      const py = zPoleA[3 * q + 1];
+      const pz = zPoleA[3 * q + 2];
+      const r2 = rx * rx + ry * ry + rz * rz;
+      const sp = rx * px + ry * py + rz * pz;
+      const f = zF2A[q] / (r2 * r2 * Math.sqrt(r2));
+      const c1 = 1 - (5 * sp * sp) / r2;
+      ax += f * (c1 * rx + 2 * sp * px);
+      ay += f * (c1 * ry + 2 * sp * py);
+      az += f * (c1 * rz + 2 * sp * pz);
+      // J4, u = s/r: a += J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
+      if (zHasJ4[q] !== 0) {
+        const r = Math.sqrt(r2);
+        const u = sp / r;
+        const u2 = u * u;
+        const f4 = zF4A[q] / (r2 * r2 * r2 * r);
+        const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
+        const cp = f4 * r * u * (140 * u2 - 60);
+        ax += cr * rx - cp * px;
+        ay += cr * ry - cp * py;
+        az += cr * rz - cp * pz;
       }
     }
 
@@ -222,7 +261,10 @@ export function propagate(
     // a = mu/(c^2 r^3) [ (4 mu/r - v^2) r + 4 (r.v) v ]. DOP853 handles the
     // velocity dependence directly.
     if (relBody >= 0) {
-      ephem.bodyState(relBody, t, sunState);
+      if (!Object.is(t, sunT)) {
+        ephem.bodyState(relBody, t, sunState);
+        sunT = t;
+      }
       const rx = x - sunState[0];
       const ry = yy - sunState[1];
       const rz = z - sunState[2];
@@ -246,7 +288,11 @@ export function propagate(
       let ty = uy;
       let tz = uz;
       if (active.frame.kind === 'orbital') {
-        ephem.bodyState(active.frame.body, t, ref);
+        if (!Object.is(t, refT) || refBody !== active.frame.body) {
+          ephem.bodyState(active.frame.body, t, ref);
+          refT = t;
+          refBody = active.frame.body;
+        }
         const rx = x - ref[0];
         const ry = yy - ref[1];
         const rz = z - ref[2];
