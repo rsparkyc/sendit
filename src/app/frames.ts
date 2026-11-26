@@ -20,7 +20,16 @@
 export type FrameSpec =
   | { kind: 'barycentric' }
   | { kind: 'inertial'; center: number }
-  | { kind: 'rotating'; center: number; secondary: number };
+  | { kind: 'rotating'; center: number; secondary: number }
+  /** Body-fixed: origin at the body, axes turning with its surface (a geostationary satellite is a fixed point). */
+  | { kind: 'surface'; center: number };
+
+/**
+ * Body orientation for surface frames: writes the body-fixed -> ICRF rotation
+ * (row-major) at TDB t into out and returns the spin rate about the body's
+ * pole in rad/s, or NaN when the body has no rotation model.
+ */
+export type Orientation = (body: number, t: number, out: Float64Array) => number;
 
 /** Obliquity of the ecliptic at J2000 (IAU 2006), 84381.406 arcsec. */
 export const OBLIQUITY_J2000 = (84381.406 / 3600) * (Math.PI / 180);
@@ -52,7 +61,12 @@ export interface BodySnapshot {
   readonly pos: ArrayLike<number>;
   readonly vel: ArrayLike<number>;
   readonly gm: ArrayLike<number>;
+  /** Time and orientation provider, needed only by surface frames. */
+  readonly t?: number;
+  readonly orient?: Orientation;
 }
+
+const ORIENT_TMP = new Float64Array(9);
 
 export function computeFrame(spec: FrameSpec, s: BodySnapshot, out: FrameState): FrameState {
   const { origin, originVel, axes, omega } = out;
@@ -83,6 +97,18 @@ export function computeFrame(spec: FrameSpec, s: BodySnapshot, out: FrameState):
   }
   if (spec.kind === 'inertial') {
     axes.set(ECLIPTIC_AXES);
+    return out;
+  }
+  if (spec.kind === 'surface') {
+    const m = ORIENT_TMP;
+    const rate = s.orient && s.t !== undefined ? s.orient(c, s.t, m) : NaN;
+    if (!Number.isFinite(rate)) throw new Error('surface frame undefined: no rotation model for this body');
+    // Rows of the frame = body axes in ICRF = columns of body->ICRF.
+    for (let r = 0; r < 3; r++) for (let k = 0; k < 3; k++) axes[3 * r + k] = m[3 * k + r];
+    // Spin about the pole (third body axis); pole precession is neglected.
+    omega[0] = rate * m[2];
+    omega[1] = rate * m[5];
+    omega[2] = rate * m[8];
     return out;
   }
   const j = spec.secondary;
@@ -153,11 +179,27 @@ export function frameCenter(spec: FrameSpec): number | null {
 export function frameLabel(spec: FrameSpec, name: (i: number) => string): string {
   switch (spec.kind) {
     case 'barycentric':
-      return 'Barycentric inertial';
+      return 'Inertial, centred on the Solar System barycentre';
     case 'inertial':
-      return `${name(spec.center)}-centred inertial`;
+      return `Inertial, centred on ${name(spec.center)}`;
+    case 'surface':
+      return `Rotating with ${name(spec.center)}'s surface`;
     case 'rotating':
-      return `${name(spec.center)}-centred, ${name(spec.secondary)} fixed`;
+      return `Rotating with the ${name(spec.center)} to ${name(spec.secondary)} line`;
+  }
+}
+
+/** One-line explanation of a frame, for the View panel. */
+export function frameExplain(spec: FrameSpec, name: (i: number) => string): string {
+  switch (spec.kind) {
+    case 'barycentric':
+      return 'Fixed stars do not turn; the Sun wobbles slightly about the centre of mass. Good for interplanetary flights.';
+    case 'inertial':
+      return `${name(spec.center)} stays at the centre and the stars stay still; orbits around it are closed ellipses.`;
+    case 'surface':
+      return `Turns with ${name(spec.center)}: the ground stands still, a geostationary satellite is a fixed point and a low orbit traces its ground track.`;
+    case 'rotating':
+      return `${name(spec.center)} at the centre and ${name(spec.secondary)} held still on one axis: shows transfers and flybys between the two.`;
   }
 }
 
@@ -173,6 +215,8 @@ export function frameKey(spec: FrameSpec, id: (i: number) => string): string {
       return `in:${id(spec.center)}`;
     case 'rotating':
       return `rot:${id(spec.center)}:${id(spec.secondary)}`;
+    case 'surface':
+      return `fix:${id(spec.center)}`;
   }
 }
 
@@ -183,6 +227,7 @@ export function parseFrameKey(key: string, indexOf: (id: string) => number): Fra
   const idx = parts.slice(1).map(indexOf);
   if (idx.some((i) => i < 0)) return null;
   if (parts[0] === 'in' && idx.length === 1) return { kind: 'inertial', center: idx[0] };
+  if (parts[0] === 'fix' && idx.length === 1) return { kind: 'surface', center: idx[0] };
   if (parts[0] === 'rot' && idx.length === 2 && idx[0] !== idx[1]) return { kind: 'rotating', center: idx[0], secondary: idx[1] };
   return null;
 }

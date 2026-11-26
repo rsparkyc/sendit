@@ -205,6 +205,18 @@ test('solve the geostationary mission by numeric entry; objectives turn complete
   await page.evaluate(() => (window as any).sendit.camera.setDistance(1.6e8, true));
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${SHOTS}/4-geo-solved.png` });
+  // The mission opens in Earth's surface frame: on geostationary orbit the craft holds still over one longitude.
+  expect(await page.evaluate(() => (window as any).sendit.store.get().frame.kind)).toBe('surface');
+  await expect(page.locator('.frame-note')).toContainText("Rotating with Earth's surface");
+  await page.evaluate(() => (window as any).sendit.camera.setDistance(2.2e8, true));
+  await page.waitForTimeout(600);
+  const pts = await page.evaluate(() => [1.5, 2.25, 3, 3.75, 4.5].map((d) => (window as any).sendit.screenAt(d * 86400)));
+  const spread = Math.max(...pts.map((p: { x: number; y: number }) => Math.hypot(p.x - pts[0].x, p.y - pts[0].y)));
+  console.log(`geo in surface frame: on-screen spread over 3 days ${spread.toFixed(1)} px`);
+  expect(spread).toBeLessThan(6);
+  await page.evaluate(() => (window as any).sendit.store.set({ t: (window as any).sendit.store.get().plan.epoch + 2 * 86400, paused: true }));
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: `${SHOTS}/4b-geo-surface-frame.png` });
 });
 
 test('share link reproduces the flight; bad and mismatched links are reported', async ({ page, browser }) => {

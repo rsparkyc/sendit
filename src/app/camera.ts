@@ -41,6 +41,44 @@ export class OrbitCamera {
     this.elevation = Math.max(-1.55, Math.min(1.55, this.elevation + dEl));
   }
 
+  /** Angular velocity left after a drag (rad/s); decays quickly. Zero stops it. */
+  private spinAz = 0;
+  private spinEl = 0;
+  /** Inertia after a fling; off for prefers-reduced-motion. */
+  inertia = true;
+
+  fling(vAz: number, vEl: number): void {
+    if (!this.inertia) return;
+    const cap = 4; // rad/s: modest
+    this.spinAz = Math.max(-cap, Math.min(cap, vAz));
+    this.spinEl = Math.max(-cap, Math.min(cap, vEl));
+  }
+
+  stop(): void {
+    this.spinAz = 0;
+    this.spinEl = 0;
+  }
+
+  private rendered = '';
+
+  /** True if nothing about the view changed since `markRendered` and no smoothing is in progress. */
+  settled(): boolean {
+    if (this.spinAz !== 0 || this.spinEl !== 0) return false;
+    if (Math.abs(this.logTarget - this.logCurrent) > 1e-5) return false;
+    if (this.glideFrom) return false;
+    const d = this.distance;
+    if (Math.hypot(this.glide[0], this.glide[1], this.glide[2]) > d * 1e-5) return false;
+    return this.key() === this.rendered;
+  }
+
+  markRendered(): void {
+    this.rendered = this.key();
+  }
+
+  private key(): string {
+    return `${this.azimuth},${this.elevation},${this.logTarget},${this.logCurrent}`;
+  }
+
   /** Call when the focus object changes: the view glides from where it was looking. */
   refocus(): void {
     if (!this.hasFocus) return;
@@ -59,6 +97,13 @@ export class OrbitCamera {
   update(dt: number, focus: ArrayLike<number>, minDist: number): void {
     const lmin = Math.log(Math.max(minDist, MIN_DISTANCE));
     if (this.logTarget < lmin) this.logTarget = lmin;
+    if (this.spinAz !== 0 || this.spinEl !== 0) {
+      this.rotate(this.spinAz * dt, this.spinEl * dt);
+      const k = Math.exp(-dt * 6);
+      this.spinAz *= k;
+      this.spinEl *= k;
+      if (Math.abs(this.spinAz) + Math.abs(this.spinEl) < 0.01) this.stop();
+    }
     const a = 1 - Math.exp(-dt * 12);
     this.logCurrent += (this.logTarget - this.logCurrent) * a;
     if (this.logCurrent < lmin) this.logCurrent = lmin;

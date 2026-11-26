@@ -18,6 +18,13 @@ import { CAMPAIGN } from '../mission/campaign';
 import type { EventKind, TrajectoryEvent } from '../mission/events';
 import { PHYSICS_MODEL, worldFromBodyData, type MissionWorld } from '../mission/world';
 import type { BodyData } from './physics';
+import { EARTH_ROTATION, bodyToIcrf as earthModelToIcrf, spinRate as earthSpinRate } from '../mission/earth-orientation';
+
+/** Earth body-fixed -> ICRF at TDB t with the launch code's own rotation model (UT1-based); returns the spin rate, rad/s. */
+export function earthOrientation(t: number, out: Float64Array): number {
+  earthModelToIcrf(EARTH_ROTATION, t, out);
+  return earthSpinRate(EARTH_ROTATION);
+}
 
 export {
   CAMPAIGN, DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, LIMITS, PAR_SCORE, initialMissionPlan, missionReplayOptions, validatePlanIssues, PHYSICS_MODEL, PLAN_FORMAT, PlanError, SAMPLE_MISSIONS,

@@ -13,8 +13,9 @@
  *
  * Each panel builds its DOM once and updates it from the store.
  */
-import { el, esc, fillBodySelect, formatMet, parseDuration, setText, setValue } from './dom';
+import { el, esc, fillBodySelect, formatMet, parseDuration, section, setText, setValue } from './dom';
 import type { Editor } from './editor';
+import { Tuner } from './tuner';
 import { eventLabel, listEvents, type ListedEvent } from './events-view';
 import { formatDistance, formatSpeed } from './format';
 import {
@@ -49,16 +50,9 @@ const km = (m: number) => `${(m / 1000).toLocaleString('en-US', { maximumFractio
 const fmtDv = (v: number) => (Number.isFinite(v) ? `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m/s` : '—');
 const fmtKg = (v: number) => `${Math.round(v).toLocaleString('en-US')} kg`;
 
-function section(title: string, cls: string, ...children: (Node | string | null)[]): HTMLElement {
-  const head = el('button', { className: 'sec-title', textContent: title, type: 'button' });
-  const body = el('div', { className: 'sec-body' }, ...children);
-  const s = el('section', { className: `panel ed ${cls}` }, head, body);
-  head.onclick = () => s.classList.toggle('collapsed');
-  return s;
-}
-
 function numInput(title: string, step: string, onCommit: (v: number) => void, cls = ''): HTMLInputElement {
-  const i = el('input', { type: 'number', step, title, className: `num ${cls}` });
+  const i = el('input', { type: 'text', title, className: `num ${cls}`, inputMode: 'decimal', enterKeyHint: 'done', spellcheck: false, autocomplete: 'off' });
+  i.dataset.step = step;
   const commit = () => {
     const v = Number(i.value);
     if (i.value.trim() !== '' && Number.isFinite(v)) onCommit(v);
@@ -490,10 +484,11 @@ export class NodesPanel {
   private readonly parked = el('div', { className: 'parked' });
   private readonly planErr = el('div', { className: 'error' });
   // Detail controls.
-  private readonly time = el('input', { type: 'text', spellcheck: false, className: 'met-input', title: 'Burn centre, mission elapsed time: "T+1d 02:03:04", "3h 20m", or seconds' });
+  private readonly timeTuner: Tuner;
   private readonly tStep = el('select', { title: 'Time step for − / + and [ ]' });
   private readonly dvStep = el('select', { title: 'Delta-v step for − / + and the W S A D Q E keys' });
-  private readonly dvIn: HTMLInputElement[] = [];
+  private readonly fine = el('button', { className: 'btn fine', type: 'button', textContent: 'Fine ×0.1', title: 'Fine: one tenth of the step for buttons and drag strips' });
+  private readonly dvTuners: Tuner[] = [];
   private readonly frameSel = el('select', { title: 'Reference body of the orbital frame (prograde, normal, radial are relative to it)' });
   private readonly engineSel = el('select', { title: 'Engine' });
   private readonly readout = el('div', { className: 'node-readout' });
@@ -515,50 +510,63 @@ export class NodesPanel {
       const i = ctx.store.get().selectedNode;
       if (i !== null) ctx.editor.updateNode(i, { engine: Number(this.engineSel.value) });
     };
-    this.time.addEventListener('change', () => this.commitTime());
-    this.time.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        this.commitTime();
-        this.time.blur();
-      }
-    });
+    const sel = () => ctx.store.get().selectedNode;
     const btn = (t: string, f: () => void, title = '') => {
       const b = el('button', { className: 'btn small', textContent: t, title, type: 'button' });
       b.onclick = f;
       return b;
     };
-    const sel = () => ctx.store.get().selectedNode;
-    const tRow = el('div', { className: 'frow' }, el('span', { textContent: 'Time' }),
-      el('div', { className: 'fctl' }, btn('−', () => { const i = sel(); if (i !== null) ctx.editor.nudgeTime(i, -this.timeStep()); }, '[ key'), this.time, btn('+', () => { const i = sel(); if (i !== null) ctx.editor.nudgeTime(i, this.timeStep()); }, '] key'), this.tStep));
-    const dvRows = AXES.map((name, axis) => {
-      const inp = numInput(`${name} delta-v, m/s`, 'any', (v) => {
+    this.fine.setAttribute('aria-pressed', 'false');
+    this.fine.onclick = () => this.fine.setAttribute('aria-pressed', String(this.fine.getAttribute('aria-pressed') !== 'true'));
+    this.timeTuner = new Tuner({
+      label: 'Time',
+      title: 'Burn centre, mission elapsed time: "T+1d 02:03:04", "3h 20m", or seconds',
+      inputClass: 'met-input',
+      inputMode: 'text',
+      step: () => this.timeStep() * this.fineMul(),
+      nudge: (d) => { const i = sel(); if (i !== null) ctx.editor.nudgeTime(i, d); },
+      commit: (text) => this.commitTime(text),
+    });
+    this.dvTuners = AXES.map((name, axis) => new Tuner({
+      label: name,
+      title: `${name} delta-v, m/s`,
+      inputClass: 'num dv',
+      inputMode: 'decimal',
+      step: () => this.step() * this.fineMul(),
+      nudge: (d) => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, d); },
+      commit: (text) => {
+        const v = Number(text);
         const i = sel();
-        if (i === null) return;
+        if (text.trim() === '' || !Number.isFinite(v) || i === null) return 'Enter a number in m/s';
         const n = nodesOf(ctx.store.get().plan)[i]?.node;
-        if (!n) return;
+        if (!n) return null;
         const dv: [number, number, number] = [...n.dv];
         dv[axis] = v;
         ctx.editor.updateNode(i, { dv });
-      }, 'dv');
-      this.dvIn.push(inp);
-      const keys = ['W / S', 'D / A', 'E / Q'][axis];
-      return el('div', { className: 'frow' }, el('span', { textContent: name, title: `Keys ${keys}; Shift ×10, Alt ×0.1` }),
-        el('div', { className: 'fctl' },
-          btn('−−', () => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, -10 * this.step()); }),
-          btn('−', () => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, -this.step()); }),
-          inp,
-          btn('+', () => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, this.step()); }),
-          btn('++', () => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, 10 * this.step()); })));
-    });
+        return null;
+      },
+      negate: () => {
+        const i = sel();
+        const n = i !== null ? nodesOf(ctx.store.get().plan)[i]?.node : undefined;
+        if (!n || i === null) return;
+        const dv: [number, number, number] = [...n.dv];
+        dv[axis] = -dv[axis];
+        ctx.editor.updateNode(i, { dv });
+      },
+    }));
     const actions = el('div', { className: 'row wrap' },
       btn('Go to node', () => { const i = sel(); if (i !== null) this.goTo(i); }),
       btn('Disable', () => { const i = sel(); if (i !== null) ctx.editor.disableNode(i); }),
       btn('Delete', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }, 'Delete key'),
       btn('Target flyby…', () => { const i = sel(); if (i !== null) ctx.openPlanner?.('target', i); }, 'Correct this burn toward a closest-approach altitude at a body'));
-    this.detail.append(tRow, row('Frame', this.frameSel), row('Engine', this.engineSel), row('Step', this.dvStep), ...dvRows, this.readout, this.nodeErr, actions);
+    const steps = el('div', { className: 'steps-row' },
+      el('label', {}, el('span', { textContent: 'Δv step' }), this.dvStep),
+      el('label', {}, el('span', { textContent: 'Time step' }), this.tStep),
+      this.fine);
+    this.detail.append(this.timeTuner.root, steps, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), this.readout, this.nodeErr, actions);
     const addCursor = btn('+ Node at cursor', () => this.addAtCursor(), 'Add a burn at the time cursor (or click the trajectory)');
     const planner = btn('Transfer planner…', () => ctx.openPlanner?.('transfer'), 'Porkchop plots, departure burns, flyby targeting and chains');
-    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or click the trajectory' }), planner), this.list, this.detail, this.parked);
+    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or tap / click the trajectory' }), planner), this.list, this.detail, this.parked);
     ctx.store.subscribe((s, p) => {
       if (s.plan !== p.plan || s.selectedNode !== p.selectedNode || s.replay !== p.replay || s.parked !== p.parked) this.render();
     });
@@ -573,15 +581,21 @@ export class NodesPanel {
     return Number(this.tStep.value);
   }
 
-  private commitTime(): void {
+  fineMul(): number {
+    return this.fine.getAttribute('aria-pressed') === 'true' ? 0.1 : 1;
+  }
+
+  private commitTime(text: string): string | null {
     const i = this.ctx.store.get().selectedNode;
-    const v = parseDuration(this.time.value);
-    if (i === null) return;
+    const v = parseDuration(text);
+    if (i === null) return null;
     if (v === null) {
-      this.nodeErr.textContent = 'Time: use "T+1d 02:03:04.5", "2h 30m" or seconds after liftoff / start';
-      return;
+      const m = 'Time: use "T+1d 02:03:04.5", "2h 30m" or seconds after liftoff / start';
+      this.nodeErr.textContent = m;
+      return m;
     }
     this.ctx.editor.updateNode(i, { t: v });
+    return null;
   }
 
   addAtCursor(): void {
@@ -626,6 +640,7 @@ export class NodesPanel {
         e ? el('div', { className: 'nerr', textContent: e.join('; ') }) : null,
         x.short ? el('div', { className: 'nerr', textContent: 'Not enough propellant: this burn will be cut short' }) : null);
       r.onclick = () => this.ctx.store.set({ selectedNode: i });
+      activatable(r, `Burn ${i + 1}`);
       this.list.append(r);
     });
     // Detail.
@@ -633,7 +648,7 @@ export class NodesPanel {
     const x = i !== null ? infos[i] : undefined;
     this.detail.style.display = x ? '' : 'none';
     if (x && i !== null) {
-      setValue(this.time, formatMet(x.node.t, 1));
+      this.timeTuner.setValue(formatMet(x.node.t, 1));
       setValue(this.frameSel, x.node.frame.kind === 'orbital' ? x.node.frame.body : '@inertial');
       const engKey = plan.spacecraft.engines.map((e) => `${e.thrust}/${e.isp}`).join();
       if (this.engineSel.dataset.key !== engKey) {
@@ -641,12 +656,9 @@ export class NodesPanel {
         this.engineSel.replaceChildren(...plan.spacecraft.engines.map((e, k) => el('option', { value: String(k), textContent: `E${k + 1}: ${(e.thrust / 1000).toLocaleString('en-US')} kN, ${e.isp} s` })));
       }
       setValue(this.engineSel, String(x.node.engine));
-      x.node.dv.forEach((v, k) => setValue(this.dvIn[k], String(+v.toFixed(4))));
+      x.node.dv.forEach((v, k) => this.dvTuners[k].setValue(String(+v.toFixed(4))));
       const axisNames = x.node.frame.kind === 'inertial' ? ['ICRF x', 'ICRF y', 'ICRF z'] : AXES;
-      this.dvIn.forEach((inp, k) => {
-        const label = inp.parentElement?.previousElementSibling as HTMLElement | null;
-        if (label) setText(label, axisNames[k]);
-      });
+      this.dvTuners.forEach((t, k) => t.setLabel(axisNames[k]));
       const rep = reports?.[i];
       const mdot = plan.spacecraft.engines[x.burn.engine]?.thrust / ((plan.spacecraft.engines[x.burn.engine]?.isp ?? 1) * 9.80665);
       this.readout.innerHTML =
@@ -701,9 +713,9 @@ export class EventsPanel {
     this.listed = listEvents(r.result.events, this.ctx.soi, this.listOptions());
     setText(this.summary, `${this.listed.length} of ${r.result.events.length} events (extrema of bodies whose sphere of influence the craft is in, crossings, and closest approaches)`);
     const epoch = r.plan.epoch;
-    for (const x of this.listed) {
+    const row = (x: ListedEvent) => {
       const ev = x.ev;
-      const focus = el('button', { className: 'btn small', textContent: '◎', title: `Focus camera on ${bodyName(ev.body)}`, type: 'button' });
+      const focus = el('button', { className: 'btn small', textContent: '◎', title: `Focus camera on ${bodyName(ev.body)}`, type: 'button', ariaLabel: `Focus camera on ${bodyName(ev.body)}` });
       focus.onclick = (e) => {
         e.stopPropagation();
         this.ctx.focusBody(ev.body);
@@ -714,9 +726,64 @@ export class EventsPanel {
         el('span', { className: 'eval', textContent: `${formatDistance(ev.altitude)} alt · ${formatSpeed(ev.speed)}` }),
         focus);
       rowEl.onclick = () => this.ctx.store.set({ selectedEvent: x.index, t: ev.t, paused: true, loadingTarget: ev.t });
-      this.list.append(rowEl);
+      activatable(rowEl);
+      return rowEl;
+    };
+    for (const g of groupApsides(this.listed)) {
+      if (g.length === 1) {
+        this.list.append(row(g[0]));
+        continue;
+      }
+      const key = `${g[0].ev.body}:${g[0].index}`;
+      const open = this.expanded.has(key) || g.some((x) => x.index === s.selectedEvent);
+      const alts = g.map((x) => x.ev.altitude);
+      const sum = el('button', { className: 'event-row apsis-group', type: 'button', ariaExpanded: String(open) },
+        el('span', { className: 'emet', textContent: formatMet(g[0].ev.t - epoch, 0) }),
+        el('span', { className: 'ename', textContent: `${open ? '▾' : '▸'} ${g.length} apsides at ${bodyName(g[0].ev.body)} (near-circular)` }),
+        el('span', { className: 'eval', textContent: `${formatDistance(Math.min(...alts))} – ${formatDistance(Math.max(...alts))} alt · until ${formatMet(g[g.length - 1].ev.t - epoch, 0)}` }));
+      sum.onclick = () => {
+        if (this.expanded.has(key)) this.expanded.delete(key);
+        else this.expanded.add(key);
+        this.render();
+      };
+      this.list.append(sum);
+      if (open) for (const x of g) this.list.append(row(x));
     }
   }
+  private readonly expanded = new Set<string>();
+}
+
+/**
+ * Runs of 4 or more consecutive periapsis / apoapsis events of one body whose
+ * altitudes differ by under 2% of the orbit radius (a near-circular orbit,
+ * where the apsides are numerical noise) become one group; everything else
+ * stays a group of one. Pure.
+ */
+export function groupApsides(listed: readonly ListedEvent[]): ListedEvent[][] {
+  const out: ListedEvent[][] = [];
+  let run: ListedEvent[] = [];
+  const flush = () => {
+    if (run.length >= 4) out.push(run);
+    else for (const x of run) out.push([x]);
+    run = [];
+  };
+  for (const x of listed) {
+    const apsis = x.role === 'event' && !x.failure && (x.ev.kind === 'periapsis' || x.ev.kind === 'apoapsis');
+    if (!apsis) {
+      flush();
+      out.push([x]);
+      continue;
+    }
+    if (run.length && run[0].ev.body !== x.ev.body) flush();
+    const r = bodyIndex(x.ev.body);
+    const R = r >= 0 ? BODIES[r].radius : 0;
+    const alts = [...run.map((y) => y.ev.altitude), x.ev.altitude];
+    const spread = Math.max(...alts) - Math.min(...alts);
+    if (run.length && spread > 0.02 * (Math.min(...alts) + R)) flush();
+    run.push(x);
+  }
+  flush();
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -831,7 +898,7 @@ export class Scrubber {
     };
     this.root = el('div', { className: 'panel scrubber' }, start, el('div', { className: 'scrub-track' }, this.range, this.ticks), this.met);
     ctx.store.subscribe((s, p) => {
-      if (s.t !== p.t || s.replay !== p.replay) this.render(s, p.replay !== s.replay);
+      if (s.t !== p.t || s.replay !== p.replay || s.selectedNode !== p.selectedNode || s.plan !== p.plan) this.render(s, p.replay !== s.replay || p.selectedNode !== s.selectedNode || p.plan !== s.plan);
     });
     this.render(ctx.store.get(), true);
   }
@@ -850,16 +917,39 @@ export class Scrubber {
     setText(this.met, `${formatMet(s.t - s.plan.epoch, 0)} MET`);
     if (ticks) {
       this.ticks.replaceChildren();
-      for (const n of nodesOf(s.plan)) {
-        const x = ((s.plan.epoch + n.node.t - a) / (b - a)) * 100;
-        if (x >= 0 && x <= 100) this.ticks.append(tick('tick node', `Burn ${formatMet(n.node.t, 0)}`, x));
-      }
       const r = s.replay;
+      const flown = r && r.plan === s.plan && r.preview === null ? r.result.burns : null;
+      nodesOf(s.plan).forEach((n, i) => {
+        // The burn's span: flown ignition to cutoff when the replay is current, else the requested one.
+        const t0 = s.plan.epoch + n.burn.start;
+        const dur = flown?.[i] ? flown[i].burnTime : n.burn.duration;
+        const short = !!flown?.[i] && flown[i].burnTime < n.burn.duration * 0.999;
+        const x0 = ((t0 - a) / (b - a)) * 100;
+        const w = (dur / (b - a)) * 100;
+        if (x0 > 100 || x0 + w < 0) return;
+        const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}: ${formatMet(n.burn.start, 0)} to ${formatMet(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
+        sp.style.left = `${Math.max(0, x0)}%`;
+        sp.style.width = `${Math.min(100 - Math.max(0, x0), Math.max(w, 0))}%`;
+        this.ticks.append(sp);
+      });
       if (r && r.result.outcome !== 'completed' && Number.isFinite(r.result.finalT)) {
         this.ticks.append(tick('tick end', 'End of flight', 100));
       }
     }
   }
+}
+
+/** A clickable row reachable and operable from the keyboard. */
+function activatable(e: HTMLElement, label?: string): void {
+  e.tabIndex = 0;
+  e.setAttribute('role', 'button');
+  if (label) e.setAttribute('aria-label', label);
+  e.addEventListener('keydown', (k) => {
+    if ((k.key === 'Enter' || k.key === ' ') && k.target === e) {
+      k.preventDefault();
+      e.click();
+    }
+  });
 }
 
 function tick(className: string, title: string, leftPct: number): HTMLSpanElement {

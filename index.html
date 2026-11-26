@@ -2,13 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070b" />
+    <meta name="description" content="Plan and fly interplanetary gravity-assist missions with real N-body physics." />
     <meta name="color-scheme" content="dark" />
     <link rel="icon" href="data:," />
     <title>sendit</title>
   </head>
   <body>
-    <canvas id="view"></canvas>
+    <canvas id="view" role="img" aria-label="Solar-system map. Drag to orbit, pinch or wheel to zoom, tap or click the trajectory to add a maneuver node."></canvas>
     <div id="labels"></div>
     <div id="hud"></div>
     <noscript>sendit needs JavaScript and WebGL.</noscript>

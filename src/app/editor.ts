@@ -7,6 +7,14 @@ import { initialPlan, missionById, missionForLoadedPlan, MISSIONS, withLaunch, w
 import { PHYSICS_MODEL, type MissionPlan, type PlanFrame, type Spacecraft } from './mission-layer';
 import { addNode, disableNode, enableNode, nodesOf, removeNode, setSpacecraft, updateNode, type ManeuverNode, type Vec3 } from './nodes';
 import type { AppState, Store } from './store';
+import type { FrameSpec } from './frames';
+import { bodyIndex } from './physics';
+
+/** Missions that read best in a particular frame start in it (the player can change it in View). */
+const SUGGESTED_FRAME: Readonly<Record<string, () => FrameSpec>> = {
+  // A geostationary satellite is a fixed point over one longitude in Earth's surface frame.
+  'geo-from-leo': () => ({ kind: 'surface', center: bodyIndex('earth') }),
+};
 
 export class Editor {
   constructor(
@@ -25,7 +33,8 @@ export class Editor {
   selectMission(id: string): void {
     const m = missionById(id) ?? MISSIONS[0];
     const plan = initialPlan(m, this.fingerprint);
-    this.store.set({ missionId: m.id, plan, parked: [], selectedNode: null, selectedEvent: null, replay: null, t: plan.epoch + 600, loadingTarget: plan.epoch + 600 });
+    const frame = SUGGESTED_FRAME[m.id]?.();
+    this.store.set({ missionId: m.id, plan, parked: [], selectedNode: null, selectedEvent: null, replay: null, t: plan.epoch + 600, loadingTarget: plan.epoch + 600, ...(frame ? { frame } : {}) });
   }
 
   /** Replace the whole plan (shared link, saved state). */

@@ -17,6 +17,13 @@ import { bodyName, CraftPanel, EventsPanel, MissionPanel, NodesPanel, ResultsPan
 import { listEvents, eventMarker, type ListedEvent } from './events-view';
 import { computeFrame, frameCenter, frameKey, newFrameState, parseFrameKey, toFrame, type FrameSpec } from './frames';
 import { Hud, type Readout } from './hud';
+import { bodyOrientation } from './orientation';
+import { Layout } from './layout';
+import { LeaderboardPanel } from './leaderboard-ui';
+import { MapInput, nearestOnScreen } from './map-input';
+import { poolSizing } from './schedule';
+import { statusOf } from './status';
+import { formatMet, el } from './dom';
 import { Labels, type LabelItem } from './labels';
 import { makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, type EventKind } from './mission-layer';
 import { initialPlan, missionById, missionForLoadedPlan, MISSIONS } from './missions';
@@ -57,6 +64,10 @@ const VIEW_LIMIT = {
   lo: eph.chunkIndex(calendarToTdb({ year: 1900, month: 1, day: 1, hour: 0, minute: 0, second: 0 })),
   hi: eph.chunkIndex(calendarToTdb({ year: 2150, month: 1, day: 1, hour: 0, minute: 0, second: 0 })),
 };
+/** Phones and small tablets: fewer chunk workers and a smaller chunk budget, whatever the core count claims. */
+const smallTouch = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 900;
+const sizing0 = poolSizing(navigator.hardwareConcurrency, (navigator as { deviceMemory?: number }).deviceMemory);
+const sizing = smallTouch ? { workers: Math.min(2, sizing0.workers), budget: Math.min(48, sizing0.budget) } : sizing0;
 const pool = new ChunkPool(eph, VIEW_LIMIT, {
   onInstall() {
     coverageVersion++;
@@ -65,7 +76,7 @@ const pool = new ChunkPool(eph, VIEW_LIMIT, {
     metrics.errors.push(message);
     console.error('chunk worker:', message);
   },
-});
+}, sizing);
 metrics.chunkMs = pool.stats.buildMs;
 
 const world = makeWorld(eph.physics, BODY_DATA);
@@ -139,20 +150,21 @@ const editor = new Editor(store, fingerprint);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const overlay = document.getElementById('labels') as HTMLElement;
 const hudRoot = document.getElementById('hud') as HTMLElement;
-const slots = {
-  left: Object.assign(document.createElement('div'), { className: 'col left' }),
-  right: Object.assign(document.createElement('div'), { className: 'col right' }),
-  bottom: Object.assign(document.createElement('div'), { className: 'bottom' }),
-  overlay: hudRoot,
-};
-hudRoot.append(slots.left, slots.right, slots.bottom);
+const layout = new Layout(hudRoot);
+document.documentElement.classList.toggle('touch', matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const scene = new SceneView(
   canvas,
   BODIES.map((b, i) => ({ radius: b.radius, color: meta[i].color, emissive: i === sunIndex })),
   sunIndex,
 );
+// Device pixel ratio: 2 at most, 1.5 on small touch screens (fill rate, battery).
+const DPR_CAP = smallTouch ? 1.5 : 2;
+scene.renderer.setPixelRatio(Math.min(DPR_CAP, window.devicePixelRatio || 1));
 const camera = new OrbitCamera();
+camera.inertia = !reducedMotion.matches;
+reducedMotion.addEventListener?.('change', () => (camera.inertia = !reducedMotion.matches));
 camera.setDistance(Number(params.get('dist') ?? 6e7), true);
 if (params.has('az')) camera.azimuth = Number(params.get('az'));
 if (params.has('el')) camera.elevation = Number(params.get('el'));
@@ -160,6 +172,7 @@ if (params.has('el')) camera.elevation = Number(params.get('el'));
 const labels = new Labels(overlay, (key) => {
   if (key === 'sc') store.set({ focus: SPACECRAFT });
   else if (key.startsWith('node:')) store.set({ selectedNode: Number(key.slice(5)) });
+  else if (key.startsWith('burn:')) store.set({ selectedNode: Number(key.split(':')[1]) });
   else if (key.startsWith('ev:')) {
     const i = Number(key.slice(3));
     const ev = store.get().replay?.result.events[i];
@@ -172,7 +185,8 @@ function jumpTo(t: number): void {
 }
 
 const hud = new Hud(
-  slots,
+  layout.topbar,
+  hudRoot,
   store,
   BODIES.map((b, i) => ({ name: b.name, defaultSecondary: defaultSecondary(i) })),
   {
@@ -195,6 +209,7 @@ const hud = new Hud(
       { label: 'J2000', t: 0 },
     ],
     spacecraftName: 'Spacecraft',
+    status: (s) => statusOf(s, bodyName),
   },
 );
 
@@ -257,18 +272,58 @@ function failureKinds(): readonly EventKind[] {
 }
 
 const planner = new PlannerOverlay(store, editor, eph, pool);
-slots.left.append(new MissionPanel(ui).root, new StartPanel(ui).root, new CraftPanel(ui).root);
 const nodesPanel = new NodesPanel(ui);
 const eventsPanel = new EventsPanel(ui, () => ({ failureKinds: failureKinds(), dominant: (t: number) => dominantBody(t - store.get().plan.epoch) }));
-slots.right.append(nodesPanel.root, eventsPanel.root);
-slots.bottom.prepend(new Scrubber(ui).root);
-slots.left.append(new ResultsPanel(ui).root);
+const leaderboard = new LeaderboardPanel(store, editor);
+hudRoot.append(leaderboard.dialog);
+// One instance of each panel; the layout puts it in a dock (wide) or a tab (side / sheet).
+layout.add(hud.timePanel, 'view', 'left');
+layout.add(new MissionPanel(ui).root, 'mission', 'left');
+layout.add(new ResultsPanel(ui).root, 'results', 'left');
+layout.add(leaderboard.root, 'results', 'left');
+layout.add(new StartPanel(ui).root, 'start', 'left');
+layout.add(new CraftPanel(ui).root, 'mission', 'left');
+{
+  const all = el('input', { type: 'checkbox', id: 'show-all-revs' });
+  all.onchange = () => {
+    showAllRevs = all.checked;
+    viewDirty = true;
+  };
+  hud.viewPanel.querySelector('.sec-body')!.append(el('label', { className: 'check' }, all, ' Show all revolutions (else only the one at the cursor is bright)'));
+}
+layout.add(hud.viewPanel, 'view', 'right');
+layout.add(nodesPanel.root, 'nodes', 'right');
+layout.add(eventsPanel.root, 'events', 'right');
+layout.add(hud.infoPanel, 'view', 'right');
+layout.bottom.prepend(new Scrubber(ui).root);
+// Selecting a node on a phone brings its editor up.
+store.subscribe((s, p) => {
+  if (s.selectedNode !== null && s.selectedNode !== p.selectedNode && layout.mode !== 'wide') layout.showTab('nodes');
+});
 
+let viewDirty = true;
+/** Size the canvas and centre the camera's focus in the part of the map no panel covers. */
 function resize(): void {
-  scene.resize(canvas.clientWidth, canvas.clientHeight);
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  scene.resize(w, h);
+  const f = layout.freeRect();
+  const cx = (f.left + (window.innerWidth - f.right)) / 2;
+  const cy = (f.top + (window.innerHeight - f.bottom)) / 2;
+  scene.camera.setViewOffset(w, h, Math.round(w / 2 - cx), Math.round(h / 2 - cy), w, h);
+  scene.camera.updateProjectionMatrix();
+  viewDirty = true;
 }
 window.addEventListener('resize', resize);
+layout.onChange(resize);
 resize();
+store.subscribe(() => {
+  viewDirty = true;
+});
+document.addEventListener('visibilitychange', () => {
+  last = performance.now();
+  viewDirty = true;
+});
 
 // ---------------------------------------------------------------------------
 // Replay: every plan change is replayed in the worker
@@ -332,35 +387,68 @@ function toStride7(samples: Float64Array): Float64Array {
 // ---------------------------------------------------------------------------
 // Input: drag rotates, wheel zooms, a click on the trajectory adds a burn there
 
-let drag: { x: number; y: number; x0: number; y0: number } | null = null;
-canvas.addEventListener('pointerdown', (e) => {
-  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
-  canvas.setPointerCapture(e.pointerId);
+// Tap popover: "add node here" at the picked trajectory point (touch and pen; a mouse click adds directly).
+const tapPop = el('div', { className: 'tap-pop', role: 'dialog', ariaLabel: 'Trajectory point' });
+tapPop.hidden = true;
+hudRoot.append(tapPop);
+let tapPick: { t: number; x: number; y: number } | null = null;
+function hideTapPop(): void {
+  tapPop.hidden = true;
+  tapPick = null;
+}
+function showTapPop(t: number, x: number, y: number): void {
+  tapPick = { t, x, y };
+  const add = el('button', { className: 'btn primary', type: 'button', textContent: 'Add node here' });
+  add.onclick = () => {
+    const p = tapPick;
+    hideTapPop();
+    if (p) addNodeAt(p.t);
+  };
+  const close = el('button', { className: 'btn', type: 'button', textContent: '✕', ariaLabel: 'Dismiss' });
+  close.onclick = hideTapPop;
+  tapPop.replaceChildren(el('span', { className: 'tp-t', textContent: formatMet(t, 0) }), add, close);
+  tapPop.hidden = false;
+  const W = window.innerWidth;
+  const pw = 250;
+  tapPop.style.left = `${Math.max(8, Math.min(W - pw - 8, x - pw / 2))}px`;
+  tapPop.style.top = `${Math.max(60, y - 74)}px`;
+}
+
+new MapInput(canvas, {
+  rotate: (a, e) => camera.rotate(a, e),
+  zoom: (f) => camera.zoom(f),
+  fling: (a, e) => camera.fling(a, e),
+  stop: () => camera.stop(),
+  changed: () => {
+    viewDirty = true;
+  },
+  tap(x, y, type) {
+    const touch = type !== 'mouse';
+    const t = pickTrajectory(x, y, touch ? 32 : 14);
+    if (t === null || t < simulationStartOffset(store.get().plan.start)) {
+      hideTapPop();
+      return;
+    }
+    if (touch) showTapPop(t, x, y);
+    else addNodeAt(t);
+  },
+  doubleTap(x, y) {
+    hideTapPop();
+    const rect = canvas.getBoundingClientRect();
+    const i = nearestOnScreen(n, (k, out) => scene.project(lastFramePos, 3 * k, camera.position, out), x - rect.left, y - rect.top, 44);
+    if (i >= 0) store.set({ focus: i });
+  },
 });
-canvas.addEventListener('pointermove', (e) => {
-  if (!drag) return;
-  camera.rotate(-(e.clientX - drag.x) * 0.005, (e.clientY - drag.y) * 0.005);
-  drag = { ...drag, x: e.clientX, y: e.clientY };
-});
-canvas.addEventListener('pointerup', (e) => {
-  const d = drag;
-  drag = null;
-  if (d && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) clickTrajectory(e.clientX, e.clientY);
-});
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
-  camera.zoom(Math.exp(dy * 0.0015));
-}, { passive: false });
+const lastFramePos = new Float64Array(3 * n);
 
 /** Nearest drawn trajectory sample to a screen point (within 12 px), as mission time. */
-function pickTrajectory(x: number, y: number): number | null {
+function pickTrajectory(x: number, y: number, radius = 14): number | null {
   const path = trajectoryPathCache;
   if (!path) return null;
   const rect = canvas.getBoundingClientRect();
   const px = x - rect.left;
   const py = y - rect.top;
-  let best = 144;
+  let best = radius * radius;
   let bestT: number | null = null;
   const pr = { x: 0, y: 0 };
   for (let i = 0; i < path.times.length; i++) {
@@ -374,17 +462,14 @@ function pickTrajectory(x: number, y: number): number | null {
   return bestT === null ? null : bestT - store.get().plan.epoch;
 }
 
-function clickTrajectory(x: number, y: number): void {
-  const t = pickTrajectory(x, y);
-  if (t === null) return;
-  const plan = store.get().plan;
-  if (t < simulationStartOffset(plan.start)) return;
+function addNodeAt(t: number): void {
   editor.addNode(Math.round(t * 10) / 10, { kind: 'orbital', body: dominantBody(t) });
 }
 
 window.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (e.ctrlKey || e.metaKey || planner.isOpen || (e.target as HTMLElement).closest?.('dialog')) return;
   const s = store.get();
   const i = s.selectedNode;
   const mult = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
@@ -405,7 +490,11 @@ window.addEventListener('keydown', (e) => {
     editor.removeNode(i);
     return;
   }
-  if (e.key === 'Escape') store.set({ selectedNode: null, selectedEvent: null });
+  if (e.key === '?') hud.showKeys();
+  else if (e.key === 'Escape') {
+    hideTapPop();
+    store.set({ selectedNode: null, selectedEvent: null });
+  }
   else if (e.code === 'Space') {
     e.preventDefault();
     store.set({ paused: !s.paused });
@@ -417,7 +506,7 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // Paths
 
-const ctx: FrameContext = { count: n, gm: BODY_GM, evaluate: (t, p, v) => eph.evaluate(t, p, v) };
+const ctx: FrameContext = { count: n, gm: BODY_GM, evaluate: (t, p, v) => eph.evaluate(t, p, v), orient: bodyOrientation };
 
 interface PathState {
   center: number; // time the window is centred on
@@ -441,10 +530,17 @@ interface Marker {
   color: string;
 }
 let markers: Marker[] = [];
+/** Ignition / cutoff marker pairs; drawn only when they are far enough apart on screen. */
+let burnEnds: { node: string; start: Marker; end: Marker }[] = [];
+const projA = { x: 0, y: 0 };
+const projB = { x: 0, y: 0 };
 let listed: ListedEvent[] = [];
 
 /** Time span drawn for body i's path in this frame (one orbit, or the period of the frame's own motion). */
+const ROT_TMP = new Float64Array(9);
 function pathSpan(i: number, frame: FrameSpec): number {
+  // Turning with a surface, any longer span winds into a spiral: one rotation shows each body's daily circle.
+  if (frame.kind === 'surface') return (2 * Math.PI) / Math.abs(bodyOrientation(frame.center, store.get().t, ROT_TMP));
   if (Number.isFinite(meta[i].period)) return meta[i].period * 1.02;
   const c = frameCenter(frame);
   if (c !== null && Number.isFinite(meta[c].period)) return meta[c].period;
@@ -452,8 +548,9 @@ function pathSpan(i: number, frame: FrameSpec): number {
 }
 
 function updatePaths(t: number, frame: FrameSpec, budget: number): void {
+  pathsPending = false;
   const c = frameCenter(frame);
-  for (let i = 0; i < n && budget > 0; i++) {
+  for (let i = 0; i < n; i++) {
     if (i === c) {
       if (pathState[i]) {
         scene.setBodyPath(i, null);
@@ -465,6 +562,10 @@ function updatePaths(t: number, frame: FrameSpec, budget: number): void {
     const s = pathState[i];
     const stale = !s || Math.abs(t - s.center) > span / 24 || (s.clipped && s.coverage !== coverageVersion);
     if (!stale) continue;
+    if (budget <= 0) {
+      pathsPending = true;
+      return;
+    }
     budget--;
     // Samples the ephemeris cannot evaluate yet are dropped; redrawn when coverage grows.
     const p = bodyPath(ctx, frame, i, t - span / 2, t + span / 2, PATH_SAMPLES);
@@ -546,12 +647,26 @@ function rebuildMarkers(frame: FrameSpec): void {
       color: x.failure ? '#ff4d4d' : x.role === 'closest' ? '#ffd36b' : '#9fc6ff',
     });
   }
-  // Nodes of the replayed plan, at ignition.
+  // Nodes of the replayed plan, at the node (burn centre), and each burn's flown ignition and cutoff.
+  burnEnds = [];
   if (r.plan === s.plan) {
     nodesOf(r.plan).forEach((x, i) => {
       const pos = place(r.plan.epoch + x.node.t);
       if (!pos) return;
-      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${s.selectedNode === i ? 'selected' : ''}`, pos, priority: s.selectedNode === i ? 950 : 700, color: '#ff8a3d' });
+      const sel = s.selectedNode === i;
+      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: '#ff8a3d' });
+      const flown = r.result.burns[i];
+      if (!flown || !(flown.burnTime > 0)) return;
+      const t0 = r.plan.epoch + r.plan.burns[i].start;
+      const t1 = t0 + flown.burnTime;
+      const short = flown.burnTime < r.plan.burns[i].duration * 0.999;
+      const a = place(t0);
+      const b = place(t1);
+      if (!a || !b) return;
+      const dur = flown.burnTime >= 120 ? `${(flown.burnTime / 60).toFixed(1)} min` : `${flown.burnTime.toFixed(0)} s`;
+      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1} start${sel ? ` ${formatMet(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: '#ff8a3d' };
+      const end: Marker = { key: `burn:${i}:e`, text: short ? `■ B${i + 1} cut short · ${dur} · out of propellant` : `■ B${i + 1} end · ${dur}`, cls: `marker burn-end end ${short ? 'short' : ''} ${sel ? 'selected' : ''}`, pos: b, priority: short ? 945 : sel ? 940 : 690, color: short ? '#ff4d4d' : '#ff8a3d' };
+      burnEnds.push({ node: `node:${i}`, start, end });
     });
   }
 }
@@ -607,10 +722,48 @@ function phaseAt(t: number): string {
   return 'Coast';
 }
 
+/**
+ * Vertex window drawn bright around the time cursor: when the craft is on a
+ * bound orbit whose period is short against the drawn path (a parking orbit
+ * wrapped dozens of times), the quarter revolution before the cursor and one
+ * revolution after it; the rest is drawn faint. "Show all revolutions" in
+ * the View panel turns this off.
+ */
+let showAllRevs = false;
+function revolutionWindow(t: number, times: Float64Array | number[], scVisible: boolean): [number, number] {
+  const all: [number, number] = [0, times.length - 1];
+  if (showAllRevs || !scVisible || times.length < 2) return all;
+  const r = store.get().replay;
+  if (!r) return all;
+  const di = bodyIndex(dominantBody(t - r.plan.epoch));
+  if (di < 0) return all;
+  const dx = scState[0] - pos[3 * di], dy = scState[1] - pos[3 * di + 1], dz = scState[2] - pos[3 * di + 2];
+  const vx = scState[3] - vel[3 * di], vy = scState[4] - vel[3 * di + 1], vz = scState[5] - vel[3 * di + 2];
+  const mu = BODIES[di].gm;
+  const inv = 2 / Math.hypot(dx, dy, dz) - (vx * vx + vy * vy + vz * vz) / mu;
+  if (!(inv > 0)) return all;
+  const P = 2 * Math.PI * Math.sqrt((1 / inv) ** 3 / mu);
+  if (!(P * 4 < times[times.length - 1] - times[0])) return all;
+  const idx = (tt: number) => {
+    let lo = 0, hi = times.length;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (times[m] <= tt) lo = m + 1;
+      else hi = m;
+    }
+    return Math.max(0, lo - 1);
+  };
+  return [idx(t - 0.25 * P), idx(t + 1.05 * P) + 1];
+}
+let lastRender = 0;
+let renderCount = 0;
+const busyLabel = () => (store.get().paused && camera.settled() ? 'idle when still · ' : '');
+let renderedCoverage = -1;
+let pathsPending = true;
 function tick(now: number): void {
   const dtReal = Math.min(0.25, (now - last) / 1000);
-  metrics.frameIntervalMs = metrics.frameIntervalMs * 0.95 + (now - last) * 0.05;
   last = now;
+  if (now - lastRender < 200) metrics.frameIntervalMs = metrics.frameIntervalMs * 0.95 + (now - lastRender) * 0.05;
   const cpu0 = performance.now();
   let s = store.get();
 
@@ -640,9 +793,21 @@ function tick(now: number): void {
   }
 
   const t = s.t;
+  // Render only when something can have changed: time running, the view or store touched,
+  // camera moving, new ephemeris coverage, paths or trajectory pending. A slow heartbeat
+  // picks up anything else (textures arriving). requestAnimationFrame already stops in hidden tabs.
+  const busy = !s.paused || s.loadingTarget !== null || viewDirty || !camera.settled() || coverageVersion !== renderedCoverage || trajectoryDirty || markersDirty || pathsPending;
+  if (!busy && now - lastRender < 1000) {
+    requestAnimationFrame(tick);
+    return;
+  }
+  viewDirty = false;
+  renderedCoverage = coverageVersion;
+  lastRender = now;
+  renderCount++;
   if (eph.evaluate(t, pos, vel)) {
     const frame = s.frame;
-    computeFrame(frame, { count: n, pos, vel, gm: BODY_GM }, fs);
+    computeFrame(frame, { count: n, pos, vel, gm: BODY_GM, t, orient: bodyOrientation }, fs);
     for (let i = 0; i < n; i++) toFrame(fs, pos, 3 * i, framePos, 3 * i);
     updatePaths(t, frame, 2);
 
@@ -666,7 +831,7 @@ function tick(now: number): void {
           if (times[mid] <= t) lo = mid + 1;
           else hi = mid;
         }
-        scene.setTrajectorySplit(Math.max(0, lo - 1), times.length);
+        scene.setTrajectorySplit(Math.max(0, lo - 1), times.length, revolutionWindow(t, times, scVisible));
       }
     }
 
@@ -684,7 +849,9 @@ function tick(now: number): void {
       minDist = BODIES[s.focus].radius * 1.02;
     }
     camera.update(dtReal, focusPos, minDist);
+    scene.visuals.setTime(t, fs.axes);
     scene.render(camera.position, camera.target, framePos);
+    camera.markRendered();
 
     // Labels and markers.
     const items: LabelItem[] = [];
@@ -703,7 +870,16 @@ function tick(now: number): void {
       const on = scene.project(m.pos, 0, camera.position, proj);
       items.push({ key: m.key, text: m.text, color: m.color, priority: m.priority, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: m.cls });
     }
+    // Burn ends: expanded once ignition and cutoff are 28 px apart on screen, else the single "Burn N" marker stands for both.
+    for (const be of burnEnds) {
+      const onA = scene.project(be.start.pos, 0, camera.position, projA);
+      const onB = scene.project(be.end.pos, 0, camera.position, projB);
+      if (!onA || !onB || Math.hypot(projA.x - projB.x, projA.y - projB.y) < 28) continue;
+      items.push({ key: be.start.key, text: be.start.text, color: be.start.color, priority: be.start.priority, x: projA.x, y: projA.y, marker: true, offset: 0, onScreen: true, className: be.start.cls });
+      items.push({ key: be.end.key, text: be.end.text, color: be.end.color, priority: be.end.priority, x: projB.x, y: projB.y, marker: true, offset: 0, onScreen: true, className: be.end.cls });
+    }
     labels.update(items);
+    lastFramePos.set(framePos);
 
     // Readouts.
     const ro: Readout[] = [];
@@ -725,7 +901,7 @@ function tick(now: number): void {
     const st = replayClient.stats;
     hud.frame(
       ro,
-      `${(1000 / metrics.frameIntervalMs).toFixed(0)} fps · frame CPU ${metrics.frameCpuMs.toFixed(2)} ms · ${eph.chunks().length} ephemeris chunks (${avgChunk.toFixed(0)} ms each)` +
+      `${busyLabel()}${(1000 / metrics.frameIntervalMs).toFixed(0)} fps · frame CPU ${metrics.frameCpuMs.toFixed(2)} ms · ${eph.chunks().length} ephemeris chunks (${avgChunk.toFixed(0)} ms each)` +
         (st.runs ? ` · replay ${st.lastReplayMs.toFixed(0)} ms, edit→redraw ${metrics.redrawLatencyMs.toFixed(0)} ms` : '') +
         (metrics.errors.length ? ` · WORKER ERROR: ${metrics.errors[0]}` : ''),
     );
@@ -747,6 +923,10 @@ Object.assign(window, {
     replayStats: replayClient.stats,
     nodesOf: () => nodesOf(store.get().plan),
     shareUrl,
+    layout,
+    leaderboard,
+    /** Frames actually rendered so far (render-on-demand check). */
+    renders: () => renderCount,
     listedEvents: () => listed,
     bodies: BODIES.map((b) => b.id),
     frameKey: () => frameKey(store.get().frame, (i) => BODIES[i].id),

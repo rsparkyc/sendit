@@ -3,7 +3,7 @@
  * point lists, and their split into locally-anchored float32 segments for the
  * GPU. Pure: takes an evaluator callback rather than the ephemeris itself.
  */
-import { computeFrame, newFrameState, toFrame, type FrameSpec, type FrameState } from './frames';
+import { computeFrame, newFrameState, toFrame, type FrameSpec, type FrameState, type Orientation } from './frames';
 import { SAMPLE_STRIDE, type Trajectory } from './trajectory';
 
 /** Positions and velocities of all bodies at t; false if not available. */
@@ -13,6 +13,8 @@ export interface FrameContext {
   readonly count: number;
   readonly gm: ArrayLike<number>;
   readonly evaluate: Evaluator;
+  /** Body orientation, for surface-fixed frames. */
+  readonly orient?: Orientation;
 }
 
 /** Points (3 per sample) in frame coordinates, plus the sample times. */
@@ -28,7 +30,7 @@ function scratch(ctx: FrameContext) {
 /** Frame state at t, or null if the ephemeris does not cover t. */
 export function frameAt(ctx: FrameContext, spec: FrameSpec, t: number, s = scratch(ctx)): FrameState | null {
   if (!ctx.evaluate(t, s.pos, s.vel)) return null;
-  return computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm }, s.fs);
+  return computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient }, s.fs);
 }
 
 /**
@@ -44,7 +46,7 @@ export function bodyPath(ctx: FrameContext, spec: FrameSpec, body: number, ta: n
   for (let i = 0; i <= n; i++) {
     const t = ta + ((tb - ta) * i) / n;
     if (!ctx.evaluate(t, s.pos, s.vel)) continue;
-    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm }, s.fs);
+    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient }, s.fs);
     toFrame(s.fs, s.pos, 3 * body, q, 0);
     pts.push(q[0], q[1], q[2]);
     ts.push(t);
@@ -62,7 +64,7 @@ export function trajectoryPath(ctx: FrameContext, spec: FrameSpec, tr: Trajector
     const o = i * SAMPLE_STRIDE;
     const t = tr.data[o];
     if (!ctx.evaluate(t, s.pos, s.vel)) continue;
-    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm }, s.fs);
+    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient }, s.fs);
     toFrame(s.fs, tr.data, o + 1, pts, 3 * m);
     ts[m] = t;
     m++;

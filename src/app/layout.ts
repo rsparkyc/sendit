@@ -1,0 +1,327 @@
+/**
+ * The app shell: where each panel lives at each screen size. One instance of
+ * every panel; the layout only moves it between containers.
+ *
+ * Three modes, from the viewport (re-evaluated on resize and orientation change):
+ *
+ *  - 'wide'  (>= 1200 x 600, desktop): two docked columns at the edges, every
+ *    panel open at once (each collapsible), a thin status bar on top and the
+ *    timeline below the map. Each dock collapses to a slim rail. Dense and
+ *    keyboard-first: what a KSP player expects of a planning tool.
+ *  - 'side'  (landscape >= 900 wide, or any landscape phone): one tabbed
+ *    column on the right (collapsible to a rail of tab buttons); the map keeps
+ *    the rest.
+ *  - 'sheet' (portrait phones and tablets): the map is full-screen; panels
+ *    live in a bottom sheet with tabs and three heights (peek: tabs only,
+ *    half, full), dragged by its grip or set by tapping a tab.
+ *
+ * In every mode a compact status bar (time, play / warp, outcome, the one
+ * number that matters now) and the timeline stay visible. The 3D view always
+ * covers the whole window; `freeRect` is the part no panel covers, and the
+ * camera centres its focus there (so a dock or the sheet never hides it).
+ */
+import { el } from './dom';
+
+export type TabId = 'mission' | 'start' | 'nodes' | 'events' | 'results' | 'view';
+export type Mode = 'wide' | 'side' | 'sheet';
+export type SheetState = 'peek' | 'half' | 'full';
+export type Dock = 'left' | 'right' | 'bottom';
+
+export const TABS: readonly { id: TabId; label: string; icon: string }[] = [
+  { id: 'mission', label: 'Mission', icon: '◎' },
+  { id: 'start', label: 'Start', icon: '⇡' },
+  { id: 'nodes', label: 'Nodes', icon: '△' },
+  { id: 'events', label: 'Events', icon: '☰' },
+  { id: 'results', label: 'Results', icon: '★' },
+  { id: 'view', label: 'View', icon: '◐' },
+];
+
+/** Mode for a viewport (pure; exported for tests). */
+export function modeFor(w: number, h: number): Mode {
+  if (w >= 1200 && h >= 600) return 'wide';
+  if (w > h && (w >= 900 || h < 520)) return 'side';
+  return 'sheet';
+}
+
+interface Entry {
+  el: HTMLElement;
+  tab: TabId;
+  dock: Dock;
+  order: number;
+}
+
+export interface FreeRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const STORE_KEY = 'sendit.layout.v1';
+
+export class Layout {
+  readonly topbar = el('header', { className: 'topbar' });
+  private readonly left = el('aside', { className: 'dock left', ariaLabel: 'Mission panels' });
+  private readonly right = el('aside', { className: 'dock right', ariaLabel: 'Plan panels' });
+  private readonly leftBody = el('div', { className: 'dock-body' });
+  private readonly rightBody = el('div', { className: 'dock-body' });
+  readonly bottom = el('div', { className: 'bottom' });
+  private readonly bottomExtra = el('div', { className: 'bottom-extra' });
+  private readonly sheet = el('section', { className: 'sheet', ariaLabel: 'Panels' });
+  private readonly grip = el('button', { className: 'sheet-grip', type: 'button', ariaLabel: 'Resize panel' }, el('span'));
+  private readonly tabBar = el('div', { className: 'tabs', role: 'tablist' });
+  private readonly sheetBody = el('div', { className: 'sheet-body' });
+  private readonly tabButtons = new Map<TabId, HTMLButtonElement>();
+  private readonly entries: Entry[] = [];
+  private readonly listeners = new Set<() => void>();
+  mode: Mode = 'wide';
+  tab: TabId = 'mission';
+  sheetState: SheetState = 'peek';
+  private collapsed = { left: false, right: false, side: false };
+
+  constructor(private readonly root: HTMLElement) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null');
+      if (saved && typeof saved === 'object') {
+        if (TABS.some((t) => t.id === saved.tab)) this.tab = saved.tab;
+        this.collapsed = { ...this.collapsed, ...(saved.collapsed ?? {}) };
+      }
+      else if (window.innerHeight < 520 && window.innerWidth > window.innerHeight) this.collapsed.side = true; // landscape phone: map first
+    } catch {
+      /* storage unavailable: defaults */
+    }
+    const dockToggle = (side: 'left' | 'right') => {
+      const b = el('button', { className: 'btn dock-toggle', type: 'button' });
+      b.onclick = () => {
+        this.collapsed[side] = !this.collapsed[side];
+        this.persist();
+        this.apply();
+      };
+      return b;
+    };
+    this.left.append(dockToggle('left'), this.leftBody);
+    this.right.append(dockToggle('right'), this.rightBody);
+    for (const t of TABS) {
+      const b = el('button', { className: 'tab', type: 'button', role: 'tab', id: `tab-${t.id}` },
+        el('span', { className: 'tab-icon', ariaHidden: 'true', textContent: t.icon }),
+        el('span', { className: 'tab-label', textContent: t.label }));
+      b.setAttribute('aria-controls', 'sheet-body');
+      b.onclick = () => this.pressTab(t.id);
+      b.onkeydown = (e) => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        e.preventDefault();
+        const i = TABS.findIndex((x) => x.id === this.tab);
+        const n = TABS[(i + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : TABS.length - 1)) % TABS.length];
+        this.showTab(n.id);
+        this.tabButtons.get(n.id)?.focus();
+      };
+      this.tabButtons.set(t.id, b);
+      this.tabBar.append(b);
+    }
+    const sideToggle = el('button', { className: 'btn side-toggle', type: 'button' });
+    sideToggle.onclick = () => {
+      this.collapsed.side = !this.collapsed.side;
+      this.persist();
+      this.apply();
+    };
+    this.sheetBody.id = 'sheet-body';
+    this.sheetBody.setAttribute('role', 'tabpanel');
+    this.sheet.append(this.grip, el('div', { className: 'tabrow' }, this.tabBar, sideToggle), this.sheetBody);
+    this.bottom.append(this.bottomExtra);
+    root.append(this.topbar, this.left, this.right, this.bottom, this.sheet);
+    this.wireGrip();
+
+    const onResize = () => this.update();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    new ResizeObserver(() => this.emit()).observe(this.sheet);
+    new ResizeObserver(() => this.emit()).observe(this.topbar);
+    new ResizeObserver(() => this.emit()).observe(this.bottom);
+    this.update();
+  }
+
+  /** Register a panel: its tab (sheet / side modes) and dock (wide mode), in order. */
+  add(panel: HTMLElement, tab: TabId, dock: Dock, order = this.entries.length): void {
+    this.entries.push({ el: panel, tab, dock, order });
+    this.entries.sort((a, b) => a.order - b.order);
+    this.place();
+  }
+
+  /** Called when the free area of the map changes. */
+  onChange(f: () => void): () => void {
+    this.listeners.add(f);
+    return () => this.listeners.delete(f);
+  }
+
+  /** Bring a tab forward (sheet / side modes; in wide mode, scroll its first panel into view). */
+  showTab(tab: TabId, open = true): void {
+    this.tab = tab;
+    if (this.mode === 'sheet' && open && this.sheetState === 'peek') this.sheetState = 'half';
+    if (this.mode === 'side' && open) this.collapsed.side = false;
+    if (this.mode === 'wide') {
+      const e = this.entries.find((x) => x.tab === tab);
+      if (e) {
+        e.el.classList.remove('collapsed');
+        const side = e.dock === 'left' ? 'left' : e.dock === 'right' ? 'right' : null;
+        if (side && this.collapsed[side]) {
+          this.collapsed[side] = false;
+          this.persist();
+        }
+        requestAnimationFrame(() => e.el.scrollIntoView({ block: 'nearest' }));
+      }
+    }
+    this.persist();
+    this.apply();
+  }
+
+  setSheet(state: SheetState): void {
+    this.sheetState = state;
+    this.apply();
+  }
+
+  private pressTab(tab: TabId): void {
+    if (this.mode === 'sheet' && tab === this.tab && this.sheetState !== 'peek') {
+      this.setSheet('peek');
+      return;
+    }
+    if (this.mode === 'side' && tab === this.tab && !this.collapsed.side) {
+      this.collapsed.side = true;
+      this.persist();
+      this.apply();
+      return;
+    }
+    this.showTab(tab);
+  }
+
+  private persist(): void {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ tab: this.tab, collapsed: this.collapsed }));
+    } catch {
+      /* not persistent */
+    }
+  }
+
+  private update(): void {
+    const m = modeFor(window.innerWidth, window.innerHeight);
+    if (m !== this.mode || !this.root.dataset.mode) {
+      this.mode = m;
+      this.place();
+    }
+    this.apply();
+  }
+
+  /** Put each panel into the container of the current mode. */
+  private place(): void {
+    for (const e of this.entries) {
+      const target = this.mode === 'wide' ? (e.dock === 'left' ? this.leftBody : e.dock === 'right' ? this.rightBody : this.bottomExtra) : this.sheetBody;
+      if (e.el.parentElement !== target || target.lastElementChild !== e.el) target.append(e.el);
+    }
+  }
+
+  private apply(): void {
+    const r = this.root;
+    r.dataset.mode = this.mode;
+    r.dataset.sheet = this.sheetState;
+    r.dataset.leftCollapsed = String(this.collapsed.left);
+    r.dataset.rightCollapsed = String(this.collapsed.right);
+    r.dataset.sideCollapsed = String(this.collapsed.side);
+    document.documentElement.dataset.mode = this.mode;
+    const tabbed = this.mode !== 'wide';
+    for (const e of this.entries) e.el.hidden = tabbed && e.tab !== this.tab;
+    for (const [id, b] of this.tabButtons) {
+      const on = id === this.tab && (this.mode === 'sheet' ? this.sheetState !== 'peek' : this.mode === 'side' ? !this.collapsed.side : true);
+      b.setAttribute('aria-selected', String(id === this.tab));
+      b.classList.toggle('active', on);
+      b.tabIndex = id === this.tab ? 0 : -1;
+    }
+    this.sheetBody.setAttribute('aria-labelledby', `tab-${this.tab}`);
+    for (const [side, d] of [['left', this.left], ['right', this.right]] as const) {
+      const b = d.querySelector('.dock-toggle') as HTMLButtonElement;
+      const c = this.collapsed[side];
+      b.textContent = (side === 'left') !== c ? '‹' : '›';
+      b.ariaLabel = `${c ? 'Show' : 'Hide'} the ${side} panels`;
+      b.title = b.ariaLabel;
+      b.setAttribute('aria-expanded', String(!c));
+    }
+    const st = this.sheet.querySelector('.side-toggle') as HTMLButtonElement;
+    st.textContent = this.collapsed.side ? '‹' : '›';
+    st.ariaLabel = this.collapsed.side ? 'Show panels' : 'Hide panels';
+    st.title = st.ariaLabel;
+    this.grip.setAttribute('aria-expanded', String(this.sheetState !== 'peek'));
+    this.grip.ariaLabel = `Panel height: ${this.sheetState}. Tap to change.`;
+    this.emit();
+  }
+
+  private emit(): void {
+    const h = this.mode === 'sheet' ? this.sheet.getBoundingClientRect().height : 0;
+    this.root.style.setProperty('--sheet-h', `${Math.round(h)}px`);
+    for (const l of this.listeners) l();
+  }
+
+  /** Map area no panel covers, in CSS px from the window edges. */
+  freeRect(): FreeRect {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const vis = (e: HTMLElement) => e.offsetParent !== null || getComputedStyle(e).position === 'fixed';
+    const tb = this.topbar.getBoundingClientRect();
+    const out: FreeRect = { left: 0, top: tb.bottom > 0 ? tb.bottom : 0, right: 0, bottom: 0 };
+    const bt = this.bottom.getBoundingClientRect();
+    if (vis(this.bottom) && bt.height > 0) out.bottom = Math.max(out.bottom, H - bt.top);
+    if (this.mode === 'wide') {
+      const l = this.left.getBoundingClientRect();
+      const rr = this.right.getBoundingClientRect();
+      out.left = Math.max(0, l.right);
+      out.right = Math.max(0, W - rr.left);
+    } else if (this.mode === 'side') {
+      out.right = Math.max(0, W - this.sheet.getBoundingClientRect().left);
+    } else {
+      out.bottom = Math.max(out.bottom, H - this.sheet.getBoundingClientRect().top);
+    }
+    // Never let panels squeeze the map's centre to nothing.
+    if (W - out.left - out.right < W * 0.35) out.left = out.right = 0;
+    if (H - out.top - out.bottom < H * 0.3) out.bottom = Math.max(0, H * 0.7 - out.top);
+    return out;
+  }
+
+  private wireGrip(): void {
+    let start: { y: number; h: number; moved: boolean } | null = null;
+    const order: SheetState[] = ['peek', 'half', 'full'];
+    this.grip.addEventListener('pointerdown', (e) => {
+      if (this.mode !== 'sheet') return;
+      start = { y: e.clientY, h: this.sheet.getBoundingClientRect().height, moved: false };
+      this.grip.setPointerCapture(e.pointerId);
+    });
+    this.grip.addEventListener('pointermove', (e) => {
+      if (!start) return;
+      const dy = e.clientY - start.y;
+      if (Math.abs(dy) > 6) start.moved = true;
+      if (start.moved) {
+        this.sheet.style.height = `${Math.max(60, start.h - dy)}px`;
+        this.sheet.classList.add('dragging');
+      }
+    });
+    const end = (e: PointerEvent) => {
+      if (!start) return;
+      const s = start;
+      start = null;
+      this.sheet.classList.remove('dragging');
+      this.sheet.style.height = '';
+      if (!s.moved) {
+        if (e.type === 'pointerup') this.setSheet(order[(order.indexOf(this.sheetState) + 1) % 3]);
+        return;
+      }
+      const h = s.h - (e.clientY - s.y);
+      const H = window.innerHeight;
+      const targets: [SheetState, number][] = [['peek', 0], ['half', H * 0.48], ['full', H * 0.88]];
+      targets.sort((a, b) => Math.abs(a[1] - h) - Math.abs(b[1] - h));
+      this.setSheet(targets[0][0]);
+    };
+    this.grip.addEventListener('pointerup', end);
+    this.grip.addEventListener('pointercancel', end);
+    // Keyboard: Enter / Space activate the button (click), handled as a cycle above via pointer;
+    // for keyboard users the click event is the only one fired.
+    this.grip.addEventListener('click', (e) => {
+      if ((e as PointerEvent).pointerType === '' || e.detail === 0) this.setSheet(order[(order.indexOf(this.sheetState) + 1) % 3]);
+    });
+  }
+}

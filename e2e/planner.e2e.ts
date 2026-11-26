@@ -47,6 +47,37 @@ async function replayClosest(page: Page, body: string): Promise<number> {
   }, body);
 }
 
+
+/** Chart facts from the page: selection (dates, C3), cell spacing, and a screen box around a date pair. */
+async function chartState(page: Page, padDays = 0) {
+  return page.evaluate((padDays) => {
+    const ch = (window as any).sendit.planner.chart;
+    const g = ch.data;
+    const k = ch.selected;
+    const i = k % g.nDep;
+    const j = (k - i) / g.nDep;
+    const G = ch.geom();
+    const r = ch.canvas.getBoundingClientRect();
+    const dep = g.depTimes[i];
+    const arr = g.arrTimes[j];
+    const d = padDays * 86400;
+    return {
+      dep, arr, c3: g.c3[k] / 1e6,
+      depStep: (g.depTimes[g.nDep - 1] - g.depTimes[0]) / (g.nDep - 1) / 86400,
+      at: { x: r.left + G.xOf(dep), y: r.top + G.yOf(arr) },
+      box: { x0: r.left + G.xOf(Math.max(G.t0x, dep - d)), y0: r.top + G.yOf(Math.min(G.t1y, arr + d)), x1: r.left + G.xOf(Math.min(G.t1x, dep + d)), y1: r.top + G.yOf(Math.max(G.t0y, arr - d)) },
+      inputs: [...document.querySelectorAll('.planner input[type="date"]')].map((e) => (e as HTMLInputElement).value),
+    };
+  }, padDays);
+}
+
+async function computed(page: Page, before: string): Promise<void> {
+  await page.waitForFunction((b) => {
+    const t = document.querySelector('.planner .pl-status')?.textContent ?? '';
+    return t !== b && /transfers in/.test(t);
+  }, before, { timeout: 60_000 });
+}
+
 async function timed<T>(label: string, log: string[], f: () => Promise<T>): Promise<T> {
   const t0 = Date.now();
   const r = await f();
@@ -157,6 +188,51 @@ test('campaign: Mars flyby solved through the planner UI', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+
+test('porkchop zoom: two box zooms into the Earth to Mars 2026 minimum, back and reset', async ({ page }) => {
+  await fresh(page);
+  await page.getByRole('button', { name: 'Transfer planner…' }).click();
+  const pl = page.locator('.planner');
+  await pl.getByRole('button', { name: 'Compute porkchop' }).click();
+  await expect(pl.locator('.pl-status')).toContainText('transfers in', { timeout: 60_000 });
+  await pl.getByRole('button', { name: 'Select minimum' }).click();
+  const s0 = await chartState(page, 15);
+  for (const pad of [15, 4]) {
+    const st = await chartState(page, pad);
+    const before = (await pl.locator('.pl-status').textContent())!;
+    await page.mouse.move(st.box.x0, st.box.y0);
+    await page.mouse.down();
+    await page.mouse.move((st.box.x0 + st.box.x1) / 2, (st.box.y0 + st.box.y1) / 2, { steps: 4 });
+    await page.mouse.move(st.box.x1, st.box.y1, { steps: 4 });
+    await page.mouse.up();
+    await computed(page, before);
+    await page.screenshot({ path: `${SHOTS}/7-zoom-${pad}.png` });
+  }
+  // The kept selection is marked; now pick the finer minimum by clicking it.
+  await pl.getByRole('button', { name: 'Select minimum' }).click();
+  const s2 = await chartState(page);
+  await page.mouse.click(s2.at.x, s2.at.y);
+  const s3 = await chartState(page);
+  console.log(`zoom: unzoomed min dep ${new Date((s0.dep + 946728000) * 1000).toISOString()} C3 ${s0.c3.toFixed(3)} (cells ${s0.depStep.toFixed(2)} d); zoomed x2 dep ${new Date((s3.dep + 946728000) * 1000).toISOString()} C3 ${s3.c3.toFixed(3)} (cells ${s3.depStep.toFixed(3)} d); inputs ${s3.inputs.join(' ')}`);
+  expect(s3.depStep).toBeLessThan(s0.depStep / 5);
+  expect(Math.abs(s3.dep - s0.dep) / 86400).toBeLessThan(2 * s0.depStep);
+  expect(Math.abs(s3.arr - s0.arr) / 86400).toBeLessThan(4 * s0.depStep);
+  expect(s3.c3).toBeLessThanOrEqual(s0.c3 + 1e-6);
+  expect(s3.c3).toBeGreaterThan(s0.c3 - 0.2);
+  // Inputs follow the zoomed range.
+  expect(s3.inputs[0] <= new Date((s3.dep + 946728000) * 1000).toISOString().slice(0, 10)).toBe(true);
+  expect(s3.inputs[0]).not.toBe('2026-09-01');
+  // Back, then reset to the original range.
+  let before = (await pl.locator('.pl-status').textContent())!;
+  await pl.getByRole('button', { name: 'Zoom out' }).click();
+  await computed(page, before);
+  before = (await pl.locator('.pl-status').textContent())!;
+  await pl.getByRole('button', { name: 'Reset zoom' }).click();
+  await computed(page, before);
+  expect((await chartState(page)).inputs).toEqual(['2026-09-01', '2026-12-31', '2027-06-01', '2027-11-01']);
+  expect(errors).toEqual([]);
+});
+
 test('flyby chain plausibility check and date search', async ({ page }) => {
   await fresh(page);
   await page.getByRole('button', { name: 'Transfer planner…' }).click();
@@ -205,6 +281,41 @@ test.describe('phone', () => {
     expect(dims.docW).toBeLessThanOrEqual(dims.vw);
     expect(dims.canvasPx).toBeGreaterThanOrEqual(dims.canvasCss * 2.9);
     expect(dims.small).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test('porkchop zoom by touch at 390 x 844: zoom box toggle, two zooms, tap a cell', async ({ page }) => {
+    await fresh(page);
+    await page.evaluate(() => (window as any).sendit.planner.open('transfer'));
+    const pl = page.locator('.planner');
+    await pl.getByRole('button', { name: 'Compute porkchop' }).tap();
+    await expect(pl.locator('.pl-status')).toContainText('transfers in', { timeout: 60_000 });
+    await pl.getByRole('button', { name: 'Select minimum' }).tap();
+    const s0 = await chartState(page);
+    await pl.getByRole('button', { name: 'Zoom box' }).tap();
+    const cdp = await page.context().newCDPSession(page);
+    for (const pad of [15, 4]) {
+      // Bring the chart below the sticky planner header.
+      await pl.evaluate((e) => e.scrollBy(0, (e.querySelector('.pl-canvas') as HTMLElement).getBoundingClientRect().top - 200));
+      const st = await chartState(page, pad);
+      const before = (await pl.locator('.pl-status').textContent())!;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: st.box.x0, y: st.box.y0 }] });
+      for (let f = 0.25; f <= 1; f += 0.25) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: st.box.x0 + (st.box.x1 - st.box.x0) * f, y: st.box.y0 + (st.box.y1 - st.box.y0) * f }] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await computed(page, before);
+    }
+    await pl.getByRole('button', { name: 'Zoom box' }).tap(); // back to reading values
+    await pl.getByRole('button', { name: 'Select minimum' }).tap();
+    const s2 = await chartState(page);
+    await page.touchscreen.tap(s2.at.x, s2.at.y);
+    const s3 = await chartState(page);
+    await page.screenshot({ path: `${SHOTS}/8-phone-zoomed.png` });
+    console.log(`phone zoom: C3 ${s0.c3.toFixed(3)} -> ${s3.c3.toFixed(3)}, cells ${s0.depStep.toFixed(2)} d -> ${s3.depStep.toFixed(3)} d`);
+    expect(s3.depStep).toBeLessThan(s0.depStep / 5);
+    expect(Math.abs(s3.dep - s0.dep) / 86400).toBeLessThan(2 * s0.depStep);
+    expect(s3.c3).toBeLessThanOrEqual(s0.c3 + 1e-6);
+    const sw = await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+    expect(sw).toBe(true);
     expect(errors).toEqual([]);
   });
 });

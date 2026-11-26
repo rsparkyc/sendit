@@ -116,3 +116,17 @@ export function parseDuration(text: string): number | null {
   }
   return sign * total;
 }
+
+/** A collapsible panel section: a heading button (aria-expanded) and a body. */
+export function section(title: string, cls: string, ...children: (Node | string | null)[]): HTMLElement {
+  const head = el('button', { className: 'sec-title', textContent: title, type: 'button' });
+  head.setAttribute('aria-expanded', 'true');
+  const body = el('div', { className: 'sec-body' }, ...children);
+  const s = el('section', { className: `panel ed ${cls}` }, el('h2', { className: 'sec-h' }, head), body);
+  s.setAttribute('aria-label', title);
+  head.onclick = () => {
+    s.classList.toggle('collapsed');
+    head.setAttribute('aria-expanded', String(!s.classList.contains('collapsed')));
+  };
+  return s;
+}

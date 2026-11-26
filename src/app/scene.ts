@@ -77,6 +77,9 @@ export class SceneView {
   private readonly paths: AnchoredLine[] = [];
   private readonly trajectory: AnchoredLine;
   private readonly trajectoryPast: AnchoredLine;
+  /** Revolutions far from the time cursor, drawn faint so a body wrapped many times stays visible. */
+  private readonly trajectoryFarBefore: AnchoredLine;
+  private readonly trajectoryFarAfter: AnchoredLine;
   private readonly burnArcs: AnchoredLine;
   private readonly trajectoryMaterial: THREE.LineBasicMaterial;
   private readonly light: THREE.PointLight;
@@ -106,7 +109,10 @@ export class SceneView {
     this.trajectory = new AnchoredLine(this.trajectoryMaterial);
     this.trajectoryPast = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0x3b7a58, transparent: true, opacity: 0.8, depthWrite: false }));
     this.burnArcs = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0xff8a3d, transparent: false, depthWrite: false, depthTest: false }));
-    this.scene.add(this.trajectory.group, this.trajectoryPast.group, this.burnArcs.group);
+    const far = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.12, depthWrite: false });
+    this.trajectoryFarBefore = new AnchoredLine(far);
+    this.trajectoryFarAfter = new AnchoredLine(far);
+    this.scene.add(this.trajectory.group, this.trajectoryPast.group, this.trajectoryFarBefore.group, this.trajectoryFarAfter.group, this.burnArcs.group);
     this.light = new THREE.PointLight(0xffffff, 3, 0, 0);
     this.scene.add(this.light, new THREE.AmbientLight(0xffffff, 0.06));
     this.visuals = new BodyVisuals(this.renderer, this.bodies, lightBody); // textures, IAU orientation, rings
@@ -128,12 +134,9 @@ export class SceneView {
 
   /** The spacecraft trajectory (drawn dim before `split`, bright after; see setTrajectorySplit). */
   setTrajectory(segs: AnchoredSegment[] | null): void {
-    if (segs) {
-      this.trajectory.set(segs);
-      this.trajectoryPast.set(segs);
-    } else {
-      this.trajectory.clear();
-      this.trajectoryPast.clear();
+    for (const l of [this.trajectory, this.trajectoryPast, this.trajectoryFarBefore, this.trajectoryFarAfter]) {
+      if (segs) l.set(segs);
+      else l.clear();
     }
   }
 
@@ -150,10 +153,14 @@ export class SceneView {
   }
 
   /** Vertex index of the current time along the trajectory polyline (fractional allowed: rounded). */
-  setTrajectorySplit(vertex: number, total: number): void {
+  setTrajectorySplit(vertex: number, total: number, window: [number, number] = [0, total - 1]): void {
     const v = Math.round(vertex);
-    this.trajectoryPast.setRange(0, v);
-    this.trajectory.setRange(v, total - 1);
+    const w0 = Math.max(0, Math.min(v, Math.round(window[0])));
+    const w1 = Math.min(total - 1, Math.max(v, Math.round(window[1])));
+    this.trajectoryFarBefore.setRange(0, w0);
+    this.trajectoryPast.setRange(w0, v);
+    this.trajectory.setRange(v, w1);
+    this.trajectoryFarAfter.setRange(w1, total - 1);
   }
 
   setPathVisible(i: number, visible: boolean): void {
@@ -175,6 +182,8 @@ export class SceneView {
     }
     this.trajectory.place(cam);
     this.trajectoryPast.place(cam);
+    this.trajectoryFarBefore.place(cam);
+    this.trajectoryFarAfter.place(cam);
     this.burnArcs.place(cam);
     const l = this.lightBody;
     if (l >= 0) this.light.position.copy(this.bodies[l].position);

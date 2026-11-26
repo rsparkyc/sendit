@@ -9,10 +9,9 @@
  * the mesh rotation is frameAxes * R(t), with R(t) the IAU body-fixed -> ICRF
  * rotation at simulation time t and frameAxes the ICRF -> frame rotation of the
  * current plotting frame (frames.ts), because the scene is drawn in frame
- * coordinates. The simulation time and frame are read through setTime() when
- * the app calls it, otherwise from the app's published state (window.sendit,
- * the same object the browser tests use); until either is available bodies
- * stay flat-coloured.
+ * coordinates. The app passes the simulation time and frame axes each frame
+ * (setTime, from main.ts); until it has, bodies stay flat-coloured. The image
+ * credits link lives in the app's status bar (hud.ts).
  *
  * LOADING. Nothing is fetched before the first frame is drawn. A body's low
  * tier (512 x 256) is fetched once it is at least LO_PX pixels in radius on
@@ -31,9 +30,8 @@
  * the planet's shadow computed per fragment.
  */
 import * as THREE from 'three';
-import { BODIES, BODY_GM } from './physics';
+import { BODIES } from './physics';
 import { IAU_ROTATION, bodyToIcrf, mul3 } from './body-rotation';
-import { ECLIPTIC_AXES, computeFrame, newFrameState, type FrameSpec } from './frames';
 import { RING_PROFILE, ringProfileTexture } from './saturn-rings';
 
 const URLS = import.meta.glob('../assets/planets/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
@@ -96,26 +94,6 @@ export function bodyFixedSphere(lonSegs = 64, latSegs = 32): THREE.BufferGeometr
   return g;
 }
 
-/** A small fixed link to the image credits page (public/credits.html). */
-function addCreditsLink(): void {
-  if (typeof document === 'undefined' || document.getElementById('image-credits')) return;
-  const a = document.createElement('a');
-  a.id = 'image-credits';
-  a.href = 'credits.html';
-  a.textContent = 'Image credits';
-  a.title = 'Sources and licences of the planet and moon maps';
-  Object.assign(a.style, {
-    position: 'fixed', left: '6px', bottom: '3px', zIndex: '20', font: '11px system-ui, sans-serif',
-    color: 'rgba(200, 215, 235, 0.7)', textDecoration: 'none', pointerEvents: 'auto',
-  });
-  document.body.appendChild(a);
-}
-
-interface AppHook {
-  store: { get(): { t: number; frame: FrameSpec } };
-  eph: { evaluate(t: number, pos: Float64Array, vel: Float64Array | null): boolean };
-}
-
 export class BodyVisuals {
   private readonly entries: BodyEntry[] = [];
   private readonly maxTex: number;
@@ -124,9 +102,6 @@ export class BodyVisuals {
   private loadingHi = false;
   private frameNo = 0;
   private explicit: { t: number; axes: ArrayLike<number> } | null = null;
-  private readonly frameState = newFrameState();
-  private readonly pos = new Float64Array(3 * BODIES.length);
-  private readonly vel = new Float64Array(3 * BODIES.length);
   private readonly rot = new Float64Array(9);
   private readonly m = new Float64Array(9);
   private readonly m4 = new THREE.Matrix4();
@@ -209,7 +184,6 @@ export class BodyVisuals {
     const saturn = this.entries.find((e) => e.id === 'saturn');
     if (saturn) this.ring = this.makeRing(saturn);
     if (typeof window !== 'undefined') (window as { senditVisuals?: BodyVisuals }).senditVisuals = this; // tests
-    addCreditsLink();
   }
 
   /** Simulation time (TDB s from J2000) and frame axes (rows = frame axes in ICRF) for this frame. */
@@ -280,16 +254,9 @@ export class BodyVisuals {
     return ring;
   }
 
-  /** Simulation time and frame axes from the explicit call or the app's published state. */
+  /** Simulation time and frame axes, as given by the app each frame (setTime). */
   private timeAndAxes(): { t: number; axes: ArrayLike<number> } | null {
-    if (this.explicit) return this.explicit;
-    const hook = (globalThis as { sendit?: AppHook }).sendit;
-    if (!hook?.store) return null;
-    const s = hook.store.get();
-    if (s.frame.kind !== 'rotating') return { t: s.t, axes: ECLIPTIC_AXES };
-    if (!hook.eph?.evaluate(s.t, this.pos, this.vel)) return null;
-    computeFrame(s.frame, { count: BODIES.length, pos: this.pos, vel: this.vel, gm: BODY_GM }, this.frameState);
-    return { t: s.t, axes: this.frameState.axes };
+    return this.explicit;
   }
 
   /**

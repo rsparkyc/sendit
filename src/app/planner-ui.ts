@@ -30,6 +30,9 @@ import { defaultInclination, launchOpportunities, PASS_SIDES, type LaunchOpportu
 
 const DEG = 180 / Math.PI;
 const fmtDate = (t: number) => formatCalendar(tdbToCalendar(t), false).slice(0, 16);
+type Range4 = [number, number, number, number];
+/** Smallest zoom: ranges of this many days on both axes. */
+const ZOOM_FLOOR_DAYS = 4;
 const dayStr = (t: number) => {
   const c = tdbToCalendar(t);
   return `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
@@ -110,10 +113,21 @@ class PorkchopChart {
   private css = { w: 0, h: 0 };
   private readonly pad = { l: 64, r: 12, t: 12, b: 44 };
 
-  constructor(private readonly onProbe: () => void, private readonly onSelect: () => void) {
+  /** Touch: one-finger drag draws a zoom box instead of reading values (the mouse always can: drag vs click). */
+  boxMode = false;
+  /** Zoom box being drawn, CSS px relative to the canvas. */
+  private box: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** The selected transfer's exact dates, kept across zoom levels. */
+  selectedTimes: { dep: number; arr: number } | null = null;
+
+  constructor(private readonly onProbe: () => void, private readonly onSelect: () => void, private readonly onZoom: (dep0: number, dep1: number, arr0: number, arr1: number) => void) {
     this.root.append(this.canvas);
     new ResizeObserver(() => this.draw()).observe(this.root);
-    let down = false;
+    let down: { x: number; y: number; type: string; boxing: boolean } | null = null;
+    const local = (e: PointerEvent) => {
+      const r = this.canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
     const cell = (e: PointerEvent): number | null => {
       const g = this.grid;
       if (!g) return null;
@@ -124,14 +138,28 @@ class PorkchopChart {
       return c ? c.j * g.nDep + c.i : null;
     };
     this.canvas.addEventListener('pointerdown', (e) => {
-      down = true;
+      const p = local(e);
+      down = { x: p.x, y: p.y, type: e.pointerType, boxing: false };
       this.canvas.setPointerCapture(e.pointerId);
+      if (e.pointerType !== 'mouse' && this.boxMode) return;
       this.probe = cell(e);
       this.draw();
       this.onProbe();
     });
     this.canvas.addEventListener('pointermove', (e) => {
-      if (!down && e.pointerType !== 'mouse') return;
+      const p = local(e);
+      if (down) {
+        // A drag beyond the threshold is a zoom box: always with a mouse or pen, on touch only in box mode.
+        const canBox = down.type !== 'touch' || this.boxMode;
+        if (canBox && !down.boxing && Math.hypot(p.x - down.x, p.y - down.y) > 6) down.boxing = true;
+        if (down.boxing) {
+          this.box = { x0: down.x, y0: down.y, x1: p.x, y1: p.y };
+          this.draw();
+          return;
+        }
+        if (canBox && down.type !== 'touch') return;
+        if (this.boxMode) return;
+      } else if (e.pointerType !== 'mouse') return;
       const k = cell(e);
       if (k === this.probe) return;
       this.probe = k;
@@ -139,16 +167,25 @@ class PorkchopChart {
       this.onProbe();
     });
     this.canvas.addEventListener('pointerup', (e) => {
-      if (!down) return;
-      down = false;
-      const k = cell(e);
-      if (k !== null && Number.isFinite(this.grid!.c3[k])) {
-        this.selected = k;
+      const d = down;
+      down = null;
+      if (!d) return;
+      if (d.boxing && this.box) {
+        const b = this.box;
+        this.box = null;
         this.draw();
-        this.onSelect();
+        if (Math.abs(b.x1 - b.x0) > 6 && Math.abs(b.y1 - b.y0) > 6) this.zoomBox(b);
+        return;
       }
+      if (this.boxMode && d.type === 'touch') return;
+      const k = cell(e);
+      if (k !== null && Number.isFinite(this.grid!.c3[k])) this.select(k);
     });
-    this.canvas.addEventListener('pointercancel', () => (down = false));
+    this.canvas.addEventListener('pointercancel', () => {
+      down = null;
+      this.box = null;
+      this.draw();
+    });
     this.canvas.addEventListener('pointerleave', (e) => {
       if (e.pointerType === 'mouse' && !down) {
         this.probe = null;
@@ -156,6 +193,60 @@ class PorkchopChart {
         this.onProbe();
       }
     });
+  }
+
+  select(k: number): void {
+    const g = this.grid!;
+    this.selected = k;
+    const i = k % g.nDep;
+    this.selectedTimes = { dep: g.depTimes[i], arr: g.arrTimes[(k - i) / g.nDep] };
+    this.draw();
+    this.onSelect();
+  }
+
+  /** Plot geometry: time <-> CSS px (cell centres span the plot less half a cell each side). */
+  private geom() {
+    const g = this.grid!;
+    const P = this.pad;
+    const pw = this.css.w - P.l - P.r;
+    const ph = this.css.h - P.t - P.b;
+    const sx = pw / g.nDep;
+    const sy = ph / g.nArr;
+    const t0x = g.depTimes[0], t1x = g.depTimes[g.nDep - 1], t0y = g.arrTimes[0], t1y = g.arrTimes[g.nArr - 1];
+    return {
+      xOf: (t: number) => P.l + 0.5 * sx + ((t - t0x) / (t1x - t0x || 1)) * (pw - sx),
+      yOf: (t: number) => P.t + ph - 0.5 * sy - ((t - t0y) / (t1y - t0y || 1)) * (ph - sy),
+      tx: (x: number) => t0x + ((x - P.l - 0.5 * sx) / (pw - sx)) * (t1x - t0x),
+      ty: (y: number) => t0y + ((P.t + ph - 0.5 * sy - y) / (ph - sy)) * (t1y - t0y),
+      t0x, t1x, t0y, t1y,
+    };
+  }
+
+  private zoomBox(b: { x0: number; y0: number; x1: number; y1: number }): void {
+    if (!this.grid) return;
+    const G = this.geom();
+    const clampX = (t: number) => Math.max(G.t0x, Math.min(G.t1x, t));
+    const clampY = (t: number) => Math.max(G.t0y, Math.min(G.t1y, t));
+    const d0 = clampX(G.tx(Math.min(b.x0, b.x1))), d1 = clampX(G.tx(Math.max(b.x0, b.x1)));
+    const a0 = clampY(G.ty(Math.max(b.y0, b.y1))), a1 = clampY(G.ty(Math.min(b.y0, b.y1)));
+    this.onZoom(d0, d1, a0, a1);
+  }
+
+  /** After a recompute: mark the kept selection at the nearest cell, if it is in view. */
+  restoreSelection(): void {
+    const g = this.grid;
+    const st = this.selectedTimes;
+    this.selected = null;
+    if (!g || !st) return;
+    const G = this.geom();
+    if (st.dep < G.t0x || st.dep > G.t1x || st.arr < G.t0y || st.arr > G.t1y) return;
+    const near = (ts: Float64Array, t: number) => {
+      let b = 0;
+      for (let q = 1; q < ts.length; q++) if (Math.abs(ts[q] - t) < Math.abs(ts[b] - t)) b = q;
+      return b;
+    };
+    this.selected = near(g.arrTimes, st.arr) * g.nDep + near(g.depTimes, st.dep);
+    this.draw();
   }
 
   get data(): Grid | null {
@@ -166,6 +257,7 @@ class PorkchopChart {
     this.grid = g;
     this.q = q;
     this.selected = null;
+    this.box = null;
     this.probe = null;
     this.prepare();
   }
@@ -333,6 +425,17 @@ class PorkchopChart {
       mark(this.selected, '#000', 9);
       mark(this.selected, '#7dffb0', 8);
     }
+    if (this.box) {
+      const b = this.box;
+      ctx.save();
+      ctx.fillStyle = 'rgba(125,255,176,0.12)';
+      ctx.strokeStyle = '#7dffb0';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 3]);
+      ctx.fillRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+      ctx.strokeRect(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1), Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+      ctx.restore();
+    }
   }
 }
 
@@ -361,6 +464,13 @@ export class PlannerOverlay {
   private readonly sideSel = el('select', { className: 'pl-input', title: 'Pass side' });
   private readonly result = el('div', { className: 'pl-result' });
   private chosenOp: LaunchOpportunity | null = null;
+  /** Zoom history: ranges shown before the current one ([0] is the computed original). */
+  private zoomStack: Range4[] = [];
+  private current: Range4 | null = null;
+  private readonly zoomBoxBtn = button('Zoom box', () => this.toggleBox(), 'pl-zoombox');
+  private readonly zoomOutBtn = button('Zoom out', () => void this.zoomOut());
+  private readonly zoomResetBtn = button('Reset zoom', () => void this.zoomReset());
+  private readonly zoomNote = el('div', { className: 'hint pl-zoomnote', role: 'status' });
   private departure: { index: number; tArr: number; body: string } | null = null;
   // Target tab.
   private readonly tBurn = el('select', { className: 'pl-input', title: 'Burn to correct' });
@@ -377,7 +487,7 @@ export class PlannerOverlay {
   constructor(private readonly store: Store<AppState>, private readonly editor: Editor, eph: Ephemeris, pool: ChunkPool) {
     this.client = new PlannerClient(eph, pool);
     this.progress = new Progress(() => this.client.cancel());
-    this.chart = new PorkchopChart(() => this.showReadout(), () => this.selectCell());
+    this.chart = new PorkchopChart(() => this.showReadout(), () => this.selectCell(), (a, b, c, d) => void this.zoomTo(a, b, c, d));
     fillBodySelect(this.depSel, (i) => BODIES[i].id);
     fillBodySelect(this.arrSel, (i) => BODIES[i].id);
     fillBodySelect(this.tBody, (i) => BODIES[i].id);
@@ -412,6 +522,8 @@ export class PlannerOverlay {
     store.subscribe((s, p) => {
       if (s.plan !== p.plan && this.isOpen) this.refreshTarget();
     });
+    this.zoomBoxBtn.setAttribute('aria-pressed', 'false');
+    this.syncZoomUi();
     this.tab('transfer');
   }
 
@@ -466,7 +578,7 @@ export class PlannerOverlay {
       field2('Show', this.qSel),
       el('div', { className: 'pl-row' }, button('Compute porkchop', () => void this.compute(), 'primary'), button('Select minimum', () => this.pickMin())),
       this.status);
-    const legend = el('div', { className: 'hint' }, 'Colour: viridis, dark = low (better). White lines: contours of the shown quantity. Orange dashed: 180° transfer angle, Type I below, Type II above. Faded cells are above the colour range. Tap or drag on the chart to read values; release to select.');
+    const legend = el('div', { className: 'hint' }, 'Colour: viridis, dark = low (better). White lines: contours of the shown quantity. Orange dashed: 180° transfer angle, Type I below, Type II above. Faded cells are above the colour range. Tap or drag on the chart to read values; release to select. Zoom: drag a box with the mouse, or turn on Zoom box and drag with a finger; each zoom recomputes the grid over the new dates.');
     this.useBox.append(
       el('div', { className: 'sub', textContent: 'Use this transfer' }),
       field2('Parking inclination, deg', this.incIn),
@@ -479,11 +591,64 @@ export class PlannerOverlay {
     this.incIn.addEventListener('change', () => this.proposeLaunch());
     this.useBox.style.display = 'none';
     return el('div', { className: 'pl-transfer' },
-      el('div', { className: 'pl-main' }, this.chart.root, legend),
+      el('div', { className: 'pl-main' }, this.chart.root, el('div', { className: 'pl-row pl-zoom' }, this.zoomBoxBtn, this.zoomOutBtn, this.zoomResetBtn), this.zoomNote, legend),
       el('div', { className: 'pl-side' }, form, this.readout, this.useBox));
   }
 
-  private async compute(): Promise<void> {
+  private toggleBox(): void {
+    this.chart.boxMode = !this.chart.boxMode;
+    this.zoomBoxBtn.setAttribute('aria-pressed', String(this.chart.boxMode));
+    this.zoomBoxBtn.classList.toggle('active', this.chart.boxMode);
+  }
+
+  private syncZoomUi(note = ''): void {
+    this.zoomOutBtn.disabled = this.zoomStack.length === 0;
+    this.zoomResetBtn.disabled = this.zoomStack.length === 0;
+    this.zoomNote.textContent = note || (this.zoomStack.length ? `Zoom level ${this.zoomStack.length}.` : '');
+  }
+
+  private setInputs(r: Range4): void {
+    this.depFrom.value = dayStr(r[0]);
+    this.depTo.value = dayStr(r[1]);
+    this.arrFrom.value = dayStr(r[2]);
+    this.arrTo.value = dayStr(r[3]);
+  }
+
+  /** Zoom to a box: whole days (the date inputs show days and stay in sync), never below the floor. */
+  private async zoomTo(d0: number, d1: number, a0: number, a1: number): Promise<void> {
+    if (!this.current) return;
+    const lo = (t: number) => parseDay(dayStr(t))!;
+    let r: Range4 = [lo(d0), lo(d1) + DAY, lo(a0), lo(a1) + DAY];
+    const span = (x: number, y: number) => (y - x) / DAY;
+    if (span(this.current[0], this.current[1]) <= ZOOM_FLOOR_DAYS && span(this.current[2], this.current[3]) <= ZOOM_FLOOR_DAYS) {
+      this.syncZoomUi(`Zoom limit reached: ${ZOOM_FLOOR_DAYS}-day ranges (cells about ${((ZOOM_FLOOR_DAYS * 24 * 60) / 159).toFixed(0)} minutes apart; the dates are whole days).`);
+      return;
+    }
+    const widen = (x: number, y: number): [number, number] => {
+      const s = span(x, y);
+      if (s >= ZOOM_FLOOR_DAYS) return [x, y];
+      const pad = Math.ceil((ZOOM_FLOOR_DAYS - s) / 2) * DAY;
+      return [x - pad, y + pad];
+    };
+    r = [...widen(r[0], r[1]), ...widen(r[2], r[3])] as Range4;
+    this.zoomStack.push(this.current);
+    await this.compute(r);
+  }
+
+  private async zoomOut(): Promise<void> {
+    const r = this.zoomStack.pop();
+    if (r) await this.compute(r);
+  }
+
+  private async zoomReset(): Promise<void> {
+    const r = this.zoomStack[0];
+    this.zoomStack = [];
+    if (r) await this.compute(r);
+  }
+
+  /** Compute the porkchop over the inputs' dates (a new chart), or over `zoom` (a zoom step, keeping the selection). */
+  private async compute(zoom?: Range4): Promise<void> {
+    if (zoom) this.setInputs(zoom);
     const a = parseDay(this.depFrom.value), b = parseDay(this.depTo.value), c = parseDay(this.arrFrom.value), d = parseDay(this.arrTo.value);
     if (a === null || b === null || c === null || d === null || !(b > a) || !(d > c)) {
       this.status.textContent = 'Give both date ranges, each ending after it starts.';
@@ -493,16 +658,27 @@ export class PlannerOverlay {
       this.status.textContent = 'Choose two different bodies.';
       return;
     }
+    if (!zoom) {
+      this.zoomStack = [];
+      this.chart.selectedTimes = null;
+    }
     const t0 = performance.now();
     this.status.textContent = 'Computing…';
+    // The client pins ephemeris coverage for [a, d] and waits for it without blocking the page.
     const r = await this.job(() => this.client.run({ type: 'porkchop', req: porkchopRequest(this.depSel.value, this.arrSel.value, a, b, c, d, 160, 160) }, a, d, this.onProgress));
     if (!r) return;
     const g: Grid = r.grid;
+    this.current = [a, b, c, d];
     this.chart.set(g, this.qSel.value as Quantity);
-    this.useBox.style.display = 'none';
-    this.departure = null;
+    this.chart.restoreSelection();
+    if (!zoom || this.chart.selected === null) {
+      this.useBox.style.display = 'none';
+      this.departure = null;
+    }
     const k = argMin(g.c3);
-    this.status.textContent = `${g.nDep} × ${g.nArr} transfers in ${r.ms.toFixed(0)} ms (${(performance.now() - t0).toFixed(0)} ms including ephemeris).` + (k >= 0 ? ` Minimum C3 ${(g.c3[k] / 1e6).toFixed(2)} km²/s², departing ${dayStr(g.depTimes[k % g.nDep])}.` : ' No solutions.');
+    const cellH = ((b - a) / (g.nDep - 1) / 3600);
+    this.status.textContent = `${g.nDep} × ${g.nArr} transfers in ${r.ms.toFixed(0)} ms (${(performance.now() - t0).toFixed(0)} ms including ephemeris).` + (k >= 0 ? ` Minimum C3 ${(g.c3[k] / 1e6).toFixed(2)} km²/s², departing ${dayStr(g.depTimes[k % g.nDep])}.` : ' No solutions.') + (zoom ? ` Cells ${cellH < 24 ? `${cellH.toFixed(1)} h` : `${(cellH / 24).toFixed(2)} d`} apart.` : '');
+    this.syncZoomUi();
     this.showReadout();
   }
 
@@ -511,9 +687,7 @@ export class PlannerOverlay {
     if (!g) return;
     const k = argMin(g[this.qSel.value as Quantity]);
     if (k < 0) return;
-    this.chart.selected = k;
-    this.chart.draw();
-    this.selectCell();
+    this.chart.select(k);
   }
 
   private cellText(k: number, title: string): string {

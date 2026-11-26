@@ -1,10 +1,15 @@
 /**
- * HUD in plain DOM. Controls write to the store; the HUD re-renders from store
- * changes. Per-frame numbers (readouts, perf) come through `frame()`.
+ * HUD in plain DOM: the status bar (time, play / warp, outcome, key number,
+ * shortcut reference), the Time and View panels, the readouts and the loading
+ * banner. Controls write to the store; the HUD re-renders from store changes.
+ * Per-frame numbers (readouts, perf) come through `frame()`. Where each piece
+ * sits on screen is the layout's business (layout.ts).
  */
-import { frameLabel, type FrameSpec } from './frames';
+import { el, fillBodySelect, formatMet, section } from './dom';
+import { frameLabel, frameExplain, type FrameSpec } from './frames';
+import { hasSurfaceFrame } from './orientation';
 import { formatDistance, formatSpeed } from './format';
-import { fillBodySelect } from './dom';
+import type { Status } from './status';
 import type { AppState, Store } from './store';
 import { WARP_RATES } from './store';
 import { formatCalendar, formatRate, tdbToCalendar, tdbToUtc, utcIsPredicted } from './time';
@@ -29,49 +34,79 @@ export interface HudActions {
   jumpTo(t: number): void;
   presets: { label: string; t: number }[];
   spacecraftName: string | null;
+  status(s: AppState): Status;
 }
 
-export interface HudSlots {
-  left: HTMLElement;
-  right: HTMLElement;
-  bottom: HTMLElement;
-  /** Fixed overlay (loading banner, help). */
-  overlay: HTMLElement;
-}
+export const SHORTCUTS: readonly [string, string][] = [
+  ['Space', 'Pause / resume'],
+  [', and .', 'Slower / faster time warp'],
+  ['N', 'Add a node at the time cursor'],
+  ['W / S', 'Selected node: prograde + / −'],
+  ['D / A', 'Normal + / −'],
+  ['E / Q', 'Radial out + / −'],
+  ['[ and ]', 'Move the node earlier / later'],
+  ['Shift, Alt', 'with the above: ×10, ×0.1 of the step'],
+  ['Delete', 'Delete the selected node'],
+  ['Esc', 'Clear the selection'],
+  ['?', 'This reference'],
+];
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  Object.assign(e, props);
-  e.append(...children);
-  return e;
-}
+export const GESTURES: readonly [string, string][] = [
+  ['Drag (one finger / mouse)', 'Orbit the camera'],
+  ['Pinch / wheel', 'Zoom'],
+  ['Two-finger drag', 'Tilt and turn'],
+  ['Tap near the trajectory', 'Pick a point, then “Add node here” (a mouse click adds directly)'],
+  ['Double-tap a body', 'Focus it (or tap its label)'],
+  ['Drag a value’s ◂▸ strip', 'Tune it; “Fine” divides the step by ten'],
+];
 
 export class Hud {
+  readonly timePanel: HTMLElement;
+  readonly viewPanel: HTMLElement;
+  readonly infoPanel: HTMLElement;
+  readonly keys: HTMLDialogElement;
   private readonly date = el('div', { className: 'date' });
   private readonly utc = el('div', { className: 'utc' });
+  private readonly tbDate = el('span', { className: 'tb-date' });
+  private readonly tbMet = el('span', { className: 'tb-met' });
+  private readonly chip = el('span', { className: 'chip' });
+  private readonly key = el('span', { className: 'tb-key' });
   private readonly warp = el('span', { className: 'warp' });
-  private readonly pauseBtn = el('button', { className: 'btn', title: 'Pause / resume (Space)' });
+  private readonly pauseBtn = el('button', { className: 'btn tb-btn', type: 'button' });
   private readonly focusSel = el('select', { title: 'Focus' });
   private readonly kindSel = el('select', { title: 'Frame type', className: 'frame-kind' });
   private readonly centerSel = el('select', { title: 'Frame centre' });
+  private readonly frameNote = el('p', { className: 'hint frame-note' });
   private readonly secondarySel = el('select', { title: 'Body held fixed on the frame x axis' });
   private readonly readouts = el('div', { className: 'readouts' });
   private readonly perf = el('div', { className: 'perf' });
-  private readonly loading = el('div', { className: 'loading' });
-  private readonly jumpInput = el('input', { type: 'text', placeholder: 'YYYY-MM-DD [HH:MM]', spellcheck: false, title: 'Jump to a TDB date' });
+  private readonly loading = el('div', { className: 'loading', role: 'status' });
+  private readonly jumpInput = el('input', { type: 'text', placeholder: 'YYYY-MM-DD [HH:MM]', spellcheck: false, title: 'Jump to a TDB date', inputMode: 'numeric', enterKeyHint: 'go' });
   private readonly jumpError = el('div', { className: 'error' });
 
   constructor(
-    slots: HudSlots,
+    topbar: HTMLElement,
+    overlay: HTMLElement,
     private readonly store: Store<AppState>,
     private readonly bodies: readonly HudBody[],
     private readonly actions: HudActions,
   ) {
-    const slower = el('button', { className: 'btn', textContent: '«', title: 'Slower (,)' });
-    const faster = el('button', { className: 'btn', textContent: '»', title: 'Faster (.)' });
+    const slower = el('button', { className: 'btn tb-btn', type: 'button', textContent: '«', title: 'Slower (,)', ariaLabel: 'Slower time warp' });
+    const faster = el('button', { className: 'btn tb-btn', type: 'button', textContent: '»', title: 'Faster (.)', ariaLabel: 'Faster time warp' });
     slower.onclick = () => this.stepWarp(-1);
     faster.onclick = () => this.stepWarp(1);
     this.pauseBtn.onclick = () => store.set({ paused: !store.get().paused });
+    const help = el('button', { className: 'btn tb-btn tb-help', type: 'button', textContent: '?', title: 'Shortcuts and gestures (?)', ariaLabel: 'Shortcuts and gestures' });
+    help.onclick = () => this.showKeys();
+    const status = el('div', { className: 'tb-status', role: 'status' }, this.chip, this.key);
+    status.setAttribute('aria-live', 'polite');
+    topbar.append(
+      el('div', { className: 'tb-clock' }, this.pauseBtn, slower, this.warp, faster),
+      el('div', { className: 'tb-time' }, this.tbDate, this.tbMet),
+      status,
+      el('a', { className: 'tb-credits', id: 'image-credits', href: 'credits.html', textContent: 'Credits', title: 'Image credits: sources and licences of the planet and moon maps' }),
+      help,
+    );
 
     const jumpForm = el('form', { className: 'jump' }, this.jumpInput, el('button', { className: 'btn', type: 'submit', textContent: 'Go' }));
     jumpForm.onsubmit = (e) => {
@@ -82,20 +117,19 @@ export class Hud {
     };
     const presets = el('div', { className: 'presets' });
     for (const p of actions.presets) {
-      const b = el('button', { className: 'btn small', textContent: p.label });
+      const b = el('button', { className: 'btn small', type: 'button', textContent: p.label });
       b.onclick = () => actions.jumpTo(p.t);
       presets.append(b);
     }
-
-    const time = el('section', { className: 'panel time' },
-      this.date, this.utc,
-      el('div', { className: 'row' }, this.pauseBtn, slower, this.warp, faster),
-      jumpForm, this.jumpError, presets);
+    const help2 = el('button', { className: 'btn small keys-open', type: 'button', textContent: 'Shortcuts and gestures' });
+    help2.onclick = () => this.showKeys();
+    presets.append(help2);
+    this.timePanel = section('Time', 'time', this.date, this.utc, el('label', { className: 'sr-only', htmlFor: 'jump-date', textContent: 'Jump to a TDB date' }), jumpForm, this.jumpError, presets);
+    this.jumpInput.id = 'jump-date';
 
     fillBodySelect(this.focusSel, String, actions.spacecraftName ? [{ value: '-1', label: actions.spacecraftName }] : []);
     this.focusSel.onchange = () => store.set({ focus: Number(this.focusSel.value) });
-
-    for (const [v, t] of [['barycentric', 'Barycentric'], ['inertial', 'Body-centred inertial'], ['rotating', 'Body-centred rotating']]) {
+    for (const [v, t] of [['inertial', 'Inertial, centred on a body'], ['surface', "Rotating with a body's surface"], ['rotating', 'Rotating with a line between two bodies'], ['barycentric', 'Inertial, Solar System centre']]) {
       this.kindSel.append(el('option', { value: v, textContent: t }));
     }
     fillBodySelect(this.centerSel);
@@ -103,26 +137,34 @@ export class Hud {
     const onFrame = () => this.commitFrame();
     this.kindSel.onchange = onFrame;
     this.centerSel.onchange = () => {
-      // New centre: reset the secondary to its natural partner.
       this.secondarySel.value = String(bodies[Number(this.centerSel.value)].defaultSecondary);
       this.commitFrame();
     };
     this.secondarySel.onchange = onFrame;
+    const lab = (t: string, s: HTMLSelectElement, cls = '') => el('label', { className: `frow ${cls}` }, el('span', { textContent: t }), s);
+    this.viewPanel = section('View', 'view', lab('Focus', this.focusSel), lab('Frame', this.kindSel), lab('Centre', this.centerSel, 'center'), lab('Toward', this.secondarySel, 'secondary'), this.frameNote);
 
-    const view = el('section', { className: 'panel view' },
-      el('label', {}, el('span', { textContent: 'Focus' }), this.focusSel),
-      el('label', {}, el('span', { textContent: 'Frame' }), this.kindSel),
-      el('label', { className: 'center' }, el('span', { textContent: 'Centre' }), this.centerSel),
-      el('label', { className: 'secondary' }, el('span', { textContent: 'Fixed' }), this.secondarySel));
+    const perfD = el('details', { className: 'perf-d' }, el('summary', { textContent: 'Performance' }), this.perf);
+    this.infoPanel = el('section', { className: 'panel info' }, this.readouts, perfD);
+    this.infoPanel.setAttribute('aria-label', 'Readouts');
 
-    const help = el('div', { className: 'help', textContent: 'Drag: rotate · Wheel: zoom · Click trajectory: add burn · Click label: focus · Space: pause · , . : warp · W/S A/D Q/E: nudge node Δv · [ ]: node time · Del: delete node' });
-    slots.left.prepend(time);
-    slots.right.prepend(view);
-    slots.bottom.append(el('section', { className: 'panel info' }, this.readouts, this.perf));
-    slots.overlay.append(this.loading, help);
+    this.keys = el('dialog', { className: 'keys' });
+    const close = el('button', { className: 'btn', type: 'button', textContent: 'Close' });
+    close.onclick = () => this.keys.close();
+    const table = (title: string, rows: readonly [string, string][]) =>
+      el('section', {}, el('h3', { textContent: title }), el('dl', {}, ...rows.flatMap(([k, v]) => [el('dt', {}, el('kbd', { textContent: k })), el('dd', { textContent: v })])));
+    this.keys.append(el('h2', { textContent: 'Shortcuts and gestures' }), el('div', { className: 'keys-grid' }, table('Keyboard', SHORTCUTS), table('Touch and mouse', GESTURES)), close);
+    this.keys.addEventListener('click', (e) => {
+      if (e.target === this.keys) this.keys.close();
+    });
+    overlay.append(this.loading, this.keys);
 
     store.subscribe((s, p) => this.render(s, p));
     this.render(store.get(), null);
+  }
+
+  showKeys(): void {
+    if (!this.keys.open) this.keys.showModal();
   }
 
   stepWarp(d: number): void {
@@ -137,6 +179,7 @@ export class Hud {
     let frame: FrameSpec;
     if (kind === 'barycentric') frame = { kind: 'barycentric' };
     else if (kind === 'inertial') frame = { kind: 'inertial', center };
+    else if (kind === 'surface') frame = hasSurfaceFrame(center) ? { kind: 'surface', center } : { kind: 'inertial', center };
     else {
       const prev = this.store.get().frame;
       if (secondary === center || prev.kind !== 'rotating') secondary = this.bodies[center].defaultSecondary;
@@ -148,10 +191,13 @@ export class Hud {
   private render(s: AppState, p: AppState | null): void {
     if (!p || s.paused !== p.paused) {
       this.pauseBtn.textContent = s.paused ? '▶' : '❚❚';
+      this.pauseBtn.ariaLabel = s.paused ? 'Play (Space)' : 'Pause (Space)';
+      this.pauseBtn.title = this.pauseBtn.ariaLabel;
       this.pauseBtn.classList.toggle('active', s.paused);
     }
     if (!p || s.warpIndex !== p.warpIndex || s.paused !== p.paused) {
-      this.warp.textContent = `${s.paused ? 'paused · ' : ''}${formatRate(WARP_RATES[s.warpIndex])}`;
+      this.warp.textContent = formatRate(WARP_RATES[s.warpIndex]);
+      this.warp.title = s.paused ? 'Time warp (paused)' : 'Time warp';
     }
     if (!p || s.focus !== p.focus) this.focusSel.value = String(s.focus);
     if (!p || s.frame !== p.frame) {
@@ -162,11 +208,21 @@ export class Hud {
       (this.centerSel.parentElement as HTMLElement).style.display = f.kind === 'barycentric' ? 'none' : '';
       (this.secondarySel.parentElement as HTMLElement).style.display = f.kind === 'rotating' ? '' : 'none';
       this.kindSel.title = frameLabel(f, (i) => this.bodies[i].name);
+      this.frameNote.textContent = `${frameLabel(f, (i) => this.bodies[i].name)}. ${frameExplain(f, (i) => this.bodies[i].name)}`;
     }
-    if (!p || s.t !== p.t) {
-      this.date.textContent = `${formatCalendar(tdbToCalendar(s.t))} TDB`;
+    if (!p || s.t !== p.t || s.plan !== p.plan) {
+      const cal = formatCalendar(tdbToCalendar(s.t));
+      this.date.textContent = `${cal} TDB`;
       const u = tdbToUtc(s.t);
       this.utc.textContent = !u ? 'UTC not shown before 1972' : `${formatCalendar(u)} UTC${utcIsPredicted(s.t) ? ' (predicted: no new leap seconds)' : ''}`;
+      this.tbDate.textContent = `${cal.slice(0, 16)} TDB`;
+      this.tbMet.textContent = formatMet(s.t - s.plan.epoch, 0);
+    }
+    if (!p || s.replay !== p.replay || s.plan !== p.plan || s.replayStatus !== p.replayStatus || s.missionId !== p.missionId) {
+      const st = this.actions.status(s);
+      this.chip.className = `chip tone-${st.tone}`;
+      this.chip.textContent = `${st.icon} ${st.text}`;
+      this.key.textContent = st.key;
     }
     if (!p || s.loadingTarget !== p.loadingTarget || s.loadingChunks !== p.loadingChunks) {
       if (s.loadingTarget === null) this.loading.style.display = 'none';
