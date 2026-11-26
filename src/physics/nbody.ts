@@ -27,6 +27,22 @@
  *  - order 8 lets the Moon (27 d period) be integrated with a step of hours.
  *    17 force evaluations per step (first-same-as-last).
  *
+ * STEP AND MOONS: the step is global. With the giant planets' moons (Io:
+ * 1.77 d) the default step is 1/32 d (solar-system.ts, DEFAULT_STEP). A
+ * multiple-time-stepping alternative was implemented and measured (r-RESPA:
+ * cross-system forces as impulses every tau, each satellite system advanced
+ * inside by m leapfrog sub-steps; symmetric, so the Kahan-Li composition makes
+ * it order 8 in tau). Errors after one year against this integrator at 1/64 d:
+ *   tau 0.5 d:  m = 8, 16, 32 -> Io 25 km, 2.0 km, 350 m (converges ~m^-3,
+ *               not m^-8: tau*omega_Io = 1.8 is outside the asymptotic range)
+ *   tau 0.25 d: m = 16 -> Io 5 m;  tau 0.125 d: m = 4, 8 -> Io 13 m, 2 m
+ *   single rate (this scheme): 1/24 d -> 14 m, 1/32 d -> 3 m
+ * In Node the r-RESPA run at Io ~5 m/yr cost 0.96 ms per day against 1.47 ms
+ * for 1/32 d single rate: a 1.3-2x saving (with tuning), bought with an order
+ * that holds only once tau*omega < 1 and impulses that can resonate with the
+ * moons. Moving the Sun-system pairs into the fast part changed nothing (the
+ * error is the moons' own intra-system dynamics). Not adopted.
+ *
  * ROUNDOFF: positions and velocities are carried with Kahan compensated
  * summation (a second array holds the lost low-order bits), so the ~10^6 tiny
  * increments of a century-long run do not accumulate rounding error.
@@ -60,11 +76,13 @@ const C2 = C_LIGHT * C_LIGHT;
 /** Fixed-point iterations for the implicit half-kick. Fixed for reproducibility. */
 export const PN_ITERATIONS = 2;
 
-/** Zonal J2 of `body`, acting on each body in `targets` (and the reaction on `body`). */
+/** Zonal J2 (and optionally J4) of `body`, acting on each body in `targets` (and the reaction on `body`). */
 export interface ZonalHarmonic {
   body: number;
-  /** Unnormalized J2 (dimensionless), referred to `radius`. */
+  /** Unnormalized J2 (dimensionless), referred to `radius`. Must be nonzero if j4 is given. */
   j2: number;
+  /** Unnormalized J4, referred to `radius`. Omitted or 0: no J4 term. */
+  j4?: number;
   /** Reference (equatorial) radius, m. */
   radius: number;
   /** Unit vector along the body's spin axis, in the integration frame (ICRF). */
@@ -149,6 +167,9 @@ export function accelerations(n: number, gm: ArrayLike<number>, q: ArrayLike<num
  *   a_o = -(3/2) J2 GM_e R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ]
  * and the reaction a_e = -(GM_o/GM_e) a_o. This is minus the gradient of the
  * pair potential GM_e GM_o J2 R^2 (3 s^2/r^2 - 1) / (2 r^3) (see conservedEnergy).
+ * With J4, u = s/r, the pair potential adds GM_e GM_o J4 R^4 (35 u^4 - 30 u^2 + 3) / (8 r^5),
+ * whose (minus) gradient on o is
+ *   a_o += (J4 GM_e R^4 / (8 r^7)) [ (315 u^4 - 210 u^2 + 15) r - (140 u^3 - 60 u) r pole ].
  */
 export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number>, zonal: readonly ZonalHarmonic[], out: Float64Array): void {
   for (let z = 0; z < zonal.length; z++) {
@@ -157,7 +178,10 @@ export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number
     const px = Z.pole[0];
     const py = Z.pole[1];
     const pz = Z.pole[2];
-    const k = 1.5 * Z.j2 * Z.radius * Z.radius;
+    const R2 = Z.radius * Z.radius;
+    const k = 1.5 * Z.j2 * R2;
+    const j4 = Z.j4 ?? 0;
+    const k4 = 0.125 * j4 * R2 * R2;
     for (let t = 0; t < Z.targets.length; t++) {
       const o = Z.targets[t];
       const x = q[3 * o] - q[3 * e];
@@ -167,9 +191,21 @@ export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number
       const sp = x * px + y * py + zz * pz;
       const f = -k / (r2 * r2 * Math.sqrt(r2));
       const c1 = 1 - (5 * sp * sp) / r2;
-      const gx = c1 * x + 2 * sp * px;
-      const gy = c1 * y + 2 * sp * py;
-      const gz = c1 * zz + 2 * sp * pz;
+      let gx = c1 * x + 2 * sp * px;
+      let gy = c1 * y + 2 * sp * py;
+      let gz = c1 * zz + 2 * sp * pz;
+      if (j4 !== 0) {
+        // In units of f = -k/r^5 (so j2 != 0): add -(k4/(k r^2)) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
+        const u2 = (sp * sp) / r2;
+        const r = Math.sqrt(r2);
+        const u = sp / r;
+        const g = -k4 / (k * r2);
+        const cr = g * (315 * u2 * u2 - 210 * u2 + 15);
+        const cp = g * r * u * (140 * u2 - 60);
+        gx += cr * x - cp * px;
+        gy += cr * y - cp * py;
+        gz += cr * zz - cp * pz;
+      }
       const fo = f * gm[e];
       const fe = f * gm[o];
       out[3 * o] += fo * gx;
@@ -391,6 +427,37 @@ export class NBodyIntegrator {
     this.steps++;
   }
 
+  /**
+   * Full-precision state for exact resumption: q, v and their Kahan
+   * compensation terms, 12n numbers laid out [q(3n), v(3n), qc(3n), vc(3n)].
+   * `importState` of this array, with the same step count, continues the
+   * integration bit for bit; the integrator importing it may run in either
+   * direction (it is a one-step method, so nothing else is needed).
+   */
+  exportState(out: Float64Array = new Float64Array(12 * this.n)): Float64Array {
+    const m = 3 * this.n;
+    if (out.length !== 4 * m) throw new Error(`exportState: need ${4 * m} numbers`);
+    out.set(this.q, 0);
+    out.set(this.v, m);
+    out.set(this.qc, 2 * m);
+    out.set(this.vc, 3 * m);
+    return out;
+  }
+
+  /** Restore a state written by `exportState` and set the step count (default: unchanged). */
+  importState(data: ArrayLike<number>, steps: number = this.steps): void {
+    const m = 3 * this.n;
+    if (data.length !== 4 * m) throw new Error(`importState: need ${4 * m} numbers`);
+    for (let k = 0; k < m; k++) {
+      this.q[k] = data[k];
+      this.v[k] = data[m + k];
+      this.qc[k] = data[2 * m + k];
+      this.vc[k] = data[3 * m + k];
+    }
+    this.steps = steps;
+    this.forces();
+  }
+
   /** Write the current state as [x,y,z,vx,vy,vz] per body. */
   getState(out: Float64Array): void {
     for (let i = 0; i < this.n; i++) {
@@ -455,6 +522,11 @@ export function conservedEnergy(gm: ArrayLike<number>, state: ArrayLike<number>,
       const r2 = x * x + y * y + z * z;
       const sp = x * Z.pole[0] + y * Z.pole[1] + z * Z.pole[2];
       e += (gm[Z.body] * gm[o] * k * ((3 * sp * sp) / r2 - 1)) / (r2 * Math.sqrt(r2));
+      if (Z.j4) {
+        const u2 = (sp * sp) / r2;
+        const R4 = Z.radius * Z.radius * Z.radius * Z.radius;
+        e += (gm[Z.body] * gm[o] * Z.j4 * R4 * (35 * u2 * u2 - 30 * u2 + 3)) / (8 * r2 * r2 * Math.sqrt(r2));
+      }
     }
   }
   if (physics.relativity) {

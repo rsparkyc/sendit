@@ -8,9 +8,10 @@
   "frame": "ICRF, origin at solar-system barycenter (Horizons CENTER=500@0)",
   "stateSource": "JPL Horizons API, EPHEM_TYPE=VECTORS (planetary ephemeris DE441)",
   "gmSource": "DE440 header constants, https://ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de440/header.440 (Park et al. 2021, AJ 161:105); Earth/Moon split from GMB with EMRAT=81.30056822149722",
-  "j2Source": "Unnormalized J2 with reference radius j2Radius (m). Sun/Earth/Moon: DE440 header. Mars..Neptune: JPL satellite ephemeris headers (NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ mar099/jup365/sat441/ura111xl-799/nep097 .cmt). Giant-planet J2 is the planet's own, applied about the system barycenter (offset <~200 km for Jupiter).",
+  "j2Source": "Unnormalized J2 with reference radius j2Radius (m). Sun/Earth/Moon: DE440 header. Mars..Neptune: JPL satellite ephemeris headers (NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ mar099/jup365/sat441/ura111xl-799/nep097 .cmt). J4 (j4, same radius) for Jupiter..Neptune from the same headers. In systemBarycenters the planet's J2 is applied about the system barycenter (offset <~200 km for Jupiter).",
   "poleSource": "IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc, J2000 value, ICRF unit vector; secular pole motion and nutation terms ignored.",
   "radiusSource": "JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
+  "moonSource": "Planets Jupiter..Pluto (NAIF x99) and moons: state = DE441 system barycenter + Horizons state relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune are inconsistent with DE441's barycenters by 364/60 km); GM, J2, J4, RADIUS and pole from the satellite ephemeris Horizons uses (https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ jup365, sat441, ura184_part-1, nep098_part-1, plu060 .cmt); planet GM = that file's system GM minus the modelled moons; radius from https://ssd.jpl.nasa.gov/sats/phys_par/.",
   "generatedBy": "scripts/fetch-horizons.py",
   "bodies": [
     {
@@ -39,7 +40,8 @@
         9.312571926520471,
         -11.70150612817771,
         -5.251266205200356
-      ]
+      ],
+      "displayName": "Sun"
     },
     {
       "id": "mercury",
@@ -64,7 +66,8 @@
         37004.30442920571,
         -8541.376789510447,
         -8398.372409672424
-      ]
+      ],
+      "displayName": "Mercury"
     },
     {
       "id": "venus",
@@ -89,7 +92,8 @@
         1391.2186011899669,
         -32029.51993781091,
         -14497.0867394732
-      ]
+      ],
+      "displayName": "Venus"
     },
     {
       "id": "earth",
@@ -117,7 +121,8 @@
         -29784.947498510883,
         -5029.753814928081,
         -2180.645069035755
-      ]
+      ],
+      "displayName": "Earth"
     },
     {
       "id": "moon",
@@ -145,7 +150,8 @@
         -29141.41610952193,
         -5695.841497884601,
         -2481.970773696848
-      ]
+      ],
+      "displayName": "Moon"
     },
     {
       "id": "mars",
@@ -173,8 +179,432 @@
         1171.9850085317769,
         23906.70819417074,
         10933.92063330765
-      ]
+      ],
+      "displayName": "Mars"
     },
+    {
+      "id": "jupiter",
+      "name": "Jupiter",
+      "horizonsId": "599",
+      "gm": 1.2668653209772181e+17,
+      "gmSource": "jup365.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM5 = 126712764.09999996 km^3/s^2",
+      "radius": 69911000.0,
+      "pole": [
+        -0.014601347189159418,
+        -0.43033688255055846,
+        0.9025502579784288
+      ],
+      "poleRaDecDeg": [
+        268.0566974810512,
+        64.49533881439783
+      ],
+      "poleSource": "NAIF jup365.cmt ZACPL5, ZDEPL5 (at POLTIM = J2000)",
+      "j2": 0.0146965063,
+      "j2Radius": 71492000.0,
+      "j4": -0.0005866085,
+      "j2Source": "NAIF jup365.cmt J502, J504, RADIUS",
+      "state": [
+        597499917851.7495,
+        408990269799.5426,
+        160756261693.36765,
+        -7900.5477494288625,
+        10171.872594492888,
+        4552.504135737711
+      ],
+      "displayName": "Jupiter"
+    },
+    {
+      "id": "saturn",
+      "name": "Saturn",
+      "horizonsId": "699",
+      "gm": 3.793121799697025e+16,
+      "gmSource": "sat441.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM6 = 37940584.8418 km^3/s^2",
+      "radius": 58232000.0,
+      "pole": [
+        0.0855062032483332,
+        0.07327440632797554,
+        0.993639547614394
+      ],
+      "poleRaDecDeg": [
+        40.59487211316282,
+        83.53435144537646
+      ],
+      "poleSource": "NAIF sat441.cmt ZACPL6, ZDEPL6 (at POLTIM = J2000)",
+      "j2": 0.01629061510215236,
+      "j2Radius": 60330000.0,
+      "j4": -0.0009351185734877162,
+      "j2Source": "NAIF sat441.cmt J602, J604, RADIUS",
+      "state": [
+        957317651980.4596,
+        923319434986.3898,
+        340162793274.82996,
+        -7421.898075784808,
+        6098.453220561052,
+        2837.5476353311265
+      ],
+      "displayName": "Saturn"
+    },
+    {
+      "id": "uranus",
+      "name": "Uranus",
+      "horizonsId": "799",
+      "gm": 5793954843368137.0,
+      "gmSource": "ura184_part-1.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM7 = 5794556.399999998 km^3/s^2",
+      "radius": 25362000.0,
+      "pole": [
+        0.21198899852393574,
+        0.9415783899113633,
+        0.2617074705787806
+      ],
+      "poleRaDecDeg": [
+        77.31186370800411,
+        15.17140155748226
+      ],
+      "poleSource": "NAIF ura184_part-1.cmt ZACPL7, ZDEPL7 (at POLTIM = J2000)",
+      "j2": 0.003508966976546036,
+      "j2Radius": 25559000.0,
+      "j4": -3.579347133056984e-05,
+      "j2Source": "NAIF ura184_part-1.cmt J702, J704, RADIUS",
+      "state": [
+        2157907332099.682,
+        -1871306849606.9688,
+        -850106776876.916,
+        4646.5820955909785,
+        4251.110161902911,
+        1796.1255413827582
+      ],
+      "displayName": "Uranus"
+    },
+    {
+      "id": "neptune",
+      "name": "Neptune",
+      "horizonsId": "899",
+      "gm": 6835103145462294.0,
+      "gmSource": "nep098_part-1.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM8 = 6836527.100580399 km^3/s^2",
+      "radius": 24622000.0,
+      "pole": [
+        0.3571042901236777,
+        -0.6334241118221116,
+        0.6864768171887768
+      ],
+      "poleRaDecDeg": [
+        299.4129156863023,
+        43.35186141539896
+      ],
+      "poleSource": "NAIF nep098_part-1.cmt ZACPL8, ZDEPL8 (at POLTIM = J2000)",
+      "j2": 0.003536205996177839,
+      "j2Radius": 24764000.0,
+      "j4": -3.595236402334314e-05,
+      "j2Source": "NAIF nep098_part-1.cmt J802, J804, RADIUS",
+      "state": [
+        2513978764704.0693,
+        -3438170142407.2163,
+        -1469851583358.4026,
+        4474.589769224738,
+        2876.586395983825,
+        1065.7735242720944
+      ],
+      "displayName": "Neptune"
+    },
+    {
+      "id": "pluto",
+      "name": "Pluto",
+      "horizonsId": "999",
+      "gm": 869329727608.1439,
+      "gmSource": "plu060.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM9 = 975.4999999999999 km^3/s^2",
+      "radius": 1188300.0,
+      "pole": [
+        -0.6780440212854516,
+        0.7269274837984139,
+        -0.10877839168493318
+      ],
+      "poleRaDecDeg": [
+        133.0073,
+        -6.2449
+      ],
+      "poleSource": "NAIF plu060.cmt ZACPL9, ZDEPL9 (at POLTIM = J2000)",
+      "state": [
+        -1478398629043.3394,
+        -4185974175130.9727,
+        -860876296436.747,
+        5269.162802666328,
+        -1951.463022191727,
+        -2209.3007867619344
+      ],
+      "displayName": "Pluto"
+    },
+    {
+      "id": "io",
+      "name": "Io",
+      "horizonsId": "501",
+      "parent": "jupiter",
+      "gm": 5959915466180.539,
+      "gmSource": "jup365.cmt body table",
+      "radius": 1821490.0,
+      "state": [
+        597899632088.0131,
+        409104628033.1595,
+        160817464360.22263,
+        -13297.629436032259,
+        25140.85789892046,
+        11593.246716720372
+      ],
+      "displayName": "Io"
+    },
+    {
+      "id": "europa",
+      "name": "Europa",
+      "horizonsId": "502",
+      "parent": "jupiter",
+      "gm": 3202712099607.295,
+      "gmSource": "jup365.cmt body table",
+      "radius": 1560800.0,
+      "state": [
+        596938673377.9362,
+        408670775934.12396,
+        160598175268.82812,
+        -438.25287301112894,
+        -465.68484475445985,
+        -296.2724920973378
+      ],
+      "displayName": "Europa"
+    },
+    {
+      "id": "ganymede",
+      "name": "Ganymede",
+      "horizonsId": "503",
+      "parent": "jupiter",
+      "gm": 9887832752719.639,
+      "gmSource": "jup365.cmt body table",
+      "radius": 2631200.0,
+      "state": [
+        596678572756.8232,
+        408375184125.9785,
+        160451923571.90945,
+        -912.9106216001028,
+        2613.9568103444954,
+        1024.6833221124175
+      ],
+      "displayName": "Ganymede"
+    },
+    {
+      "id": "callisto",
+      "name": "Callisto",
+      "horizonsId": "504",
+      "parent": "jupiter",
+      "gm": 7179283402579.837,
+      "gmSource": "jup365.cmt body table",
+      "radius": 2410300.0,
+      "state": [
+        597824997582.3167,
+        410663927187.76416,
+        161552459758.1377,
+        -15973.519993968297,
+        11553.65935823254,
+        5087.890651981714
+      ],
+      "displayName": "Callisto"
+    },
+    {
+      "id": "tethys",
+      "name": "Tethys",
+      "horizonsId": "603",
+      "parent": "saturn",
+      "gm": 41213528854.89587,
+      "gmSource": "sat441.cmt body table",
+      "radius": 531100.0,
+      "state": [
+        957534685871.8075,
+        923120299218.6846,
+        340153397243.25793,
+        178.88439691878284,
+        14441.917901447046,
+        1633.4343072285699
+      ],
+      "displayName": "Tethys"
+    },
+    {
+      "id": "dione",
+      "name": "Dione",
+      "horizonsId": "604",
+      "parent": "saturn",
+      "gm": 73116071724.82066,
+      "gmSource": "sat441.cmt body table",
+      "radius": 561400.0,
+      "state": [
+        957546200743.9398,
+        923020026785.9625,
+        340165021081.80273,
+        509.91350061628236,
+        12162.052244161165,
+        1706.4347689820827
+      ],
+      "displayName": "Dione"
+    },
+    {
+      "id": "rhea",
+      "name": "Rhea",
+      "horizonsId": "605",
+      "parent": "saturn",
+      "gm": 153941751914.65628,
+      "gmSource": "sat441.cmt body table",
+      "radius": 763500.0,
+      "state": [
+        956792889732.6206,
+        923296338097.2621,
+        340212334991.2625,
+        -6990.121492420047,
+        -2344.9379511374127,
+        3442.022241626126
+      ],
+      "displayName": "Rhea"
+    },
+    {
+      "id": "titan",
+      "name": "Titan",
+      "horizonsId": "606",
+      "parent": "saturn",
+      "gm": 8978137095521.047,
+      "gmSource": "sat441.cmt body table",
+      "radius": 2574760.0,
+      "state": [
+        956370849171.8918,
+        924143533282.7957,
+        340189875504.49603,
+        -10983.243906194954,
+        2053.203804752566,
+        3421.8330002894127
+      ],
+      "displayName": "Titan"
+    },
+    {
+      "id": "iapetus",
+      "name": "Iapetus",
+      "horizonsId": "608",
+      "parent": "saturn",
+      "gm": 120515106013.76419,
+      "gmSource": "sat441.cmt body table",
+      "radius": 734300.0,
+      "state": [
+        954463878871.5685,
+        921048219962.0822,
+        340323362551.7492,
+        -5501.123064904945,
+        3693.057823604033,
+        2026.78632143594
+      ],
+      "displayName": "Iapetus"
+    },
+    {
+      "id": "ariel",
+      "name": "Ariel",
+      "horizonsId": "701",
+      "parent": "uranus",
+      "gm": 83430746772.82457,
+      "gmSource": "ura184_part-1.cmt body table",
+      "radius": 578900.0,
+      "state": [
+        2158083010108.3403,
+        -1871326121923.3767,
+        -850179736864.2399,
+        2818.7927226842903,
+        6019.117486986648,
+        -3081.982202388662
+      ],
+      "displayName": "Ariel"
+    },
+    {
+      "id": "umbriel",
+      "name": "Umbriel",
+      "horizonsId": "702",
+      "parent": "uranus",
+      "gm": 85403004223.26411,
+      "gmSource": "ura184_part-1.cmt body table",
+      "radius": 584700.0,
+      "state": [
+        2158007342496.5354,
+        -1871261766367.5337,
+        -850349094343.899,
+        429.31773363835873,
+        5610.923497447568,
+        329.90900044974615
+      ],
+      "displayName": "Umbriel"
+    },
+    {
+      "id": "titania",
+      "name": "Titania",
+      "horizonsId": "703",
+      "parent": "uranus",
+      "gm": 222800635187.9754,
+      "gmSource": "ura184_part-1.cmt body table",
+      "radius": 788900.0,
+      "state": [
+        2157844225171.0593,
+        -1871178849309.1677,
+        -850518764021.1371,
+        1121.2318407898092,
+        4848.393987394355,
+        2512.473589046893
+      ],
+      "displayName": "Titania"
+    },
+    {
+      "id": "oberon",
+      "name": "Oberon",
+      "horizonsId": "704",
+      "parent": "uranus",
+      "gm": 214209839940.7347,
+      "gmSource": "ura184_part-1.cmt body table",
+      "radius": 761400.0,
+      "state": [
+        2157346762212.9116,
+        -1871161888643.0146,
+        -850179586966.6853,
+        4071.335955563069,
+        3549.1668462785606,
+        4813.547041607806
+      ],
+      "displayName": "Oberon"
+    },
+    {
+      "id": "triton",
+      "name": "Triton",
+      "horizonsId": "801",
+      "parent": "neptune",
+      "gm": 1428495462910.464,
+      "gmSource": "nep098_part-1.cmt body table",
+      "radius": 1352600.0,
+      "state": [
+        2513773068210.077,
+        -3438160138304.472,
+        -1469562770955.0366,
+        7465.02563669156,
+        5357.844419806722,
+        3109.435754987639
+      ],
+      "displayName": "Triton"
+    },
+    {
+      "id": "charon",
+      "name": "Charon",
+      "horizonsId": "901",
+      "parent": "pluto",
+      "gm": 106101138823.6118,
+      "gmSource": "plu060.cmt body table",
+      "radius": 606000.0,
+      "state": [
+        -1478405466833.227,
+        -4185982966572.002,
+        -860892422664.6816,
+        5124.8367009053045,
+        -2067.461522452079,
+        -2084.8897980441034
+      ],
+      "displayName": "Charon"
+    }
+  ],
+  "systemBarycenters": [
     {
       "id": "jupiter",
       "name": "Jupiter system barycenter",
@@ -201,7 +631,8 @@
         -7900.525116640771,
         10171.79630923791,
         4552.467787262924
-      ]
+      ],
+      "displayName": "Jupiter"
     },
     {
       "id": "saturn",
@@ -229,7 +660,8 @@
         -7422.709426014511,
         6097.474815228997,
         2837.682288255575
-      ]
+      ],
+      "displayName": "Saturn"
     },
     {
       "id": "uranus",
@@ -257,7 +689,8 @@
         4646.336807878125,
         4251.152675974154,
         1796.17278581112
-      ]
+      ],
+      "displayName": "Uranus"
     },
     {
       "id": "neptune",
@@ -285,7 +718,8 @@
         4475.214621751307,
         2877.104855637858,
         1066.200548145841
-      ]
+      ],
+      "displayName": "Neptune"
     },
     {
       "id": "pluto",
@@ -310,7 +744,8 @@
         5253.463931238531,
         -1964.0805980784498,
         -2195.768154117838
-      ]
+      ],
+      "displayName": "Pluto"
     }
   ]
 }

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>sendit determinism check</title>
+    <style>
+      :root { --fg: #111; --bg: #fff; --muted: #555; --line: #ccc; --pass: #0a6b2b; --fail: #b00020; }
+      @media (prefers-color-scheme: dark) {
+        :root { --fg: #eee; --bg: #121212; --muted: #aaa; --line: #444; --pass: #5fd38a; --fail: #ff6b7f; }
+      }
+      body { margin: 0 auto; max-width: 60rem; padding: 1rem; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+      code, td, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #verdict { font-size: 2.5rem; font-weight: 700; margin: 0.5rem 0; }
+      #verdict.pass { color: var(--pass); }
+      #verdict.fail { color: var(--fail); }
+      .scroll { overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+      th, td { border-bottom: 1px solid var(--line); padding: 0.3rem 0.5rem; text-align: left; white-space: nowrap; }
+      td.match { color: var(--pass); }
+      td.mismatch { color: var(--fail); font-weight: 700; }
+      dt { color: var(--muted); }
+      dd { margin: 0 0 0.5rem 0; word-break: break-word; }
+    </style>
+  </head>
+  <body>
+    <h1>sendit: cross-browser determinism check</h1>
+    <p>Runs the canonical mission scenario in a Web Worker and compares the final state bit for bit with the value recorded on V8 (Node).</p>
+    <div id="verdict">Running…</div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Component</th><th>Computed</th><th>Expected</th><th>Result</th><th>Difference</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <dl>
+      <dt>Run time (in worker)</dt><dd id="time">–</dd>
+      <dt>User agent</dt><dd id="ua" class="mono">–</dd>
+    </dl>
+    <script type="module" src="/src/check/main.ts"></script>
+  </body>
+</html>

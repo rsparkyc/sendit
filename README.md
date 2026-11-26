@@ -4,9 +4,33 @@ A browser game about planning interplanetary flybys with real N-body physics.
 Mission replays must give bit-identical results in every browser, so the physics
 uses only exactly-rounded floating-point operations.
 
-The site currently serves one diagnostic page: it runs the canonical scenario
-(`src/fixtures/determinism.ts`) in a Web Worker and reports PASS only if all seven
-final state components match the stored Float64 bits.
+The site has two pages:
+
+- `index.html`: the 3D solar-system viewer (future mission-planning map view). Physics
+  runs in a Web Worker; see `src/app/` below.
+- `check.html`: the cross-browser determinism diagnostic. It runs the canonical scenario
+  (`src/fixtures/determinism.ts`) in a Web Worker and reports PASS only if all seven
+  final state components match the stored Float64 bits.
+
+## Viewer (`src/app/`)
+
+- `physics.ts` is the only module that imports `src/physics`. It wraps
+  `ChebyshevEphemeris` so the main thread can only evaluate installed chunks (never build).
+- `worker.ts` builds ephemeris chunks one at a time, outward from the epoch (order from
+  `schedule.ts`), transfers each to the main thread, and propagates the demo spacecraft
+  (`mission.ts`: LEO parking orbit, finite TLI burn, ten-day coast).
+- `frames.ts`: plotting frames (barycentric, body-centred inertial, body-centred rotating),
+  pure and unit-tested. `paths.ts` turns body paths and trajectories into frame coordinates.
+- `scene.ts` (three.js): positions in float64 on the CPU, rendered relative to the camera,
+  logarithmic depth buffer. `labels.ts`: DOM labels and markers for small bodies.
+- `store.ts` (UI state), `hud.ts` (plain-DOM controls), `camera.ts`, `time.ts` (TDB/UTC).
+
+Dates are shown in TDB (the ephemeris time scale) with UTC alongside, derived via the
+leap-second table in `time.ts` and marked as a prediction beyond it.
+
+Keys: Space pauses, `,` and `.` change warp. The URL hash can set the initial view, e.g.
+`#t=2027-01-14T18:00&frame=rot:earth:moon&focus=earth&dist=1.3e9&paused=1`
+(`frame` is `bary`, `in:<body>` or `rot:<centre>:<fixed body>`; `focus=sc` is the spacecraft).
 
 ## Develop
 
@@ -46,5 +70,7 @@ AWS_PROFILE=<profile> scripts/deploy.sh <stack-name>
 
 The script builds, uploads hashed files under `/assets/` with
 `Cache-Control: public, max-age=31536000, immutable`, uploads everything else
-(including `index.html`) with `max-age=0, must-revalidate`, deletes files no longer
-in the build, and invalidates `/index.html`.
+(including `index.html` and `check.html`) with `max-age=0, must-revalidate`, deletes
+files no longer in the build, and invalidates `/` and `/index.html`. Both HTML files are
+revalidated on every request, so `check.html` needs no invalidation of its own unless an
+older copy without revalidation headers is cached.

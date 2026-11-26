@@ -9,8 +9,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { KAHAN_LI_8, NBodyIntegrator, conservedEnergy, invariants, type NBodyPhysics } from '../src/physics/nbody';
 import {
   DAY,
-  DEFAULT_STEP,
-  J2000_BODIES,
+  PLANETARY_STEP,
+  BARYCENTER_BODIES,
   JULIAN_YEAR,
   bodyIndex,
   initialState,
@@ -20,16 +20,16 @@ import {
 import ref from './fixtures/horizons-reference.json';
 import { RAD_TO_ARCSEC, eccVector, integrateRK4, relative, signedAngle } from './helpers/analysis';
 
-const bodies = J2000_BODIES;
+const bodies = BARYCENTER_BODIES; // planetary set: these tests are about the planets, at their 0.5 d step
 const N = bodies.length;
 const gm = bodies.map((b) => b.gm);
-const s0 = initialState();
+const s0 = initialState(bodies);
 const ids = bodies.map((b) => b.id);
-const SUN = bodyIndex('sun');
-const EARTH = bodyIndex('earth');
-const MOON = bodyIndex('moon');
-const MERCURY = bodyIndex('mercury');
-const FULL = solarSystemPhysics();
+const SUN = bodyIndex('sun', bodies);
+const EARTH = bodyIndex('earth', bodies);
+const MOON = bodyIndex('moon', bodies);
+const MERCURY = bodyIndex('mercury', bodies);
+const FULL = solarSystemPhysics(bodies);
 const NEWTON: NBodyPhysics = {};
 
 const refTimes = [...new Set(ref.bodies.flatMap((b) => b.samples.map((s) => s.t)))].sort((a, b) => a - b);
@@ -107,7 +107,7 @@ describe('1PN + J2 integrator: order and reversibility', () => {
   });
 
   it('forward 10 years then backward returns to the start (full physics)', () => {
-    const h = DEFAULT_STEP;
+    const h = PLANETARY_STEP;
     const n = Math.round((10 * JULIAN_YEAR) / h);
     const mid = run(FULL, h, n);
     const end = run(FULL, -h, n, mid, n * h);
@@ -126,7 +126,7 @@ describe('1PN + J2 integrator: order and reversibility', () => {
     // 72 m at 0.05 d, 3.1 m at 0.025 d, 0.5 m at 0.0125 d).
     const T = 2 * JULIAN_YEAR;
     const earth = bodies[EARTH];
-    const phys: NBodyPhysics = { relativity: { sun: SUN }, zonal: zonalTerms({ earth: ['moon'] }) };
+    const phys: NBodyPhysics = { relativity: { sun: SUN }, zonal: zonalTerms({ earth: ['moon'] }, bodies) };
     const prod = run(phys, 0.25 * DAY, Math.round(T / (0.25 * DAY)));
     const hRK = 0.0125 * DAY;
     const rk = integrateRK4(gm, s0, hRK, Math.round(T / hRK), true, SUN, { body: EARTH, on: MOON, j2: earth.j2!, radius: earth.j2Radius! });
@@ -141,7 +141,7 @@ describe('1PN + J2 integrator: order and reversibility', () => {
 describe('conservation with J2 and 1PN', () => {
   it('J2 only: total energy including the J2 pair potentials is conserved', () => {
     const phys: NBodyPhysics = { zonal: FULL.zonal };
-    const h = DEFAULT_STEP;
+    const h = PLANETARY_STEP;
     const E0 = conservedEnergy(gm, s0, phys);
     const N0 = invariants(gm, s0).energy;
     let max = 0;
@@ -160,7 +160,7 @@ describe('conservation with J2 and 1PN', () => {
   });
 
   it('full physics: momentum exact, 1PN energy conserved to its expected level', () => {
-    const h = DEFAULT_STEP;
+    const h = PLANETARY_STEP;
     const inv0 = invariants(gm, s0);
     const E0 = conservedEnergy(gm, s0, FULL);
     const pScale = Math.hypot(...bodies.map((b, i) => b.gm * Math.hypot(s0[6 * i + 3], s0[6 * i + 4], s0[6 * i + 5])));
@@ -222,7 +222,7 @@ describe('full physics vs Horizons', () => {
     // planet numerical error after 50 yr, vs >= 10 km physics residuals.
     expect(moon(0) / moon(1)).toBeGreaterThan(150);
     expect(moon(1) / moon(2)).toBeGreaterThan(150);
-    const iD = steps.indexOf(DEFAULT_STEP);
+    const iD = steps.indexOf(PLANETARY_STEP);
     expect(moon(iD)).toBeLessThan(10);
     for (let i = 0; i < N; i++) if (i !== MOON) expect(posErr(res[iD], res[iD + 1], i)).toBeLessThan(0.1);
   }, 120_000);

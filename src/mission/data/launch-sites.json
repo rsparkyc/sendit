@@ -1,0 +1,21 @@
+{
+  "description": "Launch sites. Geodetic latitude and east longitude on WGS84 (degrees), height above the ellipsoid (m). Azimuth limits are inertial-launch-azimuth ranges, degrees clockwise from north, sweeping clockwise from azimuthMinDeg to azimuthMaxDeg.",
+  "coordinateSource": "Pad coordinates as published on the Wikipedia article for each pad (which cite the operators / FAA documents); rounded to ~1e-4 deg (~10 m). Heights are approximate (pads are within tens of metres of sea level) and do not matter at the km level.",
+  "azimuthSource": "Range-safety azimuth corridors. Cape Canaveral and Vandenberg: the commonly quoted Eastern Range 35-120 deg and Western Range ~147-201 deg corridors (e.g. Larson & Wertz, Space Mission Analysis and Design, 3rd ed., launch-site table). Kourou: the -10.5..93.5 deg corridor quoted in the Ariane 5 User's Manual. Others: APPROXIMATE, inferred from published mission inclinations of each site, not from range documents; flagged with azimuthApproximate=true.",
+  "sites": [
+    { "id": "cape-canaveral", "name": "Cape Canaveral SFS SLC-40, Florida, USA", "latDeg": 28.5619, "lonDeg": -80.5772, "heightM": 0,
+      "azimuthMinDeg": 35, "azimuthMaxDeg": 120, "azimuthApproximate": false },
+    { "id": "vandenberg", "name": "Vandenberg SFB SLC-4E, California, USA", "latDeg": 34.6321, "lonDeg": -120.6106, "heightM": 0,
+      "azimuthMinDeg": 147, "azimuthMaxDeg": 201, "azimuthApproximate": false },
+    { "id": "kourou", "name": "Guiana Space Centre ELA-3, Kourou, French Guiana", "latDeg": 5.2390, "lonDeg": -52.7686, "heightM": 0,
+      "azimuthMinDeg": -10.5, "azimuthMaxDeg": 93.5, "azimuthApproximate": false },
+    { "id": "baikonur", "name": "Baikonur Cosmodrome Site 1/5, Kazakhstan", "latDeg": 45.9200, "lonDeg": 63.3422, "heightM": 90,
+      "azimuthMinDeg": 25, "azimuthMaxDeg": 65, "azimuthApproximate": true },
+    { "id": "tanegashima", "name": "Tanegashima Space Center Yoshinobu LP-1, Japan", "latDeg": 30.4009, "lonDeg": 130.9749, "heightM": 0,
+      "azimuthMinDeg": 90, "azimuthMaxDeg": 160, "azimuthApproximate": true },
+    { "id": "mahia", "name": "Rocket Lab Launch Complex 1A, Mahia Peninsula, New Zealand", "latDeg": -39.2615, "lonDeg": 177.8649, "heightM": 0,
+      "azimuthMinDeg": 0, "azimuthMaxDeg": 195, "azimuthApproximate": true },
+    { "id": "equator", "name": "Equatorial reference site (0 N, 0 E, no range limits)", "latDeg": 0, "lonDeg": 0, "heightM": 0,
+      "azimuthMinDeg": 0, "azimuthMaxDeg": 360, "azimuthApproximate": false }
+  ]
+}

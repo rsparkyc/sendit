@@ -21,8 +21,8 @@ export interface Ephemeris {
   /** Write position and velocity of one body into out[0..5]. */
   bodyState(body: number, t: number, out: Float64Array): void;
   /**
-   * Optional zonal J2 per body (null where none). When present, every body's
-   * J2 acts on the spacecraft. Absent: point masses (FixedBodies).
+   * Optional zonal J2 (and J4) per body (null where none). When present, every
+   * body's zonal field acts on the spacecraft. Absent: point masses (FixedBodies).
    */
   readonly oblateness?: ArrayLike<BodyOblateness | null>;
   /** Optional: apply this body's (the Sun's) 1PN Schwarzschild term to the spacecraft. */
@@ -32,6 +32,8 @@ export interface Ephemeris {
 export interface BodyOblateness {
   /** Unnormalized J2. */
   readonly j2: number;
+  /** Optional unnormalized J4 (same reference radius). Requires j2 != 0. */
+  readonly j4?: number;
   /** Reference radius, m. */
   readonly radius: number;
   /** Spin-axis unit vector in the ephemeris frame. */
@@ -75,8 +77,11 @@ export interface PropagateOptions {
    * `interpolate(t, out)` gives the state at any t in [tPrev, t] of the step just
    * taken, using the right-hand side that step was integrated with. It is valid
    * only during this callback and throws if kept and called later.
+   * Returning `false` stops the propagation after this step (cancellation,
+   * progress-driven slicing): `propagate` then returns that step's state with
+   * `stopped: true`. Any other return value continues.
    */
-  onStep?: (t: number, y: Float64Array, interpolate: Interpolator, tPrev: number) => void;
+  onStep?: (t: number, y: Float64Array, interpolate: Interpolator, tPrev: number) => unknown;
 }
 
 export type Interpolator = (t: number, out: Float64Array) => void;
@@ -86,7 +91,12 @@ export interface PropagateResult {
   y: Float64Array;
   accepted: number;
   rejected: number;
+  /** True if onStep returned false and the propagation ended early, at `t`. */
+  stopped?: boolean;
 }
+
+/** Thrown through Dop853.integrateTo to stop early; never escapes `propagate`. */
+class StopSignal {}
 
 /** Error scale by vector magnitude, so a coordinate passing through zero doesn't stall the step. */
 function spacecraftScale(rtol: number): ScaleFn {
@@ -191,6 +201,20 @@ export function propagate(
         ax += f * (c1 * rx + 2 * sp * px);
         ay += f * (c1 * ry + 2 * sp * py);
         az += f * (c1 * rz + 2 * sp * pz);
+        // J4, u = s/r: a += J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
+        const j4 = ob.j4;
+        if (j4 !== undefined && j4 !== 0) {
+          const R2 = ob.radius * ob.radius;
+          const r = Math.sqrt(r2);
+          const u = sp / r;
+          const u2 = u * u;
+          const f4 = (0.125 * j4 * gm[i] * R2 * R2) / (r2 * r2 * r2 * r);
+          const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
+          const cp = f4 * r * u * (140 * u2 - 60);
+          ax += cr * rx - cp * px;
+          ay += cr * ry - cp * py;
+          az += cr * rz - cp * pz;
+        }
       }
     }
 
@@ -288,11 +312,13 @@ export function propagate(
   const onStep = userOnStep
     ? (t: number, y: Float64Array, it: Dop853) => {
         inCallback = true;
+        let r: unknown;
         try {
-          userOnStep(t, y, interpolate, it.tPrevious);
+          r = userOnStep(t, y, interpolate, it.tPrevious);
         } finally {
           inCallback = false;
         }
+        if (r === false) throw new StopSignal();
       }
     : undefined;
 
@@ -348,7 +374,12 @@ export function propagate(
       }
     }
 
-    integ.integrateTo(segEnd, onStep);
+    try {
+      integ.integrateTo(segEnd, onStep);
+    } catch (e) {
+      if (!(e instanceof StopSignal)) throw e;
+      return { t: integ.t, y: Float64Array.from(integ.y), accepted: integ.accepted, rejected: integ.rejected, stopped: true };
+    }
     // Tanks empty: snap to exactly dryMass so no roundoff residue can restart the engine.
     if (runsDry) integ.y[6] = dryMass;
     if (burning !== null && integ.t >= burning.tStart + burning.duration) i++;

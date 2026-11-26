@@ -4,11 +4,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import { KAHAN_LI_8, NBodyIntegrator } from '../src/physics/nbody';
-import { DAY, DEFAULT_STEP, IntegratedEphemeris, createSolarSystemIntegrator, J2000_BODIES, JULIAN_YEAR, bodyIndex, initialState } from '../src/physics/solar-system';
+import { BARYCENTER_BODIES, DAY, PLANETARY_STEP as DEFAULT_STEP, IntegratedEphemeris, createSolarSystemIntegrator, DEFAULT_STEP as FULL_STEP, J2000_BODIES as FULL_BODIES, JULIAN_YEAR, bodyIndex, initialState } from '../src/physics/solar-system';
+
+// IntegratedEphemeris stores every step; it is exercised on the planetary set at its 0.5 d step.
+const J2000_BODIES = BARYCENTER_BODIES;
 import { propagate } from '../src/physics/spacecraft';
 
 const N = J2000_BODIES.length;
-const EARTH = bodyIndex('earth');
+const EARTH = bodyIndex('earth', J2000_BODIES);
 
 describe('IntegratedEphemeris', () => {
   it('quintic Hermite interpolation error at mid-step is far below a metre', () => {
@@ -39,18 +42,18 @@ describe('IntegratedEphemeris', () => {
   });
 
   it('nodes reproduce the integrator exactly, forward and backward', () => {
-    const eph = new IntegratedEphemeris();
+    const eph = new IntegratedEphemeris(J2000_BODIES, DEFAULT_STEP);
     const out = new Float64Array(3 * N);
     for (const k of [7, -7]) {
       eph.positions(k * DEFAULT_STEP, out);
-      const it = new NBodyIntegrator(eph.gm, initialState(), 0, Math.sign(k) * DEFAULT_STEP, KAHAN_LI_8, eph.physics);
+      const it = new NBodyIntegrator(eph.gm, initialState(J2000_BODIES), 0, Math.sign(k) * DEFAULT_STEP, KAHAN_LI_8, eph.physics);
       for (let i = 0; i < Math.abs(k); i++) it.step();
       for (let j = 0; j < 3 * N; j++) expect(out[j]).toBe(it.q[j]);
     }
   });
 
   it('keeps a spacecraft in low Earth orbit around the moving Earth for 3 days', () => {
-    const eph = new IntegratedEphemeris();
+    const eph = new IntegratedEphemeris(J2000_BODIES, DEFAULT_STEP);
     const earth = new Float64Array(6);
     eph.bodyState(EARTH, 0, earth);
     const gmE = J2000_BODIES[EARTH].gm;
@@ -84,11 +87,11 @@ describe('IntegratedEphemeris', () => {
   it('measures cost of a century and memory if every step were stored', () => {
     const h = DEFAULT_STEP;
     const steps = Math.round((100 * JULIAN_YEAR) / h);
-    const newton = new NBodyIntegrator(J2000_BODIES.map((b) => b.gm), initialState(), 0, h);
+    const newton = new NBodyIntegrator(J2000_BODIES.map((b) => b.gm), initialState(J2000_BODIES), 0, h);
     let t0 = performance.now();
     for (let i = 0; i < steps; i++) newton.step();
     const msNewton = performance.now() - t0;
-    const it = createSolarSystemIntegrator(h);
+    const it = createSolarSystemIntegrator(h, J2000_BODIES);
     t0 = performance.now();
     for (let i = 0; i < steps; i++) it.step();
     const ms = performance.now() - t0;
@@ -101,5 +104,12 @@ describe('IntegratedEphemeris', () => {
         `Storing every step: ${((steps * bytesPerStep) / 1e6).toFixed(1)} MB (pos+vel+acc), ${((steps * posVelBytes) / 1e6).toFixed(1)} MB (pos+vel).`,
     );
     expect(ms).toBeLessThan(30_000);
-  }, 60_000);
+    // The full set (planets + 15 moons) at its 1/32 d step, one year.
+    const full = createSolarSystemIntegrator(FULL_STEP, FULL_BODIES);
+    const fullSteps = Math.round(JULIAN_YEAR / FULL_STEP);
+    t0 = performance.now();
+    for (let i = 0; i < fullSteps; i++) full.step();
+    const msFull = performance.now() - t0;
+    console.log(`full set (${FULL_BODIES.length} bodies, h = 1/32 d): ${(msFull / 1000).toFixed(2)} s per year, ${((msFull * 100) / 1000).toFixed(0)} s per century`);
+  }, 120_000);
 });

@@ -8,19 +8,19 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { NBodyIntegrator, invariants } from '../src/physics/nbody';
-import { DAY, DEFAULT_STEP, J2000_BODIES, JULIAN_YEAR, bodyIndex, initialState } from '../src/physics/solar-system';
+import { DAY, PLANETARY_STEP, BARYCENTER_BODIES, JULIAN_YEAR, bodyIndex, initialState } from '../src/physics/solar-system';
 import ref from './fixtures/horizons-reference.json';
 import { RAD_TO_ARCSEC, eccVector, integrateRK4, relative, rtn, signedAngle, type Vec3 } from './helpers/analysis';
 
-const bodies = J2000_BODIES;
+const bodies = BARYCENTER_BODIES; // planetary set: these tests are about the planets, at their 0.5 d step
 const N = bodies.length;
 const gm = bodies.map((b) => b.gm);
-const s0 = initialState();
+const s0 = initialState(bodies);
 const ids = bodies.map((b) => b.id);
-const SUN = bodyIndex('sun');
-const EARTH = bodyIndex('earth');
-const MOON = bodyIndex('moon');
-const MERCURY = bodyIndex('mercury');
+const SUN = bodyIndex('sun', bodies);
+const EARTH = bodyIndex('earth', bodies);
+const MOON = bodyIndex('moon', bodies);
+const MERCURY = bodyIndex('mercury', bodies);
 
 /** Every distinct reference time in the fixture, seconds from J2000. */
 const refTimes = [...new Set(ref.bodies.flatMap((b) => b.samples.map((s) => s.t)))].sort((a, b) => a - b);
@@ -74,7 +74,7 @@ beforeAll(() => {
   const fwdTimes = refTimes.filter((t) => t > 0);
   const bwdTimes = refTimes.filter((t) => t < 0);
   states = new Map([...runCapture(COMPARE_STEP, fwdTimes), ...runCapture(-COMPARE_STEP, bwdTimes)]);
-  const h = DEFAULT_STEP;
+  const h = PLANETARY_STEP;
 
   // Conservation over 100 years, sampled every year.
   const inv0 = invariants(gm, s0);
@@ -104,7 +104,7 @@ describe('real solar system, Newtonian point masses (baseline)', () => {
     const maxL = Math.max(...conservation.map((c) => c.dL));
     const last = conservation[conservation.length - 1];
     console.log(
-      `conservation over 100 yr at h=${DEFAULT_STEP / DAY} d: max |dE/E|=${maxE.toExponential(2)} (final ${last.dE.toExponential(2)}),` +
+      `conservation over 100 yr at h=${PLANETARY_STEP / DAY} d: max |dE/E|=${maxE.toExponential(2)} (final ${last.dE.toExponential(2)}),` +
         ` max |dP|/sum|p|=${maxP.toExponential(2)}, max |dL|/|L|=${maxL.toExponential(2)}`,
     );
     // Symplectic: energy error is bounded, not drifting. Observed max ~3e-15 at
@@ -143,13 +143,13 @@ describe('real solar system, Newtonian point masses (baseline)', () => {
     // error vs Horizons, at half the cost of 0.25 d. 4 d is still stable but the
     // Moon error is 1e5 km; 2 d gives 260 km, so 0.5 d leaves a 4x stability and
     // accuracy margin.
-    const iDefault = steps.indexOf(DEFAULT_STEP);
+    const iDefault = steps.indexOf(PLANETARY_STEP);
     expect(posErr(res[iDefault], res[iDefault + 1], MOON)).toBeLessThan(5);
     for (let i = 0; i < N; i++) if (i !== MOON) expect(posErr(res[iDefault], res[iDefault + 1], i)).toBeLessThan(0.1);
   }, 60_000);
 
   it('forward 10 years then backward returns to the start', () => {
-    const h = DEFAULT_STEP;
+    const h = PLANETARY_STEP;
     const n = Math.round((10 * JULIAN_YEAR) / h);
     const f = new NBodyIntegrator(gm, s0, 0, h);
     for (let i = 0; i < n; i++) f.step();

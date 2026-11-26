@@ -2,7 +2,37 @@
  * Solar-system bodies and an `Ephemeris` backed by the N-body integrator.
  *
  * The body list is data-driven (src/physics/data/solar-system-j2000.json,
- * produced by scripts/fetch-horizons.py). Adding moons later means adding rows.
+ * produced by scripts/fetch-horizons.py).
+ *
+ * BODIES (J2000_BODIES): Sun, Mercury, Venus, Earth, Moon, the Mars system
+ * barycenter, the planets Jupiter, Saturn, Uranus, Neptune and Pluto THEMSELVES
+ * (not their system barycenters), then 15 major moons, each with `parent`.
+ * Indices 0..10 keep the ids of the older 11-body set; the planets' GM is the
+ * system GM minus the modelled moons (unmodelled small moons stay lumped in).
+ *
+ * MOON SELECTION. Required: Io, Europa, Ganymede, Callisto, Titan, Triton,
+ * Charon. For the rest two numbers were used (GM from the JPL satellite
+ * ephemeris headers, a = semi-major axis): the planet's displacement from its
+ * system barycenter that the moon causes, GM_moon/GM_system * a (how wrong the
+ * planet's position is if the moon is not modelled), and the moon's escape
+ * speed sqrt(2 GM/R) (the largest deflection a flyby of it can give):
+ *   Saturn: Iapetus 11.3 km / 0.57 km/s, Rhea 2.1 / 0.64, Dione 0.73 / 0.51,
+ *     Tethys 0.32 / 0.39: included. Enceladus 0.045 / 0.24, Mimas 0.012 /
+ *     0.16, Hyperion 0.014, Phoebe 0.19 km (0.55 GM at 1.3e7 km): left out.
+ *   Uranus: Oberon 20.6 / 0.73, Titania 17.1 / 0.76, Umbriel 3.9 / 0.54,
+ *     Ariel 2.7 / 0.54: included. Miranda 0.10 km / 0.19 km/s, period 1.41 d
+ *     (would set the Uranian sub-step): left out.
+ *   Mars: Phobos 1.6e-4 km / 0.011 km/s, Deimos 5e-5 km / 0.006 km/s, and a
+ *     7.7 h period that alone would need ~4x the sub-steps of Io: left out;
+ *     Mars stays a system barycenter.
+ *   Pluto: Nix, Hydra, Kerberos, Styx (GM < 0.003): left out.
+ * Rule: include a moon if it moves its planet by > 0.25 km or can deflect a
+ * spacecraft by > 0.35 km/s, and its period is not shorter than Io's (1.77 d),
+ * which sets the cost. The left-out moons' mass stays in the planet.
+ *
+ * BARYCENTER_BODIES is the older 11-body set (Jupiter..Pluto as system
+ * barycenters with the system GM), kept for the baseline tests and as a cheap
+ * planetary-only option.
  *
  * DETERMINISM: exactly-defined operations only (+ - * /, Math.sqrt, abs,
  * min/max, floor, comparisons). No transcendental functions.
@@ -13,7 +43,10 @@ import { KAHAN_LI_8, NBodyIntegrator, type NBodyPhysics, type ZonalHarmonic } fr
 
 export interface BodyData {
   readonly id: string;
+  /** Technical name, e.g. "Mars system barycenter". */
   readonly name: string;
+  /** Name for labels, e.g. "Mars". */
+  readonly displayName?: string;
   /** GM, m^3/s^2. */
   readonly gm: number;
   /** Mean radius, m. */
@@ -26,21 +59,42 @@ export interface BodyData {
   readonly j2?: number;
   /** J2 reference radius, m. */
   readonly j2Radius?: number;
+  /** Unnormalized zonal harmonic J4, referred to j2Radius. */
+  readonly j4?: number;
+  /** For a moon: id of its planet. */
+  readonly parent?: string;
 }
 
+/** Planets, the Moon and the major moons of the giant planets and Pluto (see header). */
 export const J2000_BODIES: readonly BodyData[] = data.bodies;
+
+/** The older 11-body set: as J2000_BODIES without moons and with system barycenters for Jupiter..Pluto. */
+export const BARYCENTER_BODIES: readonly BodyData[] = data.bodies
+  .slice(0, 11)
+  .map((b): BodyData => data.systemBarycenters.find((s) => s.id === b.id) ?? b);
 export const DAY = 86400;
 export const JULIAN_YEAR = 365.25 * DAY;
 
 /**
- * Default step: 0.5 day. From the step-halving study in
- * test/nbody-solar-system.test.ts: halving it moves the Moon by ~2 m and every
- * planet by < 4 cm after 50 years, ~5 orders of magnitude below the error from
- * missing physics (GR, Earth J2). The scheme is still in its h^8 regime at 2 d,
- * so this leaves a 4x margin. Adding fast moons (Phobos: 7.7 h) will need a
- * smaller step or a multirate scheme.
+ * Step for the planetary set (BARYCENTER_BODIES): 0.5 day. From the
+ * step-halving study in test/nbody-solar-system.test.ts: halving it moves the
+ * Moon by ~2 m and every planet by < 4 cm after 50 years, ~5 orders of
+ * magnitude below the error from missing physics (GR, Earth J2). The scheme is
+ * still in its h^8 regime at 2 d, so this leaves a 4x margin.
  */
-export const DEFAULT_STEP = 0.5 * DAY;
+export const PLANETARY_STEP = 0.5 * DAY;
+
+/**
+ * Default step, for the full set with moons: 1/32 day (45 min). Io (1.77 d)
+ * and Tethys (1.89 d) set it. Measured in test/nbody-moons.test.ts against
+ * 1/64 d over one year: Io 370 m at 1/16 d, 14 m at 1/24 d, 3 m at 1/32 d
+ * (ratio 1/16 -> 1/24 is 26 = 1.5^8: the h^8 regime, so 1/32 d leaves a 2x
+ * margin in step), every other moon <= 2 m, planets < 1 mm. That is far
+ * below the moons' missing-physics error against Horizons (tens of km and
+ * more, see that test). A multirate scheme was measured and not adopted
+ * (see nbody.ts, "STEP AND MOONS").
+ */
+export const DEFAULT_STEP = DAY / 32;
 
 export function bodyIndex(id: string, bodies: readonly BodyData[] = J2000_BODIES): number {
   const i = bodies.findIndex((b) => b.id === id);
@@ -51,13 +105,16 @@ export function bodyIndex(id: string, bodies: readonly BodyData[] = J2000_BODIES
 /** Oblateness of one body in the form the spacecraft and N-body code consume, or null. */
 export interface Oblateness {
   readonly j2: number;
+  /** Present for Jupiter..Neptune. */
+  readonly j4?: number;
   readonly radius: number;
   readonly pole: readonly [number, number, number];
 }
 
 export function oblatenessOf(b: BodyData): Oblateness | null {
   if (b.j2 === undefined || b.j2Radius === undefined || b.pole === undefined) return null;
-  return { j2: b.j2, radius: b.j2Radius, pole: [b.pole[0], b.pole[1], b.pole[2]] };
+  const pole: [number, number, number] = [b.pole[0], b.pole[1], b.pole[2]];
+  return b.j4 === undefined ? { j2: b.j2, radius: b.j2Radius, pole } : { j2: b.j2, j4: b.j4, radius: b.j2Radius, pole };
 }
 
 /** Build zonal terms from (body id -> target ids) pairs. */
@@ -67,7 +124,8 @@ export function zonalTerms(pairs: Readonly<Record<string, readonly string[]>>, b
     const i = bodyIndex(id, bodies);
     const ob = oblatenessOf(bodies[i]);
     if (ob === null) throw new Error(`${id} has no J2 data`);
-    out.push({ body: i, j2: ob.j2, radius: ob.radius, pole: ob.pole, targets: pairs[id].map((t) => bodyIndex(t, bodies)) });
+    const targets = pairs[id].map((t) => bodyIndex(t, bodies));
+    out.push(ob.j4 === undefined ? { body: i, j2: ob.j2, radius: ob.radius, pole: ob.pole, targets } : { body: i, j2: ob.j2, j4: ob.j4, radius: ob.radius, pole: ob.pole, targets });
   }
   return out;
 }
@@ -83,16 +141,20 @@ export function zonalTerms(pairs: Readonly<Record<string, readonly string[]>>, b
  *   Mars -> Sun 73 m, Sun -> Jupiter 23 m; Uranus/Neptune -> Sun and every
  *   planet -> planet pair < 10 m (indistinguishable from noise): excluded.
  * Sun -> all and planet -> Sun are kept uniformly since they cost O(n).
+ * With moons, each giant planet's zonal field (J2 and, where the data has it,
+ * J4) also acts on its own moons: that is what precesses their orbits (Io's
+ * node and perihelion by ~50 deg/yr). Pairs whose bodies are absent from a
+ * body list are dropped, so the same table serves BARYCENTER_BODIES unchanged.
  */
 export const MASSIVE_BODY_J2_PAIRS: Readonly<Record<string, readonly string[]>> = {
   sun: ['mercury', 'venus', 'earth', 'moon', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto'],
   earth: ['moon', 'sun'],
   moon: ['earth'],
   mars: ['sun'],
-  jupiter: ['sun'],
-  saturn: ['sun'],
-  uranus: ['sun'],
-  neptune: ['sun'],
+  jupiter: ['sun', 'io', 'europa', 'ganymede', 'callisto'],
+  saturn: ['sun', 'tethys', 'dione', 'rhea', 'titan', 'iapetus'],
+  uranus: ['sun', 'ariel', 'umbriel', 'titania', 'oberon'],
+  neptune: ['sun', 'triton'],
 };
 
 /** An integrator for these bodies with the full physics, starting at J2000 (t = 0). */
@@ -100,7 +162,7 @@ export function createSolarSystemIntegrator(h: number = DEFAULT_STEP, bodies: re
   return new NBodyIntegrator(bodies.map((b) => b.gm), initialState(bodies), 0, h, KAHAN_LI_8, solarSystemPhysics(bodies));
 }
 
-/** Full massive-body physics for these bodies: selected J2 pairs + Sun 1PN. */
+/** Full massive-body physics for these bodies: selected J2 (and J4) pairs + Sun 1PN. */
 export function solarSystemPhysics(
   bodies: readonly BodyData[] = J2000_BODIES,
   pairs: Readonly<Record<string, readonly string[]>> = MASSIVE_BODY_J2_PAIRS,
