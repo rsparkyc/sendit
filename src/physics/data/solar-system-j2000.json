@@ -41,11 +41,11 @@
         -11.70150612817771,
         -5.251266205200356
       ],
-      "displayName": "Sun",
       "jn": [
         2.1961391516529825e-07
       ],
-      "fieldSource": "DE440 header J2SUN (J_n; absent keys are 0)"
+      "fieldSource": "DE440 header J2SUN (J_n; absent keys are 0)",
+      "displayName": "Sun"
     },
     {
       "id": "mercury",
@@ -126,12 +126,16 @@
         -5029.753814928081,
         -2180.645069035755
       ],
-      "displayName": "Earth",
       "jn": [
         0.00108262539,
         -2.53241e-06,
         -1.619898e-06
       ],
+      "fieldTaper": [
+        114,
+        143
+      ],
+      "fieldSource": "DE440 header J2E, J3E, J4E (J_n; absent keys are 0); tesseral (n <= 4): EGM2008 tide-free (Pavlis et al. 2012), https://icgem.gfz.de/getmodel/gfc/c50128797a9cb62e936337c890e4425f03f0461d7329b09a8cc8561504465340/EGM2008.gfc, unnormalized and rescaled to the DE440 GM and RE",
       "tesseral": [
         [
           2,
@@ -188,7 +192,7 @@
           6.524671742405987e-09
         ]
       ],
-      "fieldSource": "DE440 header J2E, J3E, J4E (J_n; absent keys are 0); tesseral (n <= 4): EGM2008 tide-free (Pavlis et al. 2012), https://icgem.gfz.de/getmodel/gfc/c50128797a9cb62e936337c890e4425f03f0461d7329b09a8cc8561504465340/EGM2008.gfc, unnormalized and rescaled to the DE440 GM and RE"
+      "displayName": "Earth"
     },
     {
       "id": "moon",
@@ -218,12 +222,16 @@
         -2481.970773696848
       ],
       "parent": "earth",
-      "displayName": "Moon",
       "jn": [
         0.000203214360135,
         8.45964582042064e-06,
         -9.7043900244e-06
       ],
+      "fieldTaper": [
+        136,
+        170
+      ],
+      "fieldSource": "DE440 header J2M, J3M, J4M (J_n; absent keys are 0); tesseral (n <= 4): DE440 header C{n}{m}M, S{n}{m}M (lunar principal-axis frame)",
       "tesseral": [
         [
           2,
@@ -280,7 +288,7 @@
           8.296282059018262e-08
         ]
       ],
-      "fieldSource": "DE440 header J2M, J3M, J4M (J_n; absent keys are 0); tesseral (n <= 4): DE440 header C{n}{m}M, S{n}{m}M (lunar principal-axis frame)"
+      "displayName": "Moon"
     },
     {
       "id": "mars",
@@ -309,7 +317,6 @@
         23906.70819417074,
         10933.92063330765
       ],
-      "displayName": "Mars",
       "jn": [
         0.001956608633534895,
         3.147611937672662e-05,
@@ -320,7 +327,12 @@
         -5.955852493861907e-07,
         1.252140240616081e-06
       ],
-      "fieldSource": "NAIF mar099.cmt J402, J403, J404, J405, J406, J407, J408, J409 (J_n; absent keys are 0)"
+      "fieldTaper": [
+        55,
+        69
+      ],
+      "fieldSource": "NAIF mar099.cmt J402, J403, J404, J405, J406, J407, J408, J409 (J_n; absent keys are 0)",
+      "displayName": "Mars"
     },
     {
       "id": "jupiter",
@@ -350,7 +362,6 @@
         10171.872594492888,
         4552.504135737711
       ],
-      "displayName": "Jupiter",
       "jn": [
         0.0146965063,
         -4.5e-08,
@@ -361,14 +372,19 @@
         -2.422e-06,
         -1.13e-07
       ],
-      "fieldSource": "NAIF jup365.cmt J502, J503, J504, J505, J506, J507, J508, J509 (J_n; absent keys are 0)"
+      "fieldTaper": [
+        66,
+        83
+      ],
+      "fieldSource": "NAIF jup365.cmt J502, J503, J504, J505, J506, J507, J508, J509 (J_n; absent keys are 0)",
+      "displayName": "Jupiter"
     },
     {
       "id": "saturn",
       "name": "Saturn",
       "horizonsId": "699",
-      "gm": 3.793121707121713e+16,
-      "gmSource": "sat441.cmt: system GM minus the modelled moons and the outer unmodelled moons ['607', '609', '612'] (left out); inner unmodelled moons ['601', '602'] lumped in; DE440 GM6 = 37940584.8418 km^3/s^2",
+      "gm": 3.793120735736166e+16,
+      "gmSource": "sat441.cmt: system GM minus the modelled moons and the outer unmodelled moons ['607', '609', '612'] (left out); DE440 GM6 = 37940584.8418 km^3/s^2",
       "radius": 58232000.0,
       "pole": [
         0.0854788318610717,
@@ -384,14 +400,13 @@
       "j4": -0.0009351185734877162,
       "j2Source": "NAIF sat441.cmt J602, J604, RADIUS",
       "state": [
-        957317651980.5073,
-        923319434986.3927,
-        340162793274.82947,
-        -7421.898075750487,
-        6098.453220576355,
-        2837.5476353241197
+        957317651940.4624,
+        923319435026.9891,
+        340162793275.1918,
+        -7421.90044563103,
+        6098.450855611842,
+        2837.547988341469
       ],
-      "displayName": "Saturn",
       "jn": [
         0.01629061510215236,
         9.519974025353707e-08,
@@ -402,7 +417,12 @@
         -1.393087926846997e-05,
         8.921515415583946e-07
       ],
-      "fieldSource": "NAIF sat441.cmt J602, J603, J604, J605, J606, J607, J608, J609 (J_n; absent keys are 0)"
+      "fieldTaper": [
+        62,
+        78
+      ],
+      "fieldSource": "NAIF sat441.cmt J602, J603, J604, J605, J606, J607, J608, J609 (J_n; absent keys are 0)",
+      "displayName": "Saturn"
     },
     {
       "id": "uranus",
@@ -432,7 +452,6 @@
         4251.110863992298,
         1796.1217474588423
       ],
-      "displayName": "Uranus",
       "jn": [
         0.003508966976546036,
         0.0,
@@ -440,7 +459,12 @@
         0.0,
         5.75e-07
       ],
-      "fieldSource": "NAIF ura184_part-1.cmt J702, J704, J706 (J_n; absent keys are 0)"
+      "fieldTaper": [
+        35,
+        44
+      ],
+      "fieldSource": "NAIF ura184_part-1.cmt J702, J704, J706 (J_n; absent keys are 0)",
+      "displayName": "Uranus"
     },
     {
       "id": "neptune",
@@ -470,7 +494,6 @@
         2876.586395983825,
         1065.7735242720944
       ],
-      "displayName": "Neptune",
       "jn": [
         0.003536205996177839,
         0.0,
@@ -478,7 +501,12 @@
         0.0,
         5.461372305640038e-07
       ],
-      "fieldSource": "NAIF nep098_part-1.cmt J802, J804, J806 (J_n; absent keys are 0)"
+      "fieldTaper": [
+        36,
+        45
+      ],
+      "fieldSource": "NAIF nep098_part-1.cmt J802, J804, J806 (J_n; absent keys are 0)",
+      "displayName": "Neptune"
     },
     {
       "id": "pluto",
@@ -667,6 +695,42 @@
         2026.7863365010878
       ],
       "displayName": "Iapetus"
+    },
+    {
+      "id": "mimas",
+      "name": "Mimas",
+      "horizonsId": "601",
+      "parent": "saturn",
+      "gm": 2503488768.152587,
+      "gmSource": "sat441.cmt body table",
+      "radius": 198200.0,
+      "state": [
+        957458639887.6637,
+        923203013802.2736,
+        340160710326.87445,
+        1932.4753249267685,
+        17142.043830970437,
+        1603.8626309819406
+      ],
+      "displayName": "Mimas"
+    },
+    {
+      "id": "enceladus",
+      "name": "Enceladus",
+      "horizonsId": "602",
+      "parent": "saturn",
+      "gm": 7210366688.598896,
+      "gmSource": "sat441.cmt body table",
+      "radius": 252100.0,
+      "state": [
+        957479362037.8036,
+        923146293418.533,
+        340161610469.2828,
+        1797.3087185885813,
+        14705.290706756941,
+        1408.7912102249509
+      ],
+      "displayName": "Enceladus"
     },
     {
       "id": "ariel",

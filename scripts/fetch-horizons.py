@@ -30,8 +30,8 @@ Sources:
     Moon GMs: the "Bodies on the File" table of the JPL satellite ephemeris
     headers (jup365, sat441, ura111xl-799, nep097, plu060 .cmt, NAIF, URL below).
     A planet's GM is the DE440 system GM minus the GMs of the moons modelled
-    here, so the moons left out (Amalthea, Mimas, Enceladus, Hyperion, Phoebe,
-    Miranda, Nix, Hydra, ...) stay lumped into the planet and the system's
+    here, so the moons left out (Amalthea, Hyperion, Phoebe, Puck, Proteus,
+    Nix, Hydra, ...) stay lumped into the planet and the system's
     total GM, which drives its heliocentric motion, is unchanged.
   * Oblateness J2 and its reference radius (unnormalized zonal harmonic):
       Sun, Earth, Moon: DE440 header (J2SUN/ASUN, J2E/RE, J2M/AM).
@@ -71,6 +71,14 @@ Sources:
         nep098_part-1: keys J402..J409, J502..J509, J602..J609, J702..J706,
         J802..J806), i.e. the field the moons' ephemerides were integrated
         with; a key the header does not list is 0.
+      Uranus is a retrograde rotator (IAU north is its rotational south), so
+      only its even zonals are used; the physics refuses odd or tesseral terms
+      on a retrograde body (spacecraft.ts checkFieldOrientation).
+  * "fieldTaper" [inner, outer] (body radii, FIELD_TAPER below): a model
+    choice, not fetched. The spacecraft feels a body's terms above J2 times a
+    C2 quintic step from 1 at inner to 0 at outer (spacecraft.ts
+    BodyOblateness.taper); inner is where the largest discarded acceleration
+    falls to 1e-12 m/s^2.
 
 Only a generic User-Agent is sent; no personal information.
 """
@@ -119,6 +127,16 @@ FIELDS = {
 # Where the line is drawn and why: README "Force model" and solar-system.ts.
 EARTH_DEGREE = 4
 MOON_DEGREE = 4
+# Field taper (spacecraft force model): the terms above J2 are multiplied by a
+# C2 quintic step from 1 at the inner to 0 at the outer radius (body radii,
+# j2Radius). Inner: where the largest discarded acceleration (max over
+# directions) falls to 1e-12 m/s^2 (~3 m in 30 days, vs 100-140 km from
+# truncating at degree 4); outer = 1.25 x inner. test/gravity-field.test.ts
+# recomputes the criterion from the coefficients.
+FIELD_TAPER = {
+    "earth": [114, 143], "moon": [136, 170], "mars": [55, 69], "jupiter": [66, 83],
+    "saturn": [62, 78], "uranus": [35, 44], "neptune": [36, 45],
+}
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 IAU_JSON = ROOT / "src/physics/data/iau-rotation.json"
 # Output root (default: the repository). `--out DIR` writes the same relative paths under DIR, e.g. to diff first.
@@ -169,7 +187,8 @@ SYSTEMS = [
     dict(id="jupiter", name="Jupiter", planet="599", cmt="jup365.cmt",
          moons=[("io", "Io", "501"), ("europa", "Europa", "502"), ("ganymede", "Ganymede", "503"), ("callisto", "Callisto", "504")]),
     dict(id="saturn", name="Saturn", planet="699", cmt="sat441.cmt",
-         moons=[("tethys", "Tethys", "603"), ("dione", "Dione", "604"), ("rhea", "Rhea", "605"), ("titan", "Titan", "606"), ("iapetus", "Iapetus", "608")]),
+         moons=[("tethys", "Tethys", "603"), ("dione", "Dione", "604"), ("rhea", "Rhea", "605"), ("titan", "Titan", "606"), ("iapetus", "Iapetus", "608"),
+                ("mimas", "Mimas", "601"), ("enceladus", "Enceladus", "602")]),
     dict(id="uranus", name="Uranus", planet="799", cmt="ura184_part-1.cmt",
          moons=[("ariel", "Ariel", "701"), ("umbriel", "Umbriel", "702"), ("titania", "Titania", "703"), ("oberon", "Oberon", "704"),
                 ("miranda", "Miranda", "705")]),
@@ -241,7 +260,7 @@ def planet_rel(moon_rel: dict, ext_rel: dict, gms: dict, planet_gm: float) -> li
     """
     State, relative to the system barycenter, of the planet body: the center of
     mass of the planet and the unmodelled moons INSIDE the modelled moons'
-    orbits (Amalthea, Mimas, Enceladus, Puck, Proteus, ...), which carries their
+    orbits (Amalthea, Puck, Proteus, ...), which carries their
     GM. By the barycenter's definition (sum of GM r over every body of the
     satellite file is 0) that is -(sum over modelled moons + sum over the
     excluded outer moons of GM r) / planet_gm. Differs from the planet center
@@ -550,6 +569,8 @@ def main() -> None:
         if jn[0] != row["j2"]:
             sys.exit(f"{row['id']}: field J2 {jn[0]} differs from j2 {row['j2']}")
         row["jn"] = jn
+        if row["id"] in FIELD_TAPER:
+            row["fieldTaper"] = FIELD_TAPER[row["id"]]
         listed = [key for key in keys if key in k]
         row["fieldSource"] = (f"DE440 header {', '.join(listed)}" if src == "de440" else f"NAIF {src} {', '.join(listed)}") + " (J_n; absent keys are 0)"
     by_row = {r["id"]: r for r in bodies}

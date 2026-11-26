@@ -65,7 +65,7 @@ describe.skipIf(!RUN)('Chebyshev fit tuner', () => {
     for (let seg = 4; seg <= S; seg *= 2) { // a segment must divide the chunk
       for (let deg = 5; deg <= 20; deg++) {
         const fit: BodyFit = { segSteps: seg, degree: deg, samples: Math.min(seg, 32) };
-        if (3 * (sampleIntervals(fit) + 1) < 2 * (deg + 1)) continue;
+        if (9 * (sampleIntervals(fit) + 1) < 4 * (deg + 1)) continue;
         const fits = bodies.map(() => fit);
         const layout = new ChebyshevLayout(fits, run.h, S, centers, gm);
         const eph = new ChebyshevEphemeris(bodies, { fits, h: run.h, chunkSteps: S });

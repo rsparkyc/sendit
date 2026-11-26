@@ -5,7 +5,13 @@
  * PHYSICS: Newtonian point masses, plus (optional, see NBodyPhysics)
  *  - zonal J2 (and J4) of selected bodies acting on selected others, with the
  *    equal and opposite reaction, about a fixed pole or about the body's IAU
- *    pole at the current time (see "TIME-DEPENDENT FORCES");
+ *    pole at the current time (see "TIME-DEPENDENT FORCES"); optionally
+ *    higher zonals J_n (ZonalHarmonic.jn) and sectoral/tesseral terms in the
+ *    body-fixed frame (ZonalHarmonic.tesseral, orientation.ts BodyFrame),
+ *    evaluated by gravity-field.ts, also with the reaction. The production
+ *    selection (solar-system.ts MASSIVE_BODY_FIELDS): Saturn J3..J8 and
+ *    Jupiter J3..J6 on their moons; no tesserals (the Moon's C22 is left out
+ *    on purpose, see there);
  *  - the Sun's first post-Newtonian (Schwarzschild, PPN beta=gamma=1) term on
  *    every other body, with the reaction on the Sun (velocity dependent: see
  *    "RELATIVITY" below).

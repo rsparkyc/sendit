@@ -136,6 +136,12 @@ export const DEFAULT_FITS: Readonly<Record<string, BodyFit>> = {
   titania: { segSteps: 16, degree: 8, samples: 16 }, // 0.5 d, 2.8 mm
   oberon: { segSteps: 32, degree: 11, samples: 32 }, // 1 d, 2.5 mm
   miranda: { segSteps: 8, degree: 11, samples: 8 }, // 0.25 d, 1.6 mm
+  // Mimas (0.94 d orbit): at 0.25 d the 9 grid nodes allow degree <= 12 under
+  // the 4:3 rule below (best 6.6 mm); 0.125 d, degree 10 on 5 nodes (15
+  // pos/vel/acc conditions for 11 coefficients) meets the target. Needed the
+  // rule relaxed from 3:2 to 4:3 (no other fit uses the slack).
+  mimas: { segSteps: 4, degree: 10, samples: 4 }, // 0.125 d, 2.1 mm
+  enceladus: { segSteps: 8, degree: 11, samples: 8 }, // 0.25 d, 2.2 mm
   triton: { segSteps: 64, degree: 12, samples: 32 }, // 2 d, 2.1 mm
   charon: { segSteps: 64, degree: 11, samples: 32 }, // 2 d, 2.9 mm
 };
@@ -364,7 +370,7 @@ export class ChebyshevLayout {
       const M = sampleIntervals(f);
       if (!(f.segSteps >= 1) || chunkSteps % f.segSteps !== 0) throw new Error(`body ${i}: segSteps must divide chunkSteps`);
       if (!(M >= 1) || f.segSteps % M !== 0) throw new Error(`body ${i}: samples must divide segSteps`);
-      if (3 * (M + 1) < 2 * (f.degree + 1)) throw new Error(`body ${i}: degree too high for segment (need 3 samples per 2 coefficients)`);
+      if (9 * (M + 1) < 4 * (f.degree + 1)) throw new Error(`body ${i}: degree too high for segment (need 4 conditions per 3 coefficients)`);
       this.segLen[i] = f.segSteps * h;
       this.twoOverLen[i] = 2 / (f.segSteps * h);
       this.segCount[i] = chunkSteps / f.segSteps;

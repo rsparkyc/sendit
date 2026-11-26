@@ -6,7 +6,7 @@
  *
  * BODIES (J2000_BODIES): Sun, Mercury, Venus, Earth, Moon, the Mars system
  * barycenter, the planets Jupiter, Saturn, Uranus, Neptune and Pluto THEMSELVES
- * (not their system barycenters), then 16 major moons, each with `parent`
+ * (not their system barycenters), then 18 major moons, each with `parent`
  * (the Moon's parent is Earth). Indices 0..10 keep the ids of the older
  * 11-body set. A planet's GM is the system GM minus its modelled moons and
  * minus any moon OUTSIDE the innermost modelled moon's orbit (an exterior mass
@@ -23,8 +23,13 @@
  * speed sqrt(2 GM/R) (the largest deflection a flyby of it can give):
  *   Saturn: Iapetus 11.3 km / 0.57 km/s, Rhea 2.1 / 0.64, Dione 0.73 / 0.51,
  *     Tethys 0.32 / 0.39: included. Enceladus 0.045 / 0.24, Mimas 0.012 /
- *     0.16: left out (they cost Tethys ~750 km and Dione ~100 km per year
- *     through resonances; an experiment with both modelled gave 104 and 5 km).
+ *     0.16: included from stage 2 of model 2 under the third rule below:
+ *     without them Tethys was 859 km and Dione 107 km off Horizons after a
+ *     year (Tethys-Mimas 4:2, Dione-Enceladus 2:1 resonances); with them (and
+ *     Saturn's J3..J8) 94 and 3 km. Mimas' 0.94 d period is shorter than
+ *     Io's: at the 1/32 d step its own error is 214 m per year (1/32 vs 1/64
+ *     d), against 157 km of physics error. Their ids follow Iapetus, so
+ *     Ariel..Charon moved two places up (bodies are looked up by id).
  *     Hyperion, Phoebe, Helene: left out and, being exterior, not lumped in.
  *   Uranus: Oberon 20.6 / 0.73, Titania 17.1 / 0.76, Umbriel 3.9 / 0.54,
  *     Ariel 2.7 / 0.54: included. Miranda 0.10 km / 0.19 km/s, period 1.41 d:
@@ -45,6 +50,37 @@
  * and the TIME-DEPENDENT FORCES note in nbody.ts); `pole` in the data is that
  * model at J2000. solarSystemPhysics(..., { fixedPoles: true }) gives the
  * model-1 behaviour (pole frozen at J2000) for comparisons.
+ *
+ * GRAVITY FIELDS (data: jn, tesseral, fieldTaper; sources in
+ * scripts/fetch-horizons.py; evaluation in gravity-field.ts):
+ *   Sun: J2 (DE440).
+ *   Earth: J2..J4 (DE440) and C/S through degree 4 (EGM2008 tide-free,
+ *     rescaled to DE440's GM and radius), body-fixed frame from the IAU pole
+ *     and the Earth Rotation Angle with Delta-T (earth-rotation.ts, the same
+ *     definition the launch code uses).
+ *   Moon: J2..J4 and C/S through degree 4 (DE440, principal-axis frame),
+ *     turned with the IAU lunar pole and prime meridian (libration terms).
+ *   Mars, Jupiter, Saturn: J2..J9 as the satellite ephemerides list them
+ *     (mar099, jup365, sat441); Uranus, Neptune: J2, J4, J6 (ura184,
+ *     nep098). Uranus rotates retrograde: even zonals only.
+ * Where the line is: degree 4 for Earth and the Moon. Degree 4 leaves 100-140
+ * km after 30 days in LEO and low lunar orbit against degree 8 / 6 (the
+ * truncation error accepted); each further degree costs evaluation time on
+ * every LEO step. Higher planetary tesserals are not in the sources used
+ * (Mars has them in mar099, unused: Mars missions are not resolved to that
+ * level). Odd zonals and tesserals need the rotational north pole: the IAU
+ * north pole for prograde bodies (checked, spacecraft.ts).
+ * SPACECRAFT: J2 of every body everywhere; the terms above J2 tapered to zero
+ * between fieldTaper radii (Earth 114-143, Moon 136-170, Mars 55-69,
+ * Jupiter 66-83, Saturn 62-78, Uranus 35-44, Neptune 36-45 body radii; inner
+ * where the largest discarded acceleration falls to 1e-12 m/s^2, ~3 m in 30
+ * days). The taper is a C2 quintic step, a smooth function of position.
+ * MASSIVE BODIES: J2 (J4) as in MASSIVE_BODY_J2_PAIRS, plus MASSIVE_BODY_FIELDS
+ * (Saturn J3..J8 and Jupiter J3..J6 on their moons). Left out, with the
+ * measurements in MASSIVE_BODY_FIELDS: Earth J3/J4 and tesserals on the Moon,
+ * Moon J3/J4 on Earth (all < 50 m per century), and the Moon's C22 and higher
+ * tesserals (100-200 km per century, but the IAU libration model is not
+ * accurate enough to apply them: they made the Moon worse against DE441).
  *
  * BARYCENTER_BODIES is the older 11-body set (Jupiter..Pluto as system
  * barycenters with the system GM), kept for the baseline tests and as a cheap
@@ -92,6 +128,8 @@ export interface BodyData {
   readonly tesseral?: readonly (readonly number[])[];
   /** Provenance of jn and tesseral. */
   readonly fieldSource?: string;
+  /** Spacecraft taper of the terms above J2: [inner, outer] radius in units of j2Radius (BodyOblateness.taper). */
+  readonly fieldTaper?: readonly number[];
   /** For a moon: id of its planet. */
   readonly parent?: string;
 }
@@ -144,6 +182,8 @@ export interface Oblateness {
   readonly tesseral?: readonly TesseralTerm[];
   /** Prime meridian of the body-fixed frame: Earth's is the Earth Rotation Angle (earth-rotation.ts). */
   readonly primeMeridian?: 'iau' | 'earth-rotation-angle';
+  /** Taper of the terms above J2 for the spacecraft (BodyOblateness.taper). */
+  readonly taper?: readonly [number, number];
   readonly radius: number;
   /** J2000 pole (BodyData.pole). */
   readonly pole: readonly [number, number, number];
@@ -170,8 +210,9 @@ export function oblatenessOf(b: BodyData, fixedPole = false): Oblateness | null 
   const base = b.j4 === undefined ? { j2: b.j2, radius: b.j2Radius, pole } : { j2: b.j2, j4: b.j4, radius: b.j2Radius, pole };
   if (fixedPole) return base;
   const rotation = rotationOf(b);
-  const more: { jn?: readonly number[]; tesseral?: readonly TesseralTerm[]; primeMeridian?: 'earth-rotation-angle' } = {};
+  const more: { jn?: readonly number[]; tesseral?: readonly TesseralTerm[]; primeMeridian?: 'earth-rotation-angle'; taper?: readonly [number, number] } = {};
   if (b.jn !== undefined) more.jn = b.jn;
+  if (b.fieldTaper !== undefined) more.taper = [b.fieldTaper[0], b.fieldTaper[1]];
   if (b.tesseral !== undefined && b.tesseral.length > 0) {
     if (rotation === undefined) throw new Error(`${b.id}: tesseral terms need an IAU rotation model`);
     more.tesseral = b.tesseral.map((r) => [r[0], r[1], r[2], r[3]] as const);
@@ -255,17 +296,35 @@ export const MASSIVE_BODY_J2_PAIRS: Readonly<Record<string, readonly string[]>> 
   moon: ['earth'],
   mars: ['sun'],
   jupiter: ['sun', 'io', 'europa', 'ganymede', 'callisto'],
-  saturn: ['sun', 'tethys', 'dione', 'rhea', 'titan', 'iapetus'],
+  saturn: ['sun', 'mimas', 'enceladus', 'tethys', 'dione', 'rhea', 'titan', 'iapetus'],
   uranus: ['sun', 'miranda', 'ariel', 'umbriel', 'titania', 'oberon'],
   neptune: ['sun', 'triton'],
 };
 
 /**
  * Which part of each body's field acts between massive bodies (the pairs of
- * MASSIVE_BODY_J2_PAIRS); bodies not listed: J2 and J4. PROVISIONAL, set from
- * the measurements described below.
+ * MASSIVE_BODY_J2_PAIRS); bodies not listed: J2 and J4. Set by measurement
+ * (stage 2 of model 2), each term against its effect on the bodies it acts on:
+ *  - Saturn J3..J8 on its moons: Mimas 372 -> 157 km and Enceladus 59 -> 19 km
+ *    off Horizons after 1 yr, Tethys 104 -> 94, Dione 3.4 -> 2.3 (J8 adds 4 km
+ *    for Mimas over J6; the data stops at J9, which is 1e-6).
+ *  - Jupiter J3..J6 on the Galileans: Io 144.9 -> 143.0 km, Europa 6.1 -> 5.7
+ *    (J7, J8: no change at 0.1 km).
+ *  - Left out, effect below the noise: Uranus and Neptune J6 on their moons
+ *    (< 0.1 km/yr); Earth J3, J4 on the Moon (31 m after 100 yr) and Moon J3,
+ *    J4 on Earth (5 m); Earth's tesserals (42 m: they average out over a day).
+ *  - Left out, NOT negligible: the Moon's C22 and higher tesserals moved the
+ *    Moon by 108 km (degree 2) and 191 km (degree 4) after 100 yr, but made the
+ *    agreement with DE441 worse (Earth-relative 418 -> 526 / 609 km). Their
+ *    effect hinges on the Moon's orientation: shifting its prime meridian by
+ *    0.01 deg moves the Moon 50-90 km, and the IAU libration series (Earth-
+ *    pointing to ~0.01-0.1 deg; DE440 integrates the librations) is not good
+ *    enough. A lunar libration integration would be needed first.
  */
-export const MASSIVE_BODY_FIELDS: Readonly<Record<string, MassiveFieldSelection>> = {};
+export const MASSIVE_BODY_FIELDS: Readonly<Record<string, MassiveFieldSelection>> = {
+  saturn: { degree: 8 },
+  jupiter: { degree: 6 },
+};
 
 /** An integrator for these bodies with the full physics, starting at J2000 (t = 0). */
 export function createSolarSystemIntegrator(h: number = DEFAULT_STEP, bodies: readonly BodyData[] = J2000_BODIES): NBodyIntegrator {

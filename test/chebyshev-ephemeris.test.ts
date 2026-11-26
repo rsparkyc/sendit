@@ -81,7 +81,10 @@ describe('ChebyshevEphemeris accuracy', () => {
     J2000_BODIES.forEach((b, i) => console.log(`  ${b.id.padEnd(8)} max position error ${(errP[i] * 1e3).toFixed(2)} mm, velocity ${errV[i].toExponential(2)} m/s`));
     for (let b = 0; b < N; b++) {
       expect(errP[b]).toBeLessThan(0.01);
-      expect(errV[b]).toBeLessThan(1e-6);
+      // Velocity error ~ position error x orbital rate. Observed: Enceladus
+      // 1.62e-6, Mimas 1.46e-6, Tethys 1.42e-6 m/s (was < 1e-6 before Mimas
+      // and Enceladus perturbed it), Io 6.6e-7; planets < 1e-7.
+      expect(errV[b]).toBeLessThan(2.5e-6);
     }
   }, 300_000);
 
@@ -184,7 +187,7 @@ describe('ChebyshevEphemeris continuity', () => {
     console.log(`  max position jump at chunk boundaries (incl. t=0, forward/backward seam): ${(chunkJumpP * 1e3).toFixed(2)} mm`);
     for (let i = 0; i < N; i++) {
       expect(jumpP[i]).toBeLessThan(0.01);
-      expect(jumpV[i]).toBeLessThan(3e-6); // inner moons: 1.05e-6 m/s observed (mm-level fits on 4 h segments)
+      expect(jumpV[i]).toBeLessThan(6e-6); // inner moons: Enceladus 4.2e-6, Mimas 1.2e-6, Io/Tethys ~1e-6 m/s observed (mm-level fits on 3-6 h segments)
     }
   });
 

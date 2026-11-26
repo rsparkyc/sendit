@@ -125,6 +125,23 @@ describe('field accelerations against the gradient of the potential', () => {
     });
   }
 
+  it('the unrolled degree-4 recursion gives the general recursion\'s bits', () => {
+    for (const id of ['earth', 'moon']) {
+      const ob = oblatenessOf(J2000_BODIES[bodyIndex(id)])!;
+      const f4 = new HarmonicField(ob.jn!, ob.tesseral!, ob.radius);
+      const gen = new HarmonicField(ob.jn!, ob.tesseral!, ob.radius);
+      (gen as unknown as { deg4: boolean }).deg4 = false;
+      for (let k = 0; k < 200; k++) {
+        const r = ob.radius * (1.01 + k * 0.37);
+        const x = r * Math.cos(k * 1.3) * Math.cos(k * 0.7), y = r * Math.sin(k * 1.3) * Math.cos(k * 0.7), z = r * Math.sin(k * 0.7);
+        const a = new Float64Array(3), b = new Float64Array(3);
+        f4.add(J2000_BODIES[bodyIndex(id)].gm, x, y, z, a, 0, 0.75);
+        gen.add(J2000_BODIES[bodyIndex(id)].gm, x, y, z, b, 0, 0.75);
+        for (let c = 0; c < 3; c++) expect(a[c] === b[c], `${id} ${k} ${c}`).toBe(true);
+      }
+    }
+  });
+
   it('zonal series about an arbitrary pole equals the full field with that pole as z', () => {
     const jn = [EARTH.jn![0], EARTH.jn![1], EARTH.jn![2], -2.3e-7, 5.4e-7];
     const z = new ZonalSeries(jn, EARTH.j2Radius!);
@@ -329,3 +346,109 @@ function solve3(A: number[][], b: number[]): number[] {
   }
   return [0, 1, 2].map((i) => m[i][3] / m[i][i]);
 }
+
+/**
+ * The taper of the terms above J2 (BodyOblateness.taper, radii in
+ * solar-system-j2000.json "fieldTaper", chosen in scripts/fetch-horizons.py).
+ */
+describe('field taper', () => {
+  it('the stored radii meet the criterion: discarded acceleration at the inner radius <= 1e-12 m/s^2 (and not far below it)', () => {
+    const dirs: number[][] = [];
+    for (let i = 0; i < 400; i++) {
+      const z = -1 + (2 * i + 1) / 400;
+      const s = Math.sqrt(1 - z * z);
+      dirs.push([s * Math.cos(i * 2.399963), s * Math.sin(i * 2.399963), z]);
+    }
+    const lines: string[] = [];
+    for (const b of J2000_BODIES) {
+      const ob = oblatenessOf(b);
+      if (!ob || ob.jn === undefined || ob.jn.length < 2) continue;
+      expect(ob.taper, `${b.id} has terms above J2 and needs a taper`).toBeDefined();
+      const [ki, ko] = ob.taper!;
+      expect(ko).toBeCloseTo(1.25 * ki, -0.5);
+      const f = new HarmonicField([0, ...ob.jn.slice(1)], ob.tesseral ?? [], ob.radius);
+      const r = ki * ob.radius;
+      let mx = 0;
+      const a = new Float64Array(3);
+      for (const d of dirs) {
+        a.fill(0);
+        f.add(b.gm, d[0] * r, d[1] * r, d[2] * r, a, 0);
+        mx = Math.max(mx, Math.hypot(a[0], a[1], a[2]));
+      }
+      lines.push(`${b.id}: inner ${ki} R, outer ${ko} R; discarded at inner ${mx.toExponential(2)} m/s^2 = ${(mx / (b.gm / (r * r))).toExponential(1)} of the point mass`);
+      expect(mx).toBeLessThan(1e-12);
+      expect(mx).toBeGreaterThan(5e-13);
+    }
+    console.log(lines.join('\n'));
+  });
+
+  // Earth alone at the origin with its full field, and a hyperbolic departure
+  // from 100 R across the taper (114..143 R) in about two days.
+  const ob = oblatenessOf(EARTH)!;
+  const earthOnly = (taper: readonly [number, number] | undefined): Ephemeris => ({
+    count: 1,
+    gm: [EARTH.gm],
+    oblateness: [{ ...ob, taper }],
+    positions: (_t, out) => out.fill(0, 0, 3),
+    bodyState: (_b, _t, out) => out.fill(0, 0, 6),
+  });
+  const r0 = 100 * ob.radius;
+  const y0 = [r0 * 0.8, r0 * 0.5, r0 * Math.sqrt(1 - 0.89), 1200, 900, 300, 1000];
+  const T = 5 * 86400;
+  const run = (taper: readonly [number, number] | undefined, rtol: number) => propagate(earthOnly(taper), y0, 0, T, [], { rtol });
+  const d = (a: ArrayLike<number>, b: ArrayLike<number>) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  it('is smooth: crossing it costs no extra steps and tight and loose tolerances agree as without it', () => {
+    const rEnd = Math.hypot(...run(ob.taper, 1e-12).y.slice(0, 3)) / ob.radius;
+    expect(rEnd).toBeGreaterThan(ob.taper![1] + 5); // the run does cross the taper
+    const tap = [1e-9, 1e-12].map((tol) => run(ob.taper, tol));
+    const off = [1e-9, 1e-12].map((tol) => run(undefined, tol));
+    console.log(
+      `taper crossing (to ${rEnd.toFixed(0)} R): steps with taper ${tap.map((r) => `${r.accepted}+${r.rejected}`).join(' / ')}, without ${off.map((r) => `${r.accepted}+${r.rejected}`).join(' / ')} (rtol 1e-9 / 1e-12, accepted+rejected); ` +
+        `loose vs tight ${d(tap[0].y, tap[1].y).toExponential(2)} m (without taper ${d(off[0].y, off[1].y).toExponential(2)} m); taper vs none ${d(tap[1].y, off[1].y).toExponential(2)} m`,
+    );
+    for (let k = 0; k < 2; k++) {
+      expect(tap[k].accepted).toBeLessThanOrEqual(off[k].accepted + 2);
+      expect(tap[k].rejected).toBeLessThanOrEqual(off[k].rejected + 2);
+    }
+    expect(d(tap[0].y, tap[1].y)).toBeLessThan(10 * d(off[0].y, off[1].y) + 1e-3);
+    // What the taper discards (<= 1e-12 m/s^2 at 114 R, less outside) over 5 days.
+    expect(d(tap[1].y, off[1].y)).toBeLessThan(1);
+  });
+
+  it('is smooth where the field is strong: an artificial taper at 3..4 R crossed 2 x per orbit', () => {
+    // Orbit 2 R x 6 R for 2 days (~9 crossings). The taper's derivatives are
+    // then large, so a discontinuity would show as rejected steps; compare a
+    // near-hard cutoff (width 1e-6 R).
+    const rp = 2 * ob.radius;
+    const ra = 6 * ob.radius;
+    const a = (rp + ra) / 2;
+    const vp = Math.sqrt(EARTH.gm * (2 / rp - 1 / a));
+    const y = [rp, 0, 0, 0, vp * 0.8, vp * 0.6, 1000];
+    const go = (taper: readonly [number, number] | undefined, rtol: number) => propagate(earthOnly(taper), y, 0, 2 * 86400, [], { rtol });
+    const lines: string[] = [];
+    for (const rtol of [1e-9, 1e-12]) {
+      const sm = go([3, 4], rtol);
+      const none = go(undefined, rtol);
+      const hard = go([3.5, 3.5 + 1e-6], rtol);
+      lines.push(`rtol ${rtol}: accepted+rejected smooth ${sm.accepted}+${sm.rejected}, no taper ${none.accepted}+${none.rejected}, near-hard ${hard.accepted}+${hard.rejected}`);
+      expect(sm.accepted).toBeLessThan(1.15 * none.accepted + 5);
+      expect(sm.rejected).toBeLessThan(none.rejected + 0.05 * none.accepted + 3);
+    }
+    const t9 = go([3, 4], 1e-9).y;
+    const t12 = go([3, 4], 1e-12).y;
+    const n9 = go(undefined, 1e-9).y;
+    const n12 = go(undefined, 1e-12).y;
+    lines.push(`loose vs tight: smooth taper ${d(t9, t12).toExponential(2)} m, no taper ${d(n9, n12).toExponential(2)} m`);
+    console.log(lines.join('\n'));
+    expect(d(t9, t12)).toBeLessThan(3 * d(n9, n12) + 1e-2);
+  });
+
+  it('is path-independent: the same bits whatever was propagated before', () => {
+    const a = run(ob.taper, 1e-11).y;
+    propagate(earthOnly(ob.taper), [7e6, 0, 0, 0, 7500, 100, 1000], 3e5, 4e5, [], { rtol: 1e-9 });
+    propagate(earthOnly(ob.taper), [1.3e8 * 6, 0, 0, 0, 900, 100, 1000], -1e6, -2e5, [], { rtol: 1e-10 });
+    const b = run(ob.taper, 1e-11).y;
+    for (let k = 0; k < 7; k++) expect(Object.is(a[k], b[k])).toBe(true);
+  });
+});

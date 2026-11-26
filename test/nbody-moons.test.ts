@@ -1,5 +1,5 @@
 /**
- * The full body set (Sun, planets, Moon and 15 major moons) at the production
+ * The full body set (Sun, planets, Moon and 17 major moons) at the production
  * step DEFAULT_STEP = 1/32 d: convergence order with moons, time reversibility,
  * checkpoint export/import resume in both directions, and agreement with JPL
  * Horizons (test/fixtures/horizons-moons.json, made by scripts/fetch-horizons.py).
@@ -38,6 +38,20 @@ describe('full body set: numerics', () => {
     expect(errs[0] / errs[1]).toBeGreaterThan(150);
     expect(errs[1] / errs[2]).toBeGreaterThan(100);
     expect(errs[2]).toBeLessThan(1);
+    // Mimas (0.94 d orbit, the fastest body): the same, relative to Saturn.
+    const MIMAS = bodyIndex('mimas');
+    const SAT = bodyIndex('saturn');
+    const relErr = (a: Float64Array, b: Float64Array) =>
+      Math.hypot(...[0, 1, 2].map((k) => a[3 * MIMAS + k] - a[3 * SAT + k] - (b[3 * MIMAS + k] - b[3 * SAT + k])));
+    const mErr = [8, 16, 32].map((d) => relErr(run(DAY / d), refQ));
+    console.log(`Mimas error after 20 d vs h = 1/64 d: 1/8 d ${mErr[0].toExponential(2)} m, 1/16 ${mErr[1].toExponential(2)}, 1/32 ${mErr[2].toExponential(2)}`);
+    // Observed 9.6e5, 3.2e3, 11.7 m (ratios ~300: order 8). After a year at 1/32 d the step changes
+    // Mimas by 214 m (1/32 vs 1/64 d; Enceladus 6 m, Tethys 1.5 m, Io 0.5 m),
+    // against 157 km of physics error: 1/32 d stays the default (1/64 d would
+    // double the chunk build cost).
+    expect(mErr[0] / mErr[1]).toBeGreaterThan(100);
+    expect(mErr[1] / mErr[2]).toBeGreaterThan(100);
+    expect(mErr[2]).toBeLessThan(20);
   }, 60_000);
 
   it('is time-reversible: 30 days forward and back returns to the start', () => {
@@ -62,8 +76,9 @@ describe('full body set: numerics', () => {
     console.log(`30 d forward and back (${steps} steps each way): worst body ${who} returns within ${worst.toExponential(2)} m`);
     // The scheme is symmetric; what remains is roundoff (the 1PN implicit
     // solve's asymmetry is far smaller). Observed 2.6 cm, against an Io-step
-    // truncation error of ~1e-1 m over the same span.
-    expect(worst).toBeLessThan(0.1);
+    // truncation error of ~1e-1 m over the same span. With Mimas (0.94 d
+    // orbit, the fastest-varying body) 12.4 cm observed.
+    expect(worst).toBeLessThan(0.25);
   }, 60_000);
 
   it('resumes from exported state bit for bit, forward and backward', () => {
@@ -92,7 +107,9 @@ describe('full body set: numerics', () => {
  * Error thresholds against Horizons, km. Planets (and Sun): barycentric
  * position. Moons (the Moon too, now parented to Earth): position relative to
  * their planet. Each is ~1.5x the observed value (physics model 2; in the
- * comment, worst of -t and +t, then the model-1 value against the old fixture).
+ * comment, worst of -t and +t, then in parentheses the stage-1 model-2 value
+ * (before Mimas, Enceladus and the giants' J3..J8) and the model-1 value
+ * against the old fixture).
  *
  * The model-1 fixture's moon samples were wrong (SSB-centred states overwrote
  * the planet-relative reference: 340-1050 km off DE441 + the satellite
@@ -100,10 +117,14 @@ describe('full body set: numerics', () => {
  * numbers mix fixture error with model error; the model-2 numbers do not.
  *
  * Causes of what remains (errors grow linearly: mean-motion errors):
- *  - Tethys, Dione: Mimas and Enceladus are not modelled (Tethys-Mimas 4:2,
- *    Dione-Enceladus 2:1 resonances). Adding them in an experiment brought
- *    Tethys to 104 km and Dione to 5 km at 1 yr; left for a later model.
- *  - Io, Europa: the Laplace resonance with degree > 4 gravity and tides missing.
+ *  - Mimas 157 km/yr, Enceladus 20, Tethys 94: Mimas and Enceladus are modelled
+ *    from stage 2 of model 2 (Tethys was 859 km/yr and Dione 107 without them:
+ *    Tethys-Mimas 4:2, Dione-Enceladus 2:1 resonances), with Saturn's J3..J8
+ *    (Mimas 372 -> 157 km/yr). What remains: Saturn's tides and higher field,
+ *    and sat441's own fit; not attributed further.
+ *  - Titan 35 km at -1 yr but 5 at +1: not attributed.
+ *  - Io, Europa: the Laplace resonance with tides missing (Jupiter J3..J6 act
+ *    from stage 2: Io 145 -> 143 km/yr).
  *  - Titania 7 km/yr: unexplained (Ariel, Umbriel, Oberon are at 1 km/yr).
  *  - Miranda 9 km/yr: its inclined, resonance-affected orbit and ura182's own
  *    fit (Miranda is modelled from model 2: without it Ariel was 184 km and
@@ -115,43 +136,47 @@ describe('full body set: numerics', () => {
 const LIMIT_1: Record<string, number> = {
   sun: 2, mercury: 2, venus: 2, earth: 2, mars: 2, jupiter: 2, saturn: 2, uranus: 2, neptune: 2, pluto: 2, // <= 0.3 (model 1: Pluto 4.2)
   moon: 7, // 4.0 (geocentric; model 1, barycentric: 4.3)
-  io: 220, // 145, 0.02 deg (145)
-  europa: 12, // 6.7 (6.7)
-  ganymede: 25, // 15 (15)
-  callisto: 10, // 5.5 (5.5)
-  tethys: 1300, // 859, 0.17 deg (493: old fixture; Mimas missing)
-  dione: 165, // 107 (181)
-  rhea: 32, // 20 (249)
-  titan: 50, // 33 (86)
-  iapetus: 6, // 3.2 (15)
-  miranda: 14, // 9.2 (not modelled)
-  ariel: 2, // 1.2 (450)
-  umbriel: 1.2, // 0.7 (419)
-  titania: 11, // 7.2 (388)
-  oberon: 0.5, // 0.05 (384)
-  triton: 11, // 7.3 (128)
-  charon: 2.6, // 1.7 (40, 0.116 deg)
+  io: 220, // 143 (stage 1: 145; model 1: 145)
+  europa: 10, // 6.3 (6.7; 6.7)
+  ganymede: 23, // 14.9 (15; 15)
+  callisto: 9, // 5.5 (5.5; 5.5)
+  mimas: 240, // 157, 0.05 deg (not modelled)
+  enceladus: 30, // 19.8 (not modelled)
+  tethys: 145, // 94 (859, 0.17 deg; 493: old fixture)
+  dione: 5, // 3.3 (107; 181)
+  rhea: 7, // 4.3 (20; 249)
+  titan: 55, // 35 at -1 yr, 5 at +1 (33; 86)
+  iapetus: 5, // 3.3 (3.2; 15)
+  miranda: 14, // 9.2 (9.2; not modelled)
+  ariel: 2, // 1.2 (1.2; 450)
+  umbriel: 1.2, // 0.7 (0.7; 419)
+  titania: 11, // 7.2 (7.2; 388)
+  oberon: 0.5, // 0.05 (0.05; 384)
+  triton: 11, // 7.3 (7.3; 128)
+  charon: 2.6, // 1.7 (1.7; 40, 0.116 deg)
 };
 const LIMIT_25: Record<string, number> = {
   sun: 16, mercury: 17, venus: 17, earth: 16, mars: 30, jupiter: 20, saturn: 24, uranus: 37, neptune: 72, // 10, 11, 11, 11, 19, 13, 16, 24, 48 (unchanged)
   pluto: 80, // 53 (143)
   moon: 150, // 100 (geocentric; 100)
-  io: 4900, // 3271, 0.45 deg (3271)
-  europa: 2300, // 1521, 0.13 (1521)
-  ganymede: 810, // 538 (539)
-  callisto: 195, // 128 (128)
-  tethys: 66000, // 43934, 8.6 deg (34780; Mimas missing)
-  dione: 1350, // 896 (5569)
-  rhea: 780, // 520 (6245)
-  titan: 790, // 522 (1902)
-  iapetus: 105, // 70 (348)
-  miranda: 400, // 260 (not modelled)
-  ariel: 130, // 84 (9020)
-  umbriel: 36, // 24 (980)
-  titania: 270, // 178 (1130)
-  oberon: 4, // 2.3 (963)
-  triton: 265, // 176 (1845)
-  charon: 65, // 42 (991, 2.9 deg)
+  io: 4900, // 3228, 0.45 deg (stage 1: 3271; model 1: 3271)
+  europa: 2300, // 1499 (1521; 1521)
+  ganymede: 810, // 536 (538; 539)
+  callisto: 195, // 128 (128; 128)
+  mimas: 5400, // 3602, 1.1 deg (not modelled)
+  enceladus: 670, // 440 (not modelled)
+  tethys: 3600, // 2389 (43934, 8.6 deg; 34780)
+  dione: 75, // 47 (896; 5569)
+  rhea: 170, // 113 (520; 6245)
+  titan: 870, // 574 (522; 1902)
+  iapetus: 115, // 74 (70; 348)
+  miranda: 400, // 260 (260; not modelled)
+  ariel: 130, // 84 (84; 9020)
+  umbriel: 36, // 24 (24; 980)
+  titania: 270, // 178 (178; 1130)
+  oberon: 4, // 2.3 (2.3; 963)
+  triton: 265, // 174 (176; 1845)
+  charon: 65, // 42 (42; 991, 2.9 deg)
 };
 
 function compare(years: number[], limit: Record<string, number>): void {

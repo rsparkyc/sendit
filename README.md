@@ -12,6 +12,59 @@ The site has two pages:
   (`src/fixtures/determinism.ts`) in a Web Worker and reports PASS only if all seven
   final state components match the stored Float64 bits.
 
+## Force model (`src/physics/`, `PHYSICS_MODEL` 2)
+
+Massive bodies (`nbody.ts`, Kahan-Li 8th-order symmetric composition, step 1/32 d):
+the Sun, Mercury, Venus, Earth, the Moon, the Mars system barycenter, Jupiter, Saturn,
+Uranus, Neptune, Pluto, and 18 moons: Io, Europa, Ganymede, Callisto; Tethys, Dione,
+Rhea, Titan, Iapetus, Mimas, Enceladus; Ariel, Umbriel, Titania, Oberon, Miranda;
+Triton; Charon. Bodies are looked up by id (`bodyIndex`), not by array position.
+Initial states and GMs come from DE440/DE441 and the JPL satellite ephemerides, via
+`scripts/fetch-horizons.py`. Forces:
+
+- Newtonian point masses.
+- The Sun's 1PN term, with its reaction.
+- J2 (and J4) of selected bodies on selected others, with the reaction.
+- Saturn J3..J8 and Jupiter J3..J6 on their moons.
+
+The spacecraft (`spacecraft.ts`, DOP853) feels these fields:
+
+| Body | Field | Source |
+|---|---|---|
+| Sun | J2 | DE440 |
+| Earth | J2..J4, plus C/S through degree 4 | DE440 zonals; EGM2008 tide-free, rescaled to DE440 |
+| Moon | J2..J4, plus C/S through degree 4 | DE440, principal-axis frame |
+| Mars, Jupiter, Saturn | J2..J9 | mar099, jup365, sat441 |
+| Uranus, Neptune | J2, J4, J6 | ura184, nep098 |
+
+Uranus rotates retrograde, so only its even zonals are used.
+
+- **Orientation.** Fields turn with each body's time-dependent IAU pole, taken from
+  pck00011 (`orientation.ts`).
+- **Body-fixed frames.** These use the IAU prime meridian, including the Moon's
+  libration terms. Earth instead uses the Earth Rotation Angle with Delta-T
+  (`earth-rotation.ts`); the launch code uses the same definition.
+- **J2** acts at any distance.
+- **Terms above J2** are multiplied by a taper: exactly 1 inside an inner radius, a C2
+  quintic step, and exactly 0 (skipped) beyond an outer radius. The radii, in body
+  radii, are Earth 114–143, Moon 136–170, Mars 55–69, Jupiter 66–83, Saturn 62–78,
+  Uranus 35–44 and Neptune 36–45. The inner radius is where the largest discarded
+  acceleration falls to 1e-12 m/s².
+
+Left out on purpose:
+
+- **Higher degrees for Earth and the Moon.** Degree 4 leaves 100–140 km after 30 days
+  in LEO or low lunar orbit, compared with degree 8 (Earth) and degree 6 (Moon).
+- **Earth J3/J4 and Earth's tesserals on the Moon, and Moon J3/J4 on Earth.** Each is
+  under 50 m per century.
+- **The Moon's C22 and higher terms between Earth and the Moon.** They move the Moon
+  by 100–200 km per century. However, with the IAU libration model they made the Moon
+  worse against DE441: shifting the prime meridian by 0.01° moves the Moon by 50–90 km.
+- **Tides and asteroids.**
+
+The measurements are in the header comments of `solar-system.ts` (`MASSIVE_BODY_FIELDS`)
+and in `test/gravity-field.test.ts`.
+
 ## Flight-plan editor (`src/app/`)
 
 The main page is the game's core loop: an editable mission plan, replayed live.

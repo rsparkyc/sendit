@@ -8,9 +8,11 @@
  * point mass (zonal J_n about its time-dependent IAU pole, and for Earth and
  * the Moon also the sectoral and tesseral C_nm, S_nm in the rotating
  * body-fixed frame; see gravity-field.ts and the data in solar-system.ts);
- * the Sun's 1PN term; finite thrust. Every term is evaluated at every force
- * evaluation, at any distance (the force is a smooth function of position
- * and time).
+ * the Sun's 1PN term; finite thrust. J2 acts at any distance; a body's terms
+ * above J2 are multiplied by its taper (BodyOblateness.taper: exactly 1
+ * inside, a C2 quintic step, exactly 0 and skipped outside; radii in
+ * solar-system.ts), so the force stays a smooth function of position and time
+ * and a craft in LEO does not pay for Jupiter's J6 or the Moon's C44.
  *
  * Same determinism rule as dop853.ts: only exactly-defined operations (+ - * /,
  * Math.sqrt, Math.abs, Math.min/max, comparisons); no Math transcendental
@@ -69,6 +71,16 @@ export interface BodyOblateness {
    * (earth-rotation.ts), the launch code's Earth.
    */
   readonly primeMeridian?: 'iau' | 'earth-rotation-angle';
+  /**
+   * Optional taper [inner, outer] (units of `radius`) of the terms above J2
+   * (J3.., J4 and the tesserals; J2 itself is never tapered). They are
+   * multiplied by w(r): exactly 1 for r <= inner, exactly 0 for r >= outer
+   * (and then not evaluated), and in between the C2 quintic step
+   * w = 1 - s^3 (10 - 15 s + 6 s^2), s = (r - inner)/(outer - inner). The
+   * force stays a smooth, path-independent function of position and time.
+   * Absent: no taper (w = 1 everywhere).
+   */
+  readonly taper?: readonly [number, number];
   /** Reference radius, m. */
   readonly radius: number;
   /** Spin-axis unit vector in the ephemeris frame. Used when `rotation` is absent. */
@@ -252,18 +264,22 @@ export function propagate(
   const relBody = ephem.relativity ? ephem.relativity.body : -1;
   const sunState = new Float64Array(6);
 
-  // Bodies with a field, ascending (the order the terms are summed in): a
-  // zonal series about the pole, or (with tesseral terms) the full field in
-  // the body-fixed frame, whose rotation is evaluated once per time.
+  // Bodies with a field, ascending (the order the terms are summed in): J2 in
+  // closed form everywhere, plus the terms above J2 (hi kind) times the taper
+  // w(r) of BodyOblateness.taper: 3 closed J4 only, 1 zonal series about the
+  // pole, 2 full field in the body-fixed frame (rotation evaluated at most
+  // once per time and body, and only while the craft is inside the taper).
   const zBody: number[] = [];
   const zPole: number[] = [];
   const zTable: (PoleTable | null)[] = [];
   const zSeries: (ZonalSeries | null)[] = [];
-  // J2 (and J4) only: the closed forms, prefactors -1.5 j2 gm R^2 and 0.125 j4 gm R^4.
-  const zF2: number[] = [];
-  const zF4: number[] = [];
+  const zF2: number[] = []; // -1.5 j2 gm R^2
+  const zF4: number[] = []; // 0.125 j4 gm R^4 (hi kind 3)
   const zField: (HarmonicField | null)[] = [];
   const zFrame: (BodyFrame | null)[] = [];
+  const zKindL: number[] = [];
+  const zTi: number[] = []; // taper inner radius, m (Infinity: none)
+  const zTo: number[] = [];
   if (oblateness !== undefined) {
     for (let i = 0; i < nBodies; i++) {
       const ob = oblateness[i];
@@ -275,15 +291,24 @@ export function propagate(
       const jn = zonalCoefficients(ob);
       const tess = (ob.tesseral ?? []).filter((r) => r[2] !== 0 || r[3] !== 0);
       const R2 = ob.radius * ob.radius;
-      const closed = tess.length === 0 && jn.every((j, n) => n === 0 || n === 2 || j === 0);
-      zF2.push(closed ? -1.5 * jn[0] * gm[i] * ob.radius * ob.radius : 0);
-      zF4.push(closed && jn.length > 2 ? 0.125 * jn[2] * gm[i] * R2 * R2 : 0);
+      zF2.push(-1.5 * jn[0] * gm[i] * R2);
+      const hi = jn.slice();
+      hi[0] = 0;
+      const onlyJ4 = tess.length === 0 && hi.every((j, n) => n === 2 || j === 0);
+      zF4.push(onlyJ4 && hi.length > 2 ? 0.125 * hi[2] * gm[i] * R2 * R2 : 0);
+      const tp = ob.taper;
+      if (tp !== undefined && !(tp[0] >= 0 && tp[1] > tp[0])) throw new Error(`body ${i}: taper needs 0 <= inner < outer`);
+      zTi.push(tp !== undefined ? tp[0] * ob.radius : Infinity);
+      zTo.push(tp !== undefined ? tp[1] * ob.radius : Infinity);
       if (tess.length > 0) {
+        zKindL.push(2);
         zSeries.push(null);
-        zField.push(new HarmonicField(jn, tess, ob.radius));
+        zField.push(new HarmonicField(hi, tess, ob.radius));
         zFrame.push(sharedBodyFrame(ob.rotation!, ob.primeMeridian));
       } else {
-        zSeries.push(closed ? null : new ZonalSeries(jn, ob.radius));
+        const none = hi.every((j) => j === 0);
+        zKindL.push(none ? 0 : onlyJ4 ? 3 : 1);
+        zSeries.push(none || onlyJ4 ? null : new ZonalSeries(hi, ob.radius));
         zField.push(null);
         zFrame.push(null);
       }
@@ -297,10 +322,13 @@ export function propagate(
   const zPoleA = Float64Array.from(zPole);
   const zF2A = Float64Array.from(zF2);
   const zF4A = Float64Array.from(zF4);
-  // 0: closed J2 (J4) form, 1: zonal series, 2: full field in the body frame.
-  const zKind = Uint8Array.from(zField, (f, q) => (f !== null ? 2 : zSeries[q] !== null ? 1 : 0));
-  const anyFrame = zFrame.some((f) => f !== null);
+  const zKind = Uint8Array.from(zKindL);
+  const zTi2 = Float64Array.from(zTi, (r) => r * r);
+  const zTo2 = Float64Array.from(zTo, (r) => r * r);
+  const zTiA = Float64Array.from(zTi);
+  const zTw = Float64Array.from(zTo, (r, q) => 1 / (r - zTi[q])); // 1/(outer - inner); 0 without a taper
   const zMat = new Float64Array(9 * nZonal);
+  const zMatT = new Float64Array(nZonal).fill(NaN);
   const fieldAcc = new Float64Array(3);
 
   // Ephemeris answers are functions of t alone, and the integrator asks for
@@ -310,7 +338,6 @@ export function propagate(
   // distinct calls, as before.
   let posT = NaN;
   let poleT = NaN;
-  let frameT = NaN;
   let sunT = NaN;
   let refT = NaN;
   let refBody = -1;
@@ -350,13 +377,6 @@ export function propagate(
       polesAt(zTabs, t, zPoleA, zTabOff);
       poleT = t;
     }
-    if (anyFrame && !Object.is(t, frameT)) {
-      for (let q = 0; q < nZonal; q++) {
-        const f = zFrame[q];
-        if (f !== null) f.matrixWithPole(t, zPoleA[3 * q], zPoleA[3 * q + 1], zPoleA[3 * q + 2], zMat, 9 * q);
-      }
-      frameT = t;
-    }
     fieldAcc[0] = 0;
     fieldAcc[1] = 0;
     fieldAcc[2] = 0;
@@ -365,36 +385,44 @@ export function propagate(
       const rx = x - bodyPos[3 * i];
       const ry = yy - bodyPos[3 * i + 1];
       const rz = z - bodyPos[3 * i + 2];
+      const px = zPoleA[3 * q];
+      const py = zPoleA[3 * q + 1];
+      const pz = zPoleA[3 * q + 2];
+      // J2: a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ], s = r.pole.
+      const r2 = rx * rx + ry * ry + rz * rz;
+      const sp = rx * px + ry * py + rz * pz;
+      const f = zF2A[q] / (r2 * r2 * Math.sqrt(r2));
+      const c1 = 1 - (5 * sp * sp) / r2;
+      ax += f * (c1 * rx + 2 * sp * px);
+      ay += f * (c1 * ry + 2 * sp * py);
+      az += f * (c1 * rz + 2 * sp * pz);
       const kind = zKind[q];
-      if (kind === 0) {
-        // a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ], s = r.pole;
-        // J4, u = s/r: + J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
-        const px = zPoleA[3 * q];
-        const py = zPoleA[3 * q + 1];
-        const pz = zPoleA[3 * q + 2];
-        const r2 = rx * rx + ry * ry + rz * rz;
-        const sp = rx * px + ry * py + rz * pz;
-        const f = zF2A[q] / (r2 * r2 * Math.sqrt(r2));
-        const c1 = 1 - (5 * sp * sp) / r2;
-        ax += f * (c1 * rx + 2 * sp * px);
-        ay += f * (c1 * ry + 2 * sp * py);
-        az += f * (c1 * rz + 2 * sp * pz);
-        const f4c = zF4A[q];
-        if (f4c !== 0) {
-          const r = Math.sqrt(r2);
-          const u = sp / r;
-          const u2 = u * u;
-          const f4 = f4c / (r2 * r2 * r2 * r);
-          const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
-          const cp = f4 * r * u * (140 * u2 - 60);
-          ax += cr * rx - cp * px;
-          ay += cr * ry - cp * py;
-          az += cr * rz - cp * pz;
-        }
+      if (kind === 0 || r2 >= zTo2[q]) continue;
+      // Taper w(r) (BodyOblateness.taper): 1 inside, quintic C2 step, 0 outside.
+      let w = 1;
+      if (r2 > zTi2[q]) {
+        const sx = (Math.sqrt(r2) - zTiA[q]) * zTw[q];
+        w = 1 - sx * sx * sx * (10 - sx * (15 - 6 * sx));
+      }
+      if (kind === 3) {
+        // J4, u = s/r: J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
+        const r = Math.sqrt(r2);
+        const u = sp / r;
+        const u2 = u * u;
+        const f4 = (w * zF4A[q]) / (r2 * r2 * r2 * r);
+        const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
+        const cp = f4 * r * u * (140 * u2 - 60);
+        ax += cr * rx - cp * px;
+        ay += cr * ry - cp * py;
+        az += cr * rz - cp * pz;
       } else if (kind === 1) {
-        zSeries[q]!.add(gm[i], rx, ry, rz, zPoleA[3 * q], zPoleA[3 * q + 1], zPoleA[3 * q + 2], fieldAcc, 0);
+        zSeries[q]!.add(gm[i], rx, ry, rz, px, py, pz, fieldAcc, 0, w);
       } else {
-        zField[q]!.addIcrf(gm[i], rx, ry, rz, zMat, 9 * q, fieldAcc, 0);
+        if (!Object.is(t, zMatT[q])) {
+          zFrame[q]!.matrixWithPole(t, px, py, pz, zMat, 9 * q);
+          zMatT[q] = t;
+        }
+        zField[q]!.addIcrf(gm[i], rx, ry, rz, zMat, 9 * q, fieldAcc, 0, w);
       }
     }
     ax += fieldAcc[0];

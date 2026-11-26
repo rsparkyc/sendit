@@ -142,8 +142,18 @@ export function primeMeridianDeg(m: RotationModel, t: number): number {
 
 /** Earth's prime meridian W (degrees, [0, 360)) at TDB t: the ERA model above. The physics' Earth frame uses exactly this. */
 export function earthPrimeMeridianDeg(t: number): number {
-  return primeMeridianDeg(EARTH_ROTATION, t);
+  // primeMeridianDeg(EARTH_ROTATION, t) with its constants hoisted (same
+  // operations in the same order, so the same bits; test/orientation.test.ts).
+  const d = (t - deltaT(t)) / SECONDS_PER_DAY;
+  const nd = E_N * d;
+  let w = E_W0 + E_REM * d + 360 * (nd - Math.floor(nd));
+  w += (E_W1 * t) / (SECONDS_PER_DAY * DAYS_PER_CENTURY);
+  return w - 360 * Math.floor(w / 360);
 }
+const E_N = Math.floor(EARTH_ROTATION.wDot / 360);
+const E_REM = EARTH_ROTATION.wDot - 360 * E_N;
+const E_W0 = EARTH_ROTATION.w0;
+const E_W1 = EARTH_ROTATION.w1!;
 
 /** Numbers of EARTH_ROTATION that a replay depends on, for the world fingerprint. */
 export function earthRotationConstants(): number[] {

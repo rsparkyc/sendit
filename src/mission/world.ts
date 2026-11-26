@@ -112,6 +112,7 @@ export function worldFromBodyData(ephemeris: Ephemeris, data: readonly BodyData[
     // Higher zonals and tesserals (stage 2 of model 2).
     for (const j of b.jn ?? []) extra.push(j);
     for (const t of b.tesseral ?? []) extra.push(...t);
+    for (const k of b.fieldTaper ?? []) extra.push(k); // spacecraft taper radii (body radii)
   }
   extra.push(...earthRotationConstants());
   return { ...makeWorld(ephemeris, bodies, extra), bodyData: data };

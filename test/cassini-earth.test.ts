@@ -21,9 +21,13 @@
  * ~2e-8 m/s^2 residual (solar pressure on Cassini at 1 AU). Near closest approach
  * one-hour arcs miss by up to 51 m / 17 mm/s: Earth's field beyond J2 (J3 and the
  * tesseral C22/S22 terms each give ~2e-5 m/s^2 at 7568 km, over a few hundred
- * seconds). The game models Earth's J2 only, about a pole fixed at J2000.
+ * seconds). Physics model 1 modelled Earth's J2 only; from stage 2 of model 2
+ * the game has Earth to degree 4 (J2..J4 from DE440, C/S from EGM2008, turned
+ * with the ERA), and the outbound error fell from 29.3 to 10.4 mm/s (full) and
+ * 25.8 to 7.3 mm/s (plain), the turn error from -0.36 to -0.10 arcsec. The
+ * history of that attribution, as found under model 1:
  *
- * ATTRIBUTION OF THE ~27 mm/s OUTBOUND ERROR. It is gained within an hour of
+ * ATTRIBUTION OF THE ~27 mm/s OUTBOUND ERROR (model 1). It is gained within an hour of
  * closest approach. Ruled out by test-side variants (not kept as tests): the
  * Earth-relative start (our Earth is 53 m from Horizons'), rtol 1e-14, the
  * directly integrated ephemeris instead of the Chebyshev one (identical), Earth
@@ -222,16 +226,17 @@ describe('Cassini Earth flyby 1999-08-18 (game ephemeris from J2000)', () => {
 });
 
 /**
- * Limits, ~2x the observed values:
- *   plain: CA distance +18 m, time -0.001 s; heliocentric velocity 25.8 mm/s;
- *     v_inf 6.2 mm/s; turn -0.32 arcsec. Gain ours 3923.344 m/s, real 3923.356.
- *   full (measured impulses + mean solar pressure): +22 m, -0.002 s; 29.3 mm/s;
- *     7.5 mm/s; -0.37 arcsec.
- *   attribution: no Earth J2 4139 mm/s (141x), Moon lumped 79,600 mm/s, Sun
- *     1PN 0.1 mm/s.
+ * Limits, ~2x the observed values (physics model 2 stage 2; stage 1 in brackets):
+ *   plain: CA distance +12 m [+18], time -0.001 s; heliocentric velocity
+ *     7.3 mm/s [25.8]; v_inf 5.9 mm/s [6.2]; turn -0.055 arcsec [-0.32].
+ *     Gain ours 3923.358 m/s, real 3923.356 [3923.344].
+ *   full (measured impulses + mean solar pressure): +16 m [+22], -0.002 s;
+ *     10.4 mm/s [29.3]; 7.2 mm/s [7.5]; -0.097 arcsec [-0.36].
+ *   attribution: no Earth J2 4139 mm/s (397x), Moon lumped 79,600 mm/s, Sun
+ *     1PN 0.05 mm/s.
  */
 const LIMITS = {
-  plain: { dd: 50, dt: 0.02, helio: 0.05, vinf: 0.015, turn: 0.8 },
-  full: { dd: 50, dt: 0.02, helio: 0.06, vinf: 0.015, turn: 0.8 },
+  plain: { dd: 30, dt: 0.02, helio: 0.015, vinf: 0.012, turn: 0.15 },
+  full: { dd: 35, dt: 0.02, helio: 0.021, vinf: 0.015, turn: 0.2 },
   attribution: { j2: 50, moon: 1000 },
 };
