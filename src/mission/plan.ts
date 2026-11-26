@@ -30,7 +30,7 @@
  *    DEFAULT_ASCENT_TIME_S): a burn starting before insertion, or a duration
  *    not reaching past insertion, is a validation error.
  */
-import { DEFAULT_ASCENT_TIME_S } from './launch';
+import { DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, azimuthAllowed } from './launch';
 import { PHYSICS_MODEL } from './world';
 
 export const PLAN_FORMAT = 1;
@@ -133,19 +133,79 @@ export function simulationStartOffset(start: PlanStart): number {
   return start.kind === 'launch' ? (start.params[3] ?? DEFAULT_ASCENT_TIME_S) : 0;
 }
 
-/** All problems with a plan (empty if valid). Checks structure, ranges and the work bounds. */
-export function validatePlan(plan: MissionPlan): string[] {
-  const errs: string[] = [];
+/** Stable machine-readable codes for plan problems (never renamed; new ones may be added). */
+export type PlanIssueCode =
+  | 'format'
+  | 'model'
+  | 'data'
+  | 'range'
+  | 'id'
+  | 'start-kind'
+  | 'start-state'
+  | 'launch-params'
+  | 'launch-epoch'
+  | 'launch-ascent'
+  | 'launch-duration'
+  | 'launch-site'
+  | 'launch-azimuth'
+  | 'launch-altitude'
+  | 'launch-mode'
+  | 'burn-before-insertion'
+  | 'mass-order'
+  | 'engines'
+  | 'burns'
+  | 'burn-engine'
+  | 'burn-direction'
+  | 'burn-frame'
+  | 'burn-overlap';
+
+/** One problem with a plan. */
+export interface PlanIssue {
+  readonly code: PlanIssueCode;
+  /** Field path, e.g. 'epoch', 'start.params[1]', 'burns[2].direction', 'spacecraft.dryMass'. */
+  readonly path: string;
+  /** Index of the burn the problem belongs to, when it belongs to one. */
+  readonly burn?: number;
+  /** Human-readable message (the same text validatePlan returns). */
+  readonly message: string;
+}
+
+export interface ValidateOptions {
+  /**
+   * How much of a launch start to check:
+   *  - 'full' (default): also that the site exists, the parameters decode
+   *    (launch.ts launchFromParams), the azimuth is inside the site's
+   *    range-safety corridor and the altitude is positive, so a plan that
+   *    launch.ts would refuse fails here, not inside replay.
+   *  - 'structural': only the plan format (what encode / decode need). Used
+   *    for plans flown with a custom `resolveLaunch` (their own site ids).
+   */
+  readonly launch?: 'full' | 'structural';
+}
+
+/**
+ * All problems with a plan, structured (empty if valid). Checks structure,
+ * ranges and the work bounds, and (by default) the launch semantics.
+ */
+export function validatePlanIssues(plan: MissionPlan, opts: ValidateOptions = {}): PlanIssue[] {
+  const errs: PlanIssue[] = [];
   const L = LIMITS;
+  const add = (code: PlanIssueCode, path: string, message: string, burn?: number) => {
+    errs.push(burn === undefined ? { code, path, message } : { code, path, burn, message });
+  };
+  const burnOf = (path: string): number | undefined => {
+    const m = /^burns\[(\d+)\]/.exec(path);
+    return m ? Number(m[1]) : undefined;
+  };
   const range = (name: string, v: unknown, lo: number, hi: number, loOpen = false) => {
-    if (!finite(v) || (loOpen ? !(v > lo) : !(v >= lo)) || !(v <= hi)) errs.push(`${name} must be a finite number in ${loOpen ? '(' : '['}${lo}, ${hi}], got ${String(v)}`);
+    if (!finite(v) || (loOpen ? !(v > lo) : !(v >= lo)) || !(v <= hi)) add('range', name, `${name} must be a finite number in ${loOpen ? '(' : '['}${lo}, ${hi}], got ${String(v)}`, burnOf(name));
   };
   const id = (name: string, v: unknown) => {
-    if (typeof v !== 'string' || v.length === 0 || v.length > L.maxIdLength || !ID_RE.test(v)) errs.push(`${name} must be an id of 1-${L.maxIdLength} characters [a-z0-9_-], got ${JSON.stringify(v)}`);
+    if (typeof v !== 'string' || v.length === 0 || v.length > L.maxIdLength || !ID_RE.test(v)) add('id', name, `${name} must be an id of 1-${L.maxIdLength} characters [a-z0-9_-], got ${JSON.stringify(v)}`, burnOf(name));
   };
-  if (plan.format !== PLAN_FORMAT) errs.push(`unsupported plan format ${plan.format} (this build reads ${PLAN_FORMAT})`);
-  if (!Number.isInteger(plan.model) || plan.model < 0 || plan.model > 0xffff) errs.push(`model must be an integer 0-65535`);
-  if (typeof plan.data !== 'string' || !/^[0-9a-f]{8}$/.test(plan.data)) errs.push(`data fingerprint must be 8 hex digits`);
+  if (plan.format !== PLAN_FORMAT) add('format', 'format', `unsupported plan format ${plan.format} (this build reads ${PLAN_FORMAT})`);
+  if (!Number.isInteger(plan.model) || plan.model < 0 || plan.model > 0xffff) add('model', 'model', `model must be an integer 0-65535`);
+  if (typeof plan.data !== 'string' || !/^[0-9a-f]{8}$/.test(plan.data)) add('data', 'data', `data fingerprint must be 8 hex digits`);
   range('epoch', plan.epoch, -L.maxEpoch, L.maxEpoch);
   range('duration', plan.duration, 0, L.maxDuration, true);
   range('rtol', plan.rtol, L.minRtol, L.maxRtol);
@@ -153,53 +213,55 @@ export function validatePlan(plan: MissionPlan): string[] {
   const st = plan.start;
   if (st?.kind === 'state') {
     id('start.center', st.center);
-    if (!Array.isArray(st.state) || st.state.length !== 6) errs.push('start.state must have 6 numbers');
+    if (!Array.isArray(st.state) || st.state.length !== 6) add('start-state', 'start.state', 'start.state must have 6 numbers');
     else {
       for (let i = 0; i < 3; i++) range(`start.state[${i}]`, st.state[i], -L.maxPosition, L.maxPosition);
       for (let i = 3; i < 6; i++) range(`start.state[${i}]`, st.state[i], -L.maxVelocity, L.maxVelocity);
     }
   } else if (st?.kind === 'launch') {
     id('start.site', st.site);
-    if (!Array.isArray(st.params) || st.params.length > L.maxLaunchParams) errs.push(`start.params must be at most ${L.maxLaunchParams} numbers`);
+    if (!Array.isArray(st.params) || st.params.length > L.maxLaunchParams) add('launch-params', 'start.params', `start.params must be at most ${L.maxLaunchParams} numbers`);
     else {
-      st.params.forEach((v, i) => { if (!finite(v)) errs.push(`start.params[${i}] must be finite`); });
-      if (st.params.length < 1 || st.params[0] !== plan.epoch) errs.push('start.params[0] (launch time) must equal epoch: the epoch of a launch plan is liftoff');
+      let allFinite = true;
+      st.params.forEach((v, i) => { if (!finite(v)) { allFinite = false; add('launch-params', `start.params[${i}]`, `start.params[${i}] must be finite`); } });
+      if (st.params.length < 1 || st.params[0] !== plan.epoch) add('launch-epoch', 'start.params[0]', 'start.params[0] (launch time) must equal epoch: the epoch of a launch plan is liftoff');
       const ascent = simulationStartOffset(st);
-      if (!(ascent >= 0 && ascent <= 86400)) errs.push(`launch ascent time must be in [0, 86400] s, got ${ascent}`);
+      if (!(ascent >= 0 && ascent <= 86400)) add('launch-ascent', 'start.params[3]', `launch ascent time must be in [0, 86400] s, got ${ascent}`);
       else {
-        if (!(plan.duration > ascent)) errs.push(`duration must extend past orbit insertion (${ascent} s after liftoff)`);
-        if (Array.isArray(plan.burns)) plan.burns.forEach((b, i) => { if (finite(b?.start) && b.start < ascent) errs.push(`burns[${i}] starts at ${b.start} s, before orbit insertion at ${ascent} s after liftoff`); });
+        if (!(plan.duration > ascent)) add('launch-duration', 'duration', `duration must extend past orbit insertion (${ascent} s after liftoff)`);
+        if (Array.isArray(plan.burns)) plan.burns.forEach((b, i) => { if (finite(b?.start) && b.start < ascent) add('burn-before-insertion', `burns[${i}].start`, `burns[${i}] starts at ${b.start} s, before orbit insertion at ${ascent} s after liftoff`, i); });
       }
+      if ((opts.launch ?? 'full') === 'full' && allFinite && typeof st.site === 'string') launchIssues(st.site, st.params, add);
     }
-  } else errs.push('start.kind must be "state" or "launch"');
+  } else add('start-kind', 'start.kind', 'start.kind must be "state" or "launch"');
 
   const sc = plan.spacecraft;
   range('spacecraft.wetMass', sc?.wetMass, 0, L.maxMass, true);
   range('spacecraft.dryMass', sc?.dryMass, 0, L.maxMass, true);
-  if (finite(sc?.wetMass) && finite(sc?.dryMass) && sc.dryMass > sc.wetMass) errs.push('spacecraft.dryMass must not exceed wetMass');
+  if (finite(sc?.wetMass) && finite(sc?.dryMass) && sc.dryMass > sc.wetMass) add('mass-order', 'spacecraft.dryMass', 'spacecraft.dryMass must not exceed wetMass');
   const engines = sc?.engines;
-  if (!Array.isArray(engines) || engines.length < 1 || engines.length > L.maxEngines) errs.push(`spacecraft needs 1-${L.maxEngines} engines`);
+  if (!Array.isArray(engines) || engines.length < 1 || engines.length > L.maxEngines) add('engines', 'spacecraft.engines', `spacecraft needs 1-${L.maxEngines} engines`);
   else engines.forEach((e, i) => {
     range(`engines[${i}].thrust`, e?.thrust, 0, L.maxThrust, true);
     range(`engines[${i}].isp`, e?.isp, 0, L.maxIsp, true);
   });
 
   const burns = plan.burns;
-  if (!Array.isArray(burns) || burns.length > L.maxBurns) errs.push(`at most ${L.maxBurns} burns`);
+  if (!Array.isArray(burns) || burns.length > L.maxBurns) add('burns', 'burns', `at most ${L.maxBurns} burns`);
   else {
     let prevEnd = -Infinity;
     burns.forEach((b, i) => {
       const n = `burns[${i}]`;
       range(`${n}.start`, b?.start, 0, L.maxDuration);
       range(`${n}.duration`, b?.duration, 0, L.maxDuration, true);
-      if (!Number.isInteger(b?.engine) || b.engine < 0 || !Array.isArray(engines) || b.engine >= engines.length) errs.push(`${n}.engine must index spacecraft.engines`);
+      if (!Number.isInteger(b?.engine) || b.engine < 0 || !Array.isArray(engines) || b.engine >= engines.length) add('burn-engine', `${n}.engine`, `${n}.engine must index spacecraft.engines`, i);
       const d = b?.direction;
-      if (!Array.isArray(d) || d.length !== 3 || !d.every((x) => finite(x) && Math.abs(x) <= 1e6)) errs.push(`${n}.direction must be 3 finite numbers with |x| <= 1e6`);
-      else if (!(d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 1e-24)) errs.push(`${n}.direction must not be zero`);
+      if (!Array.isArray(d) || d.length !== 3 || !d.every((x) => finite(x) && Math.abs(x) <= 1e6)) add('burn-direction', `${n}.direction`, `${n}.direction must be 3 finite numbers with |x| <= 1e6`, i);
+      else if (!(d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 1e-24)) add('burn-direction', `${n}.direction`, `${n}.direction must not be zero`, i);
       if (b?.frame?.kind === 'orbital') id(`${n}.frame.body`, b.frame.body);
-      else if (b?.frame?.kind !== 'inertial') errs.push(`${n}.frame.kind must be "inertial" or "orbital"`);
+      else if (b?.frame?.kind !== 'inertial') add('burn-frame', `${n}.frame.kind`, `${n}.frame.kind must be "inertial" or "orbital"`, i);
       if (finite(b?.start) && finite(b?.duration)) {
-        if (b.start < prevEnd) errs.push(`${n} starts before the previous burn ends (burns must be sorted and not overlap)`);
+        if (b.start < prevEnd) add('burn-overlap', `${n}.start`, `${n} starts before the previous burn ends (burns must be sorted and not overlap)`, i);
         prevEnd = b.start + b.duration;
       }
     });
@@ -207,8 +269,36 @@ export function validatePlan(plan: MissionPlan): string[] {
   return errs;
 }
 
-export function assertValidPlan(plan: MissionPlan): void {
-  const errs = validatePlan(plan);
+/** Launch semantics, mirroring what launch.ts launchFromParams / launchState would refuse. */
+function launchIssues(siteId: string, params: readonly number[], add: (code: PlanIssueCode, path: string, message: string) => void): void {
+  const site = LAUNCH_SITES.find((s) => s.id === siteId);
+  if (!site) {
+    add('launch-site', 'start.site', `start.site: unknown launch site ${siteId} (known: ${LAUNCH_SITES.map((s) => s.id).join(', ')})`);
+    return;
+  }
+  if (params.length < 3 || params.length > 6) {
+    add('launch-params', 'start.params', `start.params: a parking-orbit launch takes 3 to 6 parameters [time, azimuth, altitude, ascent?, downrange?, circularization?], got ${params.length}`);
+    return;
+  }
+  const c = params[5] ?? 0;
+  if (c !== 0 && c !== 1) add('launch-mode', 'start.params[5]', `start.params[5] (circularization) must be 0 (j2-mean) or 1 (two-body), got ${c}`);
+  if (!azimuthAllowed(site, params[1])) add('launch-azimuth', 'start.params[1]', `start.params[1]: azimuth ${params[1]} deg is outside ${site.id}'s range-safety corridor ${site.azimuthMinDeg}..${site.azimuthMaxDeg} deg`);
+  if (!(params[2] > 0 && params[2] <= MAX_PARKING_ALTITUDE)) add('launch-altitude', 'start.params[2]', `start.params[2]: parking-orbit altitude must be in (0, ${MAX_PARKING_ALTITUDE}] m, got ${params[2]}`);
+}
+
+/** Highest parking-orbit altitude a launch start accepts, m. */
+export const MAX_PARKING_ALTITUDE = 2_000e3;
+
+/**
+ * All problems with a plan as messages (empty if valid). Same checks as
+ * validatePlanIssues, which also gives the field, burn and a stable code.
+ */
+export function validatePlan(plan: MissionPlan, opts: ValidateOptions = {}): string[] {
+  return validatePlanIssues(plan, opts).map((e) => e.message);
+}
+
+export function assertValidPlan(plan: MissionPlan, opts: ValidateOptions = {}): void {
+  const errs = validatePlan(plan, opts);
   if (errs.length > 0) throw new PlanError(`invalid plan: ${errs.join('; ')}`);
 }
 
@@ -304,7 +394,8 @@ export function fromBase64Url(s: string): Uint8Array {
 
 /** Encode a (valid) plan to a URL-safe string. */
 export function encodePlan(plan: MissionPlan): string {
-  assertValidPlan(plan);
+  // Format-level checks only: an unknown launch site still encodes (replay refuses it).
+  assertValidPlan(plan, { launch: 'structural' });
   const w = new Writer();
   w.u8(0x53);
   w.u8(plan.format);
@@ -392,6 +483,6 @@ export function decodePlan(s: string): MissionPlan {
   }
   r.done();
   const plan: MissionPlan = { format, model, data, epoch, duration, rtol, start, spacecraft: { wetMass, dryMass, engines }, burns };
-  assertValidPlan(plan);
+  assertValidPlan(plan, { launch: 'structural' });
   return plan;
 }
