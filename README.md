@@ -68,7 +68,16 @@ The main page is the game's core loop: an editable mission plan, replayed live.
 
 Keys: Space pauses, `,` and `.` change warp. With a node selected: W/S prograde, D/A
 normal, E/Q radial (Alt, none, Shift: the small, medium, large step, 0.1, 1, 10 m/s and 1 s, 1 min, 10 min for time), `[` `]` move it in time, Delete
-removes it, N adds a node at the time cursor. Clicking the trajectory adds a node there.
+removes it, N adds a node at the time cursor. Ctrl/Cmd Z undoes any plan edit and Shift Ctrl/Cmd Z (or Ctrl Y) redoes it
+(`history.ts`: a drag or a burst of step clicks on one value is one step); the nodes panel has Undo / Redo buttons.
+
+Adding a node is select-then-confirm, the same on desktop and touch: a click or tap on the trajectory picks that point
+(the time cursor moves there, its readout pops up) and "Add node here", N or Enter adds it. A click never adds a node by
+itself, a click that ends a camera drag does nothing, and far-side points hidden behind a body are not hit-testable.
+A double click or double tap focuses what is under the pointer; when several things are there `pick.ts` decides, in
+this order: the spacecraft, maneuver nodes and burn markers, event and AN / DN markers, launch sites, bodies (nearest
+the camera first), a trajectory point (the time cursor moves there and the spacecraft is focused). Single clicks use
+the same order, without bodies.
 The URL hash may also set the initial view, e.g. `#frame=rot:earth:moon&focus=earth&dist=1.3e9`.
 
 ## Develop
@@ -116,7 +125,12 @@ older copy without revalidation headers is cached.
 
 ## Leaderboard (`server/leaderboard/`, `src/leaderboard/`, `infra/leaderboard.yaml`)
 
-Per mission version, three boards: combined score, delta-v, time. The server never trusts a
+Per mission version, three boards (combined score, delta-v, time), each for every launch site
+the mission offers and for all sites together (`site=<id>` or `site=all`, the default). A
+player keeps a best per site on each board; the all-sites view shows each player once, with
+their best over all sites and the site it was flown from. Scoring (par) is one per mission, so
+the all-sites board compares sites directly; each offered site has its own delta-v and time
+limits (`src/mission/campaign-sites.ts`). The server never trusts a
 result: it decodes the submitted plan strictly, checks it against the mission (the mission
 layer's `checkPlanConformance` plus server limits), re-flies it with the real ephemeris and
 scores it with the mission layer's quantised keys. API shapes: `src/leaderboard/api.ts`.
@@ -158,8 +172,9 @@ the operator's credentials (`eval "$(aws configure export-credentials --profile 
 and `TABLE_NAME=<table>` from the stack outputs):
 
 - `node dist-server/leaderboard/admin.mjs missions` lists mission versions and the physics version.
-- `... show|hide|unhide --mission <id> --version <v> --pid <pid>` inspects or hides an entry
-  (a hidden entry leaves every board and stays hidden when the player submits again).
+- `... show|hide|unhide --mission <id> --version <v> --pid <pid>` inspects or hides a player
+  (all their entries: every site board and the all-sites boards; a hidden player stays
+  hidden when they submit again, from any site).
 - `... reverify --mission <id> [--from <old-version>] [--dry-run] [--force]` re-flies stored plans.
 
 Re-verification. Boards show only entries verified under the server's current physics
@@ -176,3 +191,9 @@ fingerprint changes) or a mission's `version` is bumped:
    submission times; the others are kept but marked invalid, with the reason.
 3. Run it again until it reports `written: 0` (an entry that changed while it was being
    re-verified is retried on the next run).
+
+Re-verification also migrates entries stored before launch sites existed (one item per
+player, no per-site items): their plans are re-flown and filed under the site they launched
+from. Missions whose version did not change with the launch-site release (plane-change) need
+`reverify --mission plane-change` once after that deploy, because board partitions now
+include the site.

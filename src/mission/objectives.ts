@@ -81,9 +81,28 @@ export type MissionStart =
   /** State [x, y, z, vx, vy, vz] (m, m/s) relative to `center` at the mission epoch. */
   | { readonly kind: 'state'; readonly center: string; readonly state: readonly number[] };
 
+/**
+ * A launch site's standing in a mission (campaign.ts `launchSites`): offered,
+ * with that site's own reference solution and limits, or not offered, with
+ * the reason. The reference values come from per-site solutions kept only in
+ * tests (test/mission-campaign-sites.test.ts).
+ */
+export type SiteOption =
+  | {
+      readonly site: string;
+      readonly offered: true;
+      /** Reference solution from this site: delta-v, m/s, and mission time, s. */
+      readonly deltaV: number;
+      readonly time: number;
+      /** This site's limits (the mission's max-delta-v / max-time objectives when flown from here). */
+      readonly maxDeltaV: number;
+      readonly maxTime: number;
+    }
+  | { readonly site: string; readonly offered: false; readonly reason: string };
+
 /** Restrictions on the start a player may choose. Absent fields: unrestricted. */
 export interface StartRules {
-  /** Launch sites the player may use. */
+  /** Launch sites the player may use (with `launchSites`, exactly the offered ones). */
   readonly sites?: readonly string[];
   /** Liftoff (or start) time window [earliest, latest], TDB s from J2000. */
   readonly window?: readonly [number, number];
@@ -119,6 +138,14 @@ export interface MissionDefinition {
    * reentry / return objective accepts it. False: entry just ends the flight.
    */
   readonly atmosphereIsFailure?: boolean;
+  /**
+   * Every launch site of the site table with its standing in this mission
+   * (see SiteOption). An offered site's limits replace the mission's
+   * max-delta-v / max-time objectives for plans launched from it (the
+   * objectives themselves carry the loosest offered limits); scoring
+   * references are shared by all sites.
+   */
+  readonly launchSites?: readonly SiteOption[];
 }
 
 /** A mission definition with every optional setup field present. */
@@ -162,6 +189,8 @@ export interface Evaluation {
   readonly keys?: LeaderboardKeys;
   /** Mission rules the plan broke (only checked when evaluate is given the plan). */
   readonly ruleViolations?: readonly string[];
+  /** Launch site of the plan (when evaluate is given a launch plan); its limits were applied. */
+  readonly site?: string;
 }
 
 /** Score of a run that exactly matches the mission's par (deltaVRef, timeRef). */
@@ -346,7 +375,9 @@ function orbitGoal(o: Extract<Objective, { kind: 'orbit' }>, ctx: Ctx, after: nu
  * the mission's rules (start, spacecraft, duration; see missionRuleViolations):
  * a plan that breaks them fails. Leaderboard submissions must pass the plan.
  */
-export function evaluate(mission: MissionDefinition, result: ReplayResult, world: MissionWorld, epoch: number, plan?: MissionPlan): Evaluation {
+export function evaluate(mission0: MissionDefinition, result: ReplayResult, world: MissionWorld, epoch: number, plan?: MissionPlan): Evaluation {
+  const site = plan ? planLaunchSite(plan) : null;
+  const mission = site === null ? mission0 : missionForSite(mission0, site);
   const ctx: Ctx = { result, world, epoch };
   const out: ObjectiveResult[] = [];
   let last = -Infinity;
@@ -370,7 +401,38 @@ export function evaluate(mission: MissionDefinition, result: ReplayResult, world
   const success = ended && out.every((r) => r.ok) && (ruleViolations === undefined || ruleViolations.length === 0);
   const keys = leaderboardKeys(success, result.deltaV, missionTime, mission.scoring);
   const ev: Evaluation = { success, objectives: out, deltaV: result.deltaV, missionTime, score: keys?.score ?? 0 };
-  return { ...ev, ...(keys ? { keys } : {}), ...(ruleViolations ? { ruleViolations } : {}) };
+  return { ...ev, ...(keys ? { keys } : {}), ...(ruleViolations ? { ruleViolations } : {}), ...(site !== null ? { site } : {}) };
+}
+
+/** Launch site id of a plan, or null for a free 'state' start. */
+export function planLaunchSite(plan: MissionPlan): string | null {
+  return plan.start.kind === 'launch' ? plan.start.site : null;
+}
+
+/** The site's entry in `launchSites`, if the mission lists it. */
+export function siteOption(mission: MissionDefinition, site: string): SiteOption | undefined {
+  return mission.launchSites?.find((s) => s.site === site);
+}
+
+/** Sites a player may launch from: the offered `launchSites` that `rules.sites` also allows (either list alone when only one is given); undefined: any site. */
+export function allowedSites(mission: MissionDefinition): readonly string[] | undefined {
+  const offered = mission.launchSites?.filter((s) => s.offered).map((s) => s.site);
+  const r = mission.rules?.sites;
+  return offered && r ? offered.filter((x) => r.includes(x)) : (offered ?? r);
+}
+
+/**
+ * The mission as flown from `site`: the max-delta-v and max-time objectives
+ * take that site's limits when the site is offered with its own; otherwise
+ * the mission is returned unchanged (checkPlanConformance reports a site that
+ * is not offered). Use it to show a site's limits; evaluate applies it itself
+ * when given the plan.
+ */
+export function missionForSite<M extends MissionDefinition>(mission: M, site: string): M {
+  const o = siteOption(mission, site);
+  if (!o || !o.offered) return mission;
+  const objectives = mission.objectives.map((x): Objective => (x.kind === 'max-delta-v' ? { kind: 'max-delta-v', max: o.maxDeltaV } : x.kind === 'max-time' ? { kind: 'max-time', max: o.maxTime } : x));
+  return { ...mission, objectives };
 }
 
 /** Stable codes for ways a plan fails to conform to a mission. */
@@ -426,8 +488,14 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
     else if (st.center !== ms.center || st.state.length !== ms.state.length || !st.state.every((v, i) => sameBits(v, ms.state[i]))) add('start-state', 'start.state', 'the start state must be the mission\'s');
     if (mission.epoch !== undefined && !sameBits(plan.epoch, mission.epoch) && !r?.window) add('launch-window', 'epoch', `start time must be ${mission.epoch}`);
   }
+  if (st.kind === 'launch' && (r?.sites || mission.launchSites)) {
+    // Both lists apply: rules.sites (when given) and the offered launchSites (when given).
+    const o = siteOption(mission, st.site);
+    const allowed = allowedSites(mission) ?? [];
+    if (o && !o.offered) add('launch-site', 'start.site', `launch site ${st.site} not offered for this mission: ${o.reason} (allowed: ${allowed.join(', ')})`);
+    else if (!allowed.includes(st.site)) add('launch-site', 'start.site', `launch site ${st.site} not allowed (allowed: ${allowed.join(', ')})`);
+  }
   if (r) {
-    if (r.sites && st.kind === 'launch' && !r.sites.includes(st.site)) add('launch-site', 'start.site', `launch site ${st.site} not allowed (allowed: ${r.sites.join(', ')})`);
     if (r.window && !(plan.epoch >= r.window[0] && plan.epoch <= r.window[1])) add('launch-window', 'epoch', `start time ${plan.epoch} outside the window ${r.window[0]}..${r.window[1]}`);
     if (r.altitude && st.kind === 'launch' && !(st.params[2] >= r.altitude[0] && st.params[2] <= r.altitude[1])) add('launch-altitude', 'start.params[2]', `parking altitude ${st.params[2]} m outside ${r.altitude[0]}..${r.altitude[1]} m`);
   }

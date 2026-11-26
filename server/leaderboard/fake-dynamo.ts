@@ -9,6 +9,10 @@
  *             attribute_not_exists(#a), #a = :v, #a < :v
  *  UpdateItem Key, UpdateExpression "ADD #a :v SET #b = if_not_exists(#b, :v)" (clauses in
  *             any order; SET also "#b = :v"), the same ConditionExpression forms
+ *  TransactWriteItems  Put only (each validated as a PutItem, with its own condition);
+ *             all-or-nothing: any failed condition cancels all with
+ *             TransactionCanceledException (CancellationReasons per item); at most
+ *             100 items, at most one operation per item
  *  Query      table or a GSI; KeyConditionExpression "#pk = :v" optionally
  *             "AND #sk < :v | #sk > :v | begins_with(#sk, :v)"; ScanIndexForward,
  *             Limit, Select COUNT, ExclusiveStartKey / LastEvaluatedKey, with a page
@@ -88,9 +92,39 @@ export class FakeDynamo implements DynamoApi {
       }
       case 'Query':
         return this.query(input, names, values);
+      case 'TransactWriteItems':
+        return this.transact(input);
       default:
         throw new Error(`FakeDynamo: unsupported operation ${op}`);
     }
+  }
+
+  private transact(input: Record<string, unknown>): Record<string, unknown> {
+    const tx = input.TransactItems as Record<string, Record<string, unknown>>[];
+    if (!Array.isArray(tx) || tx.length === 0 || tx.length > 100) invalid('TransactItems must hold 1-100 items');
+    const seen = new Set<string>();
+    for (const t of tx) {
+      if (Object.keys(t).join() !== 'Put') throw new Error('FakeDynamo: only Put is supported in transactions');
+      validateRequest('PutItem', t.Put, this.indexes);
+      validateItem(t.Put.Item as Item, this.indexes);
+      const id = FakeDynamo.id(t.Put.Item as Item);
+      if (seen.has(id)) invalid('Transaction request cannot include multiple operations on one item');
+      seen.add(id);
+    }
+    const reasons = tx.map((t) => {
+      const p = t.Put;
+      if (!p.ConditionExpression) return 'None';
+      try {
+        check(p.ConditionExpression as string, this.items.get(FakeDynamo.id(p.Item as Item)), (p.ExpressionAttributeNames ?? {}) as Record<string, string>, (p.ExpressionAttributeValues ?? {}) as Record<string, AttributeValue>);
+        return 'None';
+      } catch (e) {
+        if (e instanceof DynamoError && e.code === 'ConditionalCheckFailedException') return 'ConditionalCheckFailed';
+        throw e;
+      }
+    });
+    if (reasons.some((r) => r !== 'None')) throw new DynamoError('TransactionCanceledException', `Transaction cancelled, please refer cancellation reasons for specific reasons [${reasons.join(', ')}]`, 400);
+    for (const t of tx) this.items.set(FakeDynamo.id(t.Put.Item as Item), clone(t.Put.Item as Item));
+    return {};
   }
 
   private query(input: Record<string, unknown>, names: Record<string, string>, values: Record<string, AttributeValue>): Record<string, unknown> {
@@ -214,6 +248,7 @@ const ALLOWED: Record<string, readonly string[]> = {
   GetItem: ['TableName', 'Key', 'ConsistentRead', 'ProjectionExpression', 'ExpressionAttributeNames'],
   PutItem: ['TableName', 'Item', 'ConditionExpression', 'ExpressionAttributeNames', 'ExpressionAttributeValues'],
   UpdateItem: ['TableName', 'Key', 'UpdateExpression', 'ConditionExpression', 'ExpressionAttributeNames', 'ExpressionAttributeValues'],
+  TransactWriteItems: ['TransactItems', 'ClientRequestToken', 'ReturnConsumedCapacity'],
   Query: ['TableName', 'IndexName', 'KeyConditionExpression', 'FilterExpression', 'ProjectionExpression', 'ExpressionAttributeNames', 'ExpressionAttributeValues', 'ScanIndexForward', 'Limit', 'Select', 'ExclusiveStartKey', 'ConsistentRead'],
 };
 const KEYWORDS = new Set(['AND', 'OR', 'NOT', 'ADD', 'SET', 'REMOVE', 'DELETE', 'attribute_not_exists', 'attribute_exists', 'if_not_exists', 'begins_with', 'contains', 'size', 'list_append']);

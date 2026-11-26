@@ -4,7 +4,11 @@
  * LOAD IT LAZILY. Nothing in the page imports this module statically; the UI
  * should do `const lb = await import('../leaderboard/client')` when the player
  * opens a leaderboard or submits, so it adds nothing to the initial bundle.
- * It imports only types.
+ * It imports only types and the ALL_SITES constant from api.ts.
+ *
+ * LAUNCH SITES. Board, own-rank and plan calls take `site`: a launch-site id the
+ * mission offers (getMissions: missions[].sites) or ALL_SITES ('all', the
+ * default, as before sites existed). Every row and rank carries its `site`.
  *
  * PLAYER SECRET. The first call that needs it makes 32 random bytes
  * (crypto.getRandomValues), stores them base64url-encoded in localStorage
@@ -34,6 +38,7 @@
  * needs to sign requests to Lambda function URLs.
  */
 import type {
+  SiteFilter,
   BoardId,
   BoardResponse,
   ErrorCode,
@@ -46,7 +51,8 @@ import type {
   SubmitResponse,
 } from './api';
 
-export type { BoardEntry, BoardId, BoardResponse, MeResponse, MissionsResponse, RankInfo, SubmitResponse, Values } from './api';
+export type { BoardEntry, BoardId, BoardResponse, MeResponse, MissionSite, MissionsResponse, RankInfo, SiteFilter, SubmitResponse, Values } from './api';
+export { ALL_SITES } from './api';
 
 export const SECRET_KEY = 'sendit.leaderboard.secret.v1';
 
@@ -275,23 +281,23 @@ export function submitFlight(s: Omit<SubmitRequest, 'secret' | 'missionVersion'>
 }
 
 /** One page of a board, best first. */
-export function getBoard(missionId: string, missionVersion: string | number, board: BoardId, o: { limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<BoardResponse> {
+export function getBoard(missionId: string, missionVersion: string | number, board: BoardId, o: { site?: SiteFilter; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<BoardResponse> {
   return request<BoardResponse>({
     method: 'GET',
     path: '/board',
-    query: { mission: missionId, version: String(missionVersion), board, limit: o.limit, cursor: o.cursor },
+    query: { mission: missionId, version: String(missionVersion), board, site: o.site, limit: o.limit, cursor: o.cursor },
     signal: o.signal,
     timeoutMs: opts.readTimeoutMs ?? 10_000,
   });
 }
 
-/** This player's entry and rank on each board of a mission version (works far outside the top N). */
-export function getMyRanks(missionId: string, missionVersion: string | number, o: { signal?: AbortSignal } = {}): Promise<MeResponse> {
-  const body: MeRequest = { missionId, missionVersion: String(missionVersion), secret: playerSecret() };
+/** This player's entry and rank on each board of a mission version, for one site or all sites (default); works far outside the top N. */
+export function getMyRanks(missionId: string, missionVersion: string | number, o: { site?: SiteFilter; signal?: AbortSignal } = {}): Promise<MeResponse> {
+  const body: MeRequest = { missionId, missionVersion: String(missionVersion), secret: playerSecret(), ...(o.site !== undefined ? { site: o.site } : {}) };
   return request<MeResponse>({ method: 'POST', path: '/me', body, signal: o.signal, timeoutMs: opts.readTimeoutMs ?? 10_000 });
 }
 
 /** A stored plan, only if the deployment publishes plans (else LeaderboardError 'plans-not-public'). */
-export function getPlan(missionId: string, missionVersion: string | number, board: BoardId, pid: string, o: { signal?: AbortSignal } = {}): Promise<PlanResponse> {
-  return request<PlanResponse>({ method: 'GET', path: '/plan', query: { mission: missionId, version: String(missionVersion), board, pid }, signal: o.signal, timeoutMs: opts.readTimeoutMs ?? 10_000 });
+export function getPlan(missionId: string, missionVersion: string | number, board: BoardId, pid: string, o: { site?: SiteFilter; signal?: AbortSignal } = {}): Promise<PlanResponse> {
+  return request<PlanResponse>({ method: 'GET', path: '/plan', query: { mission: missionId, version: String(missionVersion), board, pid, site: o.site }, signal: o.signal, timeoutMs: opts.readTimeoutMs ?? 10_000 });
 }

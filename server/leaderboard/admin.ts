@@ -9,6 +9,11 @@
  *   node dist-server/leaderboard/admin.mjs hide   --mission <id> --version <v> --pid <pid>
  *   node dist-server/leaderboard/admin.mjs unhide --mission <id> --version <v> --pid <pid>
  *
+ * A player's entries for a mission version are a group (store.ts): the
+ * all-sites entry and one entry per launch site. show prints all of them;
+ * hide / unhide change every entry of the group in one transaction (a player
+ * is hidden from every site board and the all-sites boards together).
+ *
  * Environment: TABLE_NAME, AWS_REGION (default us-east-1), and credentials in
  * AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN, e.g.
  *   eval "$(aws configure export-credentials --profile <profile> --format env)"
@@ -16,8 +21,9 @@
 import { credentialsFromEnv, HttpDynamo } from './dynamo';
 import { createEngine } from './engine';
 import { readAsset } from './node-io';
+import { withHidden } from './group';
 import { reverify } from './reverify';
-import { Store } from './store';
+import { ALL, Store } from './store';
 
 const out = (s: string) => process.stdout.write(`${s}\n`);
 
@@ -68,15 +74,16 @@ async function main(): Promise<void> {
 
   const version = need(opt, 'version');
   const pid = need(opt, 'pid');
-  const e = await store.findByPid(missionId, version, pid);
-  if (!e) throw new Error('no such entry');
+  const g = await store.findByPid(missionId, version, pid);
+  if (!g) throw new Error('no such entry');
+  const entries = [g.all, ...g.sites.values()].filter((e) => e !== null);
   if (cmd === 'show') {
-    out(JSON.stringify({ ...e, plans: Object.keys(e.plans) }, null, 2));
+    for (const e of entries) out(JSON.stringify({ ...e, site: e.site === ALL ? 'all' : e.site, plans: Object.keys(e.plans) }, null, 2));
     return;
   }
   if (cmd === 'hide' || cmd === 'unhide') {
-    const ok = await store.putEntry({ ...e, hidden: cmd === 'hide', updated: Date.now() });
-    out(ok ? `${cmd === 'hide' ? 'hidden' : 'visible again'}: ${e.name}#${e.tag}` : 'entry changed meanwhile; run again');
+    const ok = await store.putEntries(withHidden(g, cmd === 'hide', Date.now()));
+    out(ok ? `${cmd === 'hide' ? 'hidden' : 'visible again'} on every board: ${entries[0].name}#${entries[0].tag} (${entries.length} entries)` : 'entry changed meanwhile; run again');
     return;
   }
   throw new Error(`unknown command ${cmd}`);

@@ -13,16 +13,18 @@
  *  7. rate limits, per player and per IP (one DynamoDB write per window)
  *  8. score cache: this exact plan under this physics and mission version already flown?
  *  9. replay + objectives within the wall-clock and step budgets (cached unless it timed out)
- * 10. update the player's entry: each board keeps its own best
+ * 10. update the player's group in one transaction: the flight's site entry and the
+ *     all-sites entry each keep their own best per board (group.ts)
  */
-import type { BoardEntry, BoardId, BoardResponse, ErrorCode, ErrorResponse, MeResponse, MissionsResponse, PlanResponse, RankInfo, SubmitResponse } from '../../src/leaderboard/api';
+import { ALL_SITES, type BoardEntry, type BoardId, type BoardResponse, type ErrorCode, type ErrorResponse, type MeResponse, type MissionsResponse, type PlanResponse, type RankInfo, type SubmitResponse } from '../../src/leaderboard/api';
 import type { Config } from './config';
-import { PlanError, SCORE_HIGHER_IS_BETTER, type Engine, type MissionInfo, type MissionPlan, type Verdict } from './engine';
+import { PlanError, SCORE_HIGHER_IS_BETTER, siteOfPlan, type Engine, type MissionInfo, type MissionPlan, type Verdict } from './engine';
+import { live, withFlight, type Change } from './group';
 import { sha256Hex } from './hash';
 import { ipHashOf, pidOf, playerHashOf, tagOf, validSecret } from './identity';
-import { better, BOARDS, sortKey, type Values } from './keys';
+import { BOARDS, type Values } from './keys';
 import { blocklistFilter, RESERVED_TERMS, sanitizeName, type NameFilter } from './names';
-import { boardPk, type CachedVerdict, type Entry, type Slot, type Store } from './store';
+import { ALL, boardPk, type CachedVerdict, type Entry, type Slot, type Store } from './store';
 
 export interface Reply {
   readonly status: number;
@@ -71,12 +73,13 @@ export function fail(error: ErrorCode, message: string, detail?: unknown, retryA
 const SUBMIT_FIELDS = ['missionId', 'missionVersion', 'plan', 'name', 'secret'] as const;
 const ME_FIELDS = ['missionId', 'missionVersion', 'secret'] as const;
 
-/** Exactly these string fields, nothing else. */
-function fields<K extends string>(body: unknown, keys: readonly K[]): Record<K, string> | Reply {
+/** Exactly these string fields (plus the optional ones), nothing else. */
+function fields<K extends string>(body: unknown, keys: readonly K[], optional: readonly string[] = []): Record<K, string> | Reply {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return fail('bad-request', 'body must be a JSON object');
   const o = body as Record<string, unknown>;
   for (const k of Object.keys(o)) {
-    if (!(keys as readonly string[]).includes(k)) return fail('unexpected-field', `unexpected field "${k.slice(0, 40)}": the server computes every result itself`);
+    if (!(keys as readonly string[]).includes(k) && !optional.includes(k)) return fail('unexpected-field', `unexpected field "${k.slice(0, 40)}": the server computes every result itself`);
+    if (optional.includes(k) && typeof o[k] !== 'string') return fail('bad-request', `field "${k}" must be a string`);
   }
   // Mission versions are strings on the wire ("1", as /missions returns them); a non-negative integer is accepted too.
   const v = o.missionVersion;
@@ -103,11 +106,20 @@ export class Service {
     return m;
   }
 
+  /** Board partition site key for a `site` filter: ALL for 'all' or absent, else an offered site id. */
+  private siteKey(m: MissionInfo, site: string | undefined): string | Reply {
+    if (site === undefined || site === '' || site === ALL_SITES) return ALL;
+    const s = m.sites.find((x) => x.id === site);
+    if (!s) return fail('bad-request', `site must be ${ALL_SITES} or a launch site of this mission (${m.sites.filter((x) => x.offered).map((x) => x.id).join(', ')})`);
+    if (!s.offered) return fail('bad-request', `launch site ${s.id} is not offered for mission ${m.id}: ${s.reason ?? ''}`);
+    return s.id;
+  }
+
   missions(): Reply {
     const e = this.d.engine;
     const body: MissionsResponse = {
       physics: { model: e.model, data: e.fingerprint },
-      missions: e.missions().map((m) => ({ id: m.id, version: m.version, title: m.title })),
+      missions: e.missions().map((m) => ({ id: m.id, version: m.version, title: m.title, sites: m.sites })),
       exposePlans: this.d.config.exposePlans,
     };
     return { status: 200, body, cache: 60 };
@@ -170,50 +182,30 @@ export class Service {
     if (!v.success) return fail('objectives-not-met', 'the flight does not complete the mission', { outcome: v.outcome, reason: v.reason, objectives: v.objectives, digest: v.digest });
 
     const values: Values = { score: v.score, deltaV: v.deltaV, missionTime: v.missionTime };
+    const site = siteOfPlan(plan);
     const tag = await tagOf(playerHash);
-    const improved: Record<BoardId, boolean> = { combined: false, deltaV: false, time: false };
-    let entry: Entry | null = null;
+    const id = { pid: pidOf(playerHash), name: name.name, tag };
+    let change: Change | null = null;
     for (let attempt = 0; attempt < 5; attempt++) {
-      const old = await store.getEntry(m.id, m.version, playerHash);
-      const slots = { ...(old?.slots ?? {}) };
-      const plans = { ...(old?.plans ?? {}) };
-      for (const b of BOARDS) {
-        const cur = slots[b];
-        const replace = !cur || cur.status !== 'valid' || cur.physics !== engine.physicsVersion || better(b, values, cur, SCORE_HIGHER_IS_BETTER);
-        improved[b] = replace;
-        if (replace) {
-          slots[b] = { ...values, at: now, digest: v.digest, planHash, physics: engine.physicsVersion, status: 'valid', key: sortKey(b, values, now, playerHash, SCORE_HIGHER_IS_BETTER) };
-          plans[b] = f.plan;
-        }
-      }
-      const next: Entry = {
-        mission: m.id,
-        version: m.version,
-        playerHash,
-        pid: pidOf(playerHash),
-        name: name.name,
-        tag,
-        hidden: old?.hidden ?? false,
-        created: old?.created ?? now,
-        updated: now,
-        rev: old?.rev ?? 0,
-        slots,
-        plans,
-      };
-      if (await store.putEntry(next)) {
-        entry = { ...next, rev: next.rev + 1 };
+      const g = await store.getGroup(m.id, m.version, playerHash);
+      const c = withFlight(g, { values, at: now, digest: v.digest, planHash, plan: f.plan, site }, id, engine.physicsVersion, now, SCORE_HIGHER_IS_BETTER);
+      if (await store.putEntries(c.writes)) {
+        change = c;
         break;
       }
     }
-    if (!entry) return fail('server-error', 'too many concurrent updates to this entry; try again');
+    if (!change) return fail('server-error', 'too many concurrent updates to this entry; try again');
 
     const res: SubmitResponse = {
       mission: m.id,
       version: m.version,
+      site,
       result: { ...values, digest: v.digest },
-      improved,
-      player: { name: entry.name, tag, pid: entry.pid },
-      ranks: await this.ranksOf(entry),
+      improved: change.improvedAll,
+      player: { name: change.all.name, tag, pid: change.all.pid },
+      ranks: await this.ranksOf(change.all),
+      siteImproved: change.improvedSite,
+      siteRanks: await this.ranksOf(change.site),
     };
     return { status: 200, body: res };
   }
@@ -224,9 +216,9 @@ export class Service {
     const physics = this.d.engine.physicsVersion;
     for (const b of BOARDS) {
       const s = e.slots[b];
-      if (!s || s.status !== 'valid' || s.physics !== physics) continue;
-      const n = await this.d.store.countAbove(b, boardPk(e.mission, e.version, physics), s.key, this.d.config.maxRankCount);
-      out[b] = { ...valuesOf(s), submittedAt: iso(s.at), rank: n === null ? null : n + 1, ...(n === null ? { beyond: this.d.config.maxRankCount } : {}) };
+      if (!live(s, physics) || s.site === undefined) continue;
+      const n = await this.d.store.countAbove(b, boardPk(e.mission, e.version, physics, e.site), s.key, this.d.config.maxRankCount);
+      out[b] = { ...valuesOf(s), submittedAt: iso(s.at), site: s.site ?? '', rank: n === null ? null : n + 1, ...(n === null ? { beyond: this.d.config.maxRankCount } : {}) };
     }
     return out;
   }
@@ -234,22 +226,28 @@ export class Service {
   // ---------------------------------------------------------------------- me
 
   async me(body: unknown, ip: string): Promise<Reply> {
-    const f = fields(body, ME_FIELDS);
+    const f = fields(body, ME_FIELDS, ['site']);
     if (isReply(f)) return f;
     if (!validSecret(f.secret)) return fail('bad-secret', 'secret must be 43-64 base64url characters');
     const m = this.missionAt(f.missionId, f.missionVersion);
     if (isReply(m)) return m;
+    const siteRaw = (f as Record<string, string | undefined>).site;
+    const site = this.siteKey(m, siteRaw);
+    if (isReply(site)) return site;
     // Own-rank counting costs reads proportional to the rank: bounded per address.
     const now = this.now();
     const ipHash = await ipHashOf(ip, this.d.config.ipSalt, now);
     for (const [limit, win] of this.d.config.readLimits) {
       if (!(await this.d.store.hit(`me#${ipHash}`, limit, win, now))) return fail('rate-limited', `at most ${limit} rank lookups per ${win} s from one address`, undefined, win - (Math.floor(now / 1000) % win));
     }
-    const e = await this.d.store.getEntry(m.id, m.version, await playerHashOf(f.secret));
+    const g = await this.d.store.getGroup(m.id, m.version, await playerHashOf(f.secret));
+    const e = site === ALL ? g.all : (g.sites.get(site) ?? null);
+    const p = g.all ?? e;
     const res: MeResponse = {
       mission: m.id,
       version: m.version,
-      player: e ? { name: e.name, tag: e.tag, pid: e.pid } : null,
+      site: site === ALL ? ALL_SITES : site,
+      player: p ? { name: p.name, tag: p.tag, pid: p.pid } : null,
       ranks: e ? await this.ranksOf(e) : { combined: null, deltaV: null, time: null },
     };
     return { status: 200, body: res };
@@ -269,12 +267,14 @@ export class Service {
       after = decodeCursor(q.cursor);
       if (!after) return fail('bad-request', 'bad cursor');
     }
+    const site = this.siteKey(m, q.site);
+    if (isReply(site)) return site;
     const b = board as BoardId;
-    const rows = await this.d.store.board(b, boardPk(m.id, m.version, this.d.engine.physicsVersion), limit, after?.k);
+    const rows = await this.d.store.board(b, boardPk(m.id, m.version, this.d.engine.physicsVersion, site), limit, after?.k);
     const base = after?.r ?? 0;
-    const entries: BoardEntry[] = rows.map((r, i) => ({ rank: base + i + 1, pid: r.pid, name: r.name, tag: r.tag, score: r.values.score, deltaV: r.values.deltaV, missionTime: r.values.missionTime, submittedAt: iso(r.values.at) }));
+    const entries: BoardEntry[] = rows.map((r, i) => ({ rank: base + i + 1, pid: r.pid, name: r.name, tag: r.tag, score: r.values.score, deltaV: r.values.deltaV, missionTime: r.values.missionTime, submittedAt: iso(r.values.at), site: r.site }));
     const last = rows[rows.length - 1];
-    const res: BoardResponse = { mission: m.id, version: m.version, board: b, entries, next: rows.length === limit && last ? encodeCursor(last.key, base + rows.length) : null };
+    const res: BoardResponse = { mission: m.id, version: m.version, board: b, site: site === ALL ? ALL_SITES : site, entries, next: rows.length === limit && last ? encodeCursor(last.key, base + rows.length) : null };
     return { status: 200, body: res, cache: 10 };
   }
 
@@ -287,11 +287,14 @@ export class Service {
     const board = (q.board ?? 'combined') as BoardId;
     if (!BOARDS.includes(board)) return fail('bad-request', `board must be one of ${BOARDS.join(', ')}`);
     if (!/^[0-9a-f]{16}$/.test(q.pid ?? '')) return fail('bad-request', 'pid must be 16 hex digits');
-    const e = await this.d.store.findByPid(m.id, m.version, q.pid!);
+    const site = this.siteKey(m, q.site);
+    if (isReply(site)) return site;
+    const g = await this.d.store.findByPid(m.id, m.version, q.pid!);
+    const e = g ? (site === ALL ? g.all : (g.sites.get(site) ?? null)) : null;
     const s = e?.slots[board];
     const plan = e?.plans[board];
-    if (!e || e.hidden || !s || s.status !== 'valid' || s.physics !== this.d.engine.physicsVersion || !plan) return fail('not-found', 'no such entry');
-    const res: PlanResponse = { pid: e.pid, board, plan };
+    if (!e || e.hidden || !live(s, this.d.engine.physicsVersion) || !plan) return fail('not-found', 'no such entry');
+    const res: PlanResponse = { pid: e.pid, board, site: site === ALL ? ALL_SITES : site, plan };
     return { status: 200, body: res, cache: 60 };
   }
 }

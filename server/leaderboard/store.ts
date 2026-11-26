@@ -3,16 +3,30 @@
  *
  * TABLE  pk (S), sk (S); TTL attribute `expiresAt` (epoch seconds).
  *
- *  Entry, one per player per mission version:
- *    pk = E#<mission>#<version>   sk = P#<playerHash>
+ *  Entries: a player's GROUP per mission version, all under one partition
+ *  pk = E#<mission>#<version>, sorted together by sk:
+ *    sk = P#<playerHash>           the ALL-SITES entry (site '*'): on each board,
+ *                                  the player's best over every launch site
+ *    sk = P#<playerHash>#<site>    one SITE entry per launch site flown: on each
+ *                                  board, the player's best from that site
+ *  Every entry item carries
  *    name, tag, pid, rev (optimistic-concurrency counter), hidden, created, updated
- *    c / d / t: the player's best result on the combined / delta-v / time board
- *       { score, deltaV, missionTime, at (ms), digest, planHash, physics, status, reason? }
+ *    c / d / t: the result on the combined / delta-v / time board
+ *       { score, deltaV, missionTime, at (ms), digest, planHash, physics, site, status, reason? }
+ *       (`site`: where the flight launched; on the all-sites entry, the site the best came from)
  *    cPlan / dPlan / tPlan: the encoded plan of that result (for re-verification)
  *    cPk, cSk, cV / dPk, dSk, dV / tPk, tSk, tV: GSI keys and a compact copy of
- *       the slot's values ("score|deltaV|missionTime|at"), present only while
+ *       the slot's values ("score|deltaV|missionTime|at|site"), present only while
  *       that slot is valid and the entry is not hidden (sparse indexes)
- *       xPk = <mission>#<version>#<physicsVersion>, xSk = keys.ts sortKey
+ *       xPk = <mission>#<version>#<physicsVersion>#<site or *>, xSk = keys.ts sortKey
+ *  So each board partition holds each player at most once: a site partition
+ *  holds site entries, the '*' partition holds all-sites entries.
+ *
+ *  INVARIANT (kept by every writer, in one transaction per group): the
+ *  all-sites slot of a board is the best valid current-physics slot among the
+ *  player's site entries on that board (ties: the earlier submission), and
+ *  `hidden` is the same on every item of the group. Every group write puts
+ *  the all-sites item with its rev condition, so it serialises the group.
  *
  *  Score cache, one per (physics version, mission version, exact plan):
  *    pk = S#<sha256>  sk = '-'   verdict fields; expiresAt = +90 days
@@ -32,6 +46,9 @@
 import { DynamoError, marshalItem, unmarshalItem, type DynamoApi, type Item, type Plain } from './dynamo';
 import { BOARDS, SLOT, type BoardId } from './keys';
 
+/** Site key of the all-sites entry and board partition. */
+export const ALL = '*';
+
 export interface Slot {
   readonly score: number;
   readonly deltaV: number;
@@ -43,6 +60,8 @@ export interface Slot {
   readonly planHash: string;
   /** Physics version this result was verified under. */
   readonly physics: string;
+  /** Launch site of the flight (absent only on entries written before sites existed). */
+  readonly site?: string;
   readonly status: 'valid' | 'invalid';
   readonly reason?: string;
   /** Precomputed board sort key. */
@@ -53,6 +72,8 @@ export interface Entry {
   readonly mission: string;
   readonly version: string;
   readonly playerHash: string;
+  /** Launch site id, or ALL for the all-sites entry. */
+  readonly site: string;
   readonly pid: string;
   readonly name: string;
   readonly tag: string;
@@ -65,10 +86,21 @@ export interface Entry {
   readonly plans: Partial<Record<BoardId, string>>;
 }
 
+/** A player's entries for one mission version. */
+export interface Group {
+  readonly mission: string;
+  readonly version: string;
+  readonly playerHash: string;
+  readonly all: Entry | null;
+  /** Site entries by site id. */
+  readonly sites: ReadonlyMap<string, Entry>;
+}
+
 export interface BoardRow {
   readonly pid: string;
   readonly name: string;
   readonly tag: string;
+  readonly site: string;
   readonly values: { readonly score: number; readonly deltaV: number; readonly missionTime: number; readonly at: number };
   readonly key: string;
 }
@@ -91,9 +123,22 @@ export function entryPk(mission: string, version: string): string {
   return `E#${mission}#${version}`;
 }
 
-export function boardPk(mission: string, version: string, physics: string): string {
-  return `${mission}#${version}#${physics}`;
+export function entrySk(playerHash: string, site: string): string {
+  return site === ALL ? `P#${playerHash}` : `P#${playerHash}#${site}`;
 }
+
+/** Board partition of a mission version under a physics version, for one site or ALL. */
+export function boardPk(mission: string, version: string, physics: string, site: string): string {
+  return `${mission}#${version}#${physics}#${site}`;
+}
+
+/** A fresh (unstored) entry. */
+export function newEntry(g: { mission: string; version: string; playerHash: string }, site: string, base: Pick<Entry, 'pid' | 'name' | 'tag' | 'hidden' | 'created'>): Entry {
+  return { mission: g.mission, version: g.version, playerHash: g.playerHash, site, ...base, updated: base.created, rev: 0, slots: {}, plans: {} };
+}
+
+/** Most items one group write may touch (DynamoDB transactions take up to 100). */
+const MAX_GROUP_WRITE = 100;
 
 export class Store {
   constructor(private readonly db: DynamoApi, private readonly table: string) {}
@@ -141,35 +186,40 @@ export class Store {
 
   // ------------------------------------------------------------------ entries
 
-  async getEntry(mission: string, version: string, playerHash: string): Promise<Entry | null> {
-    const out = await this.db.send('GetItem', {
-      TableName: this.table,
-      Key: { pk: { S: entryPk(mission, version) }, sk: { S: `P#${playerHash}` } },
-      ConsistentRead: true,
-    });
-    return out.Item ? entryOf(out.Item as Item) : null;
+  /** A player's group (all-sites entry and site entries): one strongly consistent Query. */
+  async getGroup(mission: string, version: string, playerHash: string): Promise<Group> {
+    const items = await this.queryAll(entryPk(mission, version), `P#${playerHash}`, true);
+    return groupOf(mission, version, playerHash, items.map(entryOf));
   }
 
-  /** Write an entry if its stored rev is still `entry.rev` (or it does not exist and rev is 0). Returns false on a lost race. */
-  async putEntry(entry: Entry): Promise<boolean> {
-    const item = itemOf({ ...entry, rev: entry.rev + 1 });
+  /**
+   * Write the changed entries of one group atomically, each only if its
+   * stored rev is still `entry.rev` (or it does not exist and rev is 0).
+   * One entry: a conditional PutItem; more: one TransactWriteItems. Returns
+   * false on a lost race (nothing written).
+   */
+  async putEntries(entries: readonly Entry[]): Promise<boolean> {
+    if (entries.length === 0) return true;
+    if (entries.length > MAX_GROUP_WRITE) throw new Error('group write too large');
+    const puts = entries.map((e) => ({ TableName: this.table, Item: itemOf({ ...e, rev: e.rev + 1 }), ...revCondition(e.rev) }));
     try {
-      await this.db.send('PutItem', {
-        TableName: this.table,
-        Item: item,
-        ConditionExpression: entry.rev === 0 ? 'attribute_not_exists(#pk)' : '#rev = :rev',
-        ExpressionAttributeNames: entry.rev === 0 ? { '#pk': 'pk' } : { '#rev': 'rev' },
-        ...(entry.rev === 0 ? {} : { ExpressionAttributeValues: { ':rev': { N: String(entry.rev) } } }),
-      });
+      if (puts.length === 1) await this.db.send('PutItem', puts[0]);
+      else await this.db.send('TransactWriteItems', { TransactItems: puts.map((p) => ({ Put: p })) });
       return true;
     } catch (e) {
-      if (e instanceof DynamoError && e.code === 'ConditionalCheckFailedException') return false;
+      if (e instanceof DynamoError && (e.code === 'ConditionalCheckFailedException' || e.code === 'TransactionCanceledException' || e.code === 'TransactionConflictException')) return false;
       throw e;
     }
   }
 
-  /** All entries of a mission version (admin / re-verification), page by page. */
-  async *entries(mission: string, version: string): AsyncGenerator<Entry> {
+  /** One entry (kept for simple callers). */
+  async putEntry(entry: Entry): Promise<boolean> {
+    return this.putEntries([entry]);
+  }
+
+  /** All groups of a mission version (admin / re-verification), streamed page by page. */
+  async *groups(mission: string, version: string): AsyncGenerator<Group> {
+    let cur: Entry[] = [];
     let start: unknown;
     do {
       const out = await this.db.send('Query', {
@@ -180,48 +230,76 @@ export class Store {
         ConsistentRead: true,
         ...(start ? { ExclusiveStartKey: start } : {}),
       });
-      for (const i of (out.Items as Item[]) ?? []) yield entryOf(i);
+      for (const i of (out.Items as Item[]) ?? []) {
+        const e = entryOf(i);
+        if (cur.length > 0 && cur[0].playerHash !== e.playerHash) {
+          yield groupOf(mission, version, cur[0].playerHash, cur);
+          cur = [];
+        }
+        cur.push(e);
+      }
       start = out.LastEvaluatedKey;
     } while (start);
+    if (cur.length > 0) yield groupOf(mission, version, cur[0].playerHash, cur);
   }
 
-  /** Entry by public id (16 hex digits of the player hash). */
-  async findByPid(mission: string, version: string, pid: string): Promise<Entry | null> {
-    const out = await this.db.send('Query', {
-      TableName: this.table,
-      KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :p)',
-      ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
-      ExpressionAttributeValues: { ':pk': { S: entryPk(mission, version) }, ':p': { S: `P#${pid}` } },
-      Limit: 2,
-    });
-    const items = (out.Items as Item[]) ?? [];
-    return items.length === 1 ? entryOf(items[0]) : null;
+  /** Group by public id (16 hex digits of the player hash); null if none or ambiguous. */
+  async findByPid(mission: string, version: string, pid: string): Promise<Group | null> {
+    const items = (await this.queryAll(entryPk(mission, version), `P#${pid}`, false)).map(entryOf);
+    if (items.length === 0 || items.some((e) => e.playerHash !== items[0].playerHash)) return null;
+    return groupOf(mission, version, items[0].playerHash, items);
+  }
+
+  private async queryAll(pk: string, prefix: string, consistent: boolean): Promise<Item[]> {
+    const items: Item[] = [];
+    let start: unknown;
+    do {
+      const out = await this.db.send('Query', {
+        TableName: this.table,
+        KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :p)',
+        ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
+        ExpressionAttributeValues: { ':pk': { S: pk }, ':p': { S: prefix } },
+        ...(consistent ? { ConsistentRead: true } : {}),
+        ...(start ? { ExclusiveStartKey: start } : {}),
+      });
+      items.push(...((out.Items as Item[]) ?? []));
+      start = out.LastEvaluatedKey;
+    } while (start);
+    return items;
   }
 
   // ------------------------------------------------------------------- boards
 
-  /** Top rows of a board after `afterKey` (exclusive), best first. Eventually consistent. */
+  /** Top rows of a board partition after `afterKey` (exclusive), best first, up to `limit` (fewer only at the end). Eventually consistent. */
   async board(board: BoardId, pk: string, limit: number, afterKey?: string): Promise<BoardRow[]> {
     const s = SLOT[board];
-    const out = await this.db.send('Query', {
-      TableName: this.table,
-      IndexName: INDEX[board],
-      KeyConditionExpression: afterKey ? '#pk = :pk AND #sk > :after' : '#pk = :pk',
-      // DynamoDB rejects unused names / values: #sk only with a cursor.
-      ExpressionAttributeNames: { '#pk': `${s}Pk`, ...(afterKey ? { '#sk': `${s}Sk` } : {}) },
-      ExpressionAttributeValues: { ':pk': { S: pk }, ...(afterKey ? { ':after': { S: afterKey } } : {}) },
-      ScanIndexForward: true,
-      Limit: limit,
-    });
-    return ((out.Items as Item[]) ?? []).map((i) => {
-      const o = unmarshalItem(i);
-      const [score, deltaV, missionTime, at] = String(o[`${s}V`]).split('|').map(Number);
-      return { pid: String(o.pid), name: String(o.name), tag: String(o.tag), values: { score, deltaV, missionTime, at }, key: String(o[`${s}Sk`]) };
-    });
+    const rows: BoardRow[] = [];
+    let start: unknown;
+    do {
+      const out = await this.db.send('Query', {
+        TableName: this.table,
+        IndexName: INDEX[board],
+        KeyConditionExpression: afterKey ? '#pk = :pk AND #sk > :after' : '#pk = :pk',
+        // DynamoDB rejects unused names / values: #sk only with a cursor.
+        ExpressionAttributeNames: { '#pk': `${s}Pk`, ...(afterKey ? { '#sk': `${s}Sk` } : {}) },
+        ExpressionAttributeValues: { ':pk': { S: pk }, ...(afterKey ? { ':after': { S: afterKey } } : {}) },
+        ScanIndexForward: true,
+        Limit: limit - rows.length,
+        ...(start ? { ExclusiveStartKey: start } : {}),
+      });
+      for (const i of (out.Items as Item[]) ?? []) {
+        const o = unmarshalItem(i);
+        const [score, deltaV, missionTime, at, site = ''] = String(o[`${s}V`]).split('|');
+        rows.push({ pid: String(o.pid), name: String(o.name), tag: String(o.tag), site, values: { score: Number(score), deltaV: Number(deltaV), missionTime: Number(missionTime), at: Number(at) }, key: String(o[`${s}Sk`]) });
+      }
+      // A page can end early (1 MB): continue until `limit` rows or the end of the partition.
+      start = out.LastEvaluatedKey;
+    } while (start && rows.length < limit);
+    return rows;
   }
 
   /**
-   * Number of rows ranked above `key` on a board (so rank = count + 1),
+   * Number of rows ranked above `key` on a board partition (so rank = count + 1),
    * counting at most `max` (null beyond). A COUNT query over the rows above:
    * its read cost grows with the rank (see infra/leaderboard.yaml notes).
    */
@@ -247,12 +325,29 @@ export class Store {
   }
 }
 
+function revCondition(rev: number): Record<string, unknown> {
+  return rev === 0
+    ? { ConditionExpression: 'attribute_not_exists(#pk)', ExpressionAttributeNames: { '#pk': 'pk' } }
+    : { ConditionExpression: '#rev = :rev', ExpressionAttributeNames: { '#rev': 'rev' }, ExpressionAttributeValues: { ':rev': { N: String(rev) } } };
+}
+
+function groupOf(mission: string, version: string, playerHash: string, entries: readonly Entry[]): Group {
+  let all: Entry | null = null;
+  const sites = new Map<string, Entry>();
+  for (const e of entries) {
+    if (e.playerHash !== playerHash) continue;
+    if (e.site === ALL) all = e;
+    else sites.set(e.site, e);
+  }
+  return { mission, version, playerHash, all, sites };
+}
+
 // ------------------------------------------------------------- item mapping
 
 function itemOf(e: Entry): Item {
   const o: Record<string, Plain | undefined> = {
     pk: entryPk(e.mission, e.version),
-    sk: `P#${e.playerHash}`,
+    sk: entrySk(e.playerHash, e.site),
     pid: e.pid,
     name: e.name,
     tag: e.tag,
@@ -268,10 +363,10 @@ function itemOf(e: Entry): Item {
     o[s] = { ...slot } as unknown as Plain;
     const plan = e.plans[b];
     if (plan !== undefined) o[`${s}Plan`] = plan;
-    if (slot.status === 'valid' && !e.hidden) {
-      o[`${s}Pk`] = boardPk(e.mission, e.version, slot.physics);
+    if (slot.status === 'valid' && !e.hidden && slot.site !== undefined) {
+      o[`${s}Pk`] = boardPk(e.mission, e.version, slot.physics, e.site);
       o[`${s}Sk`] = slot.key;
-      o[`${s}V`] = `${slot.score}|${slot.deltaV}|${slot.missionTime}|${slot.at}`;
+      o[`${s}V`] = `${slot.score}|${slot.deltaV}|${slot.missionTime}|${slot.at}|${slot.site}`;
     }
   }
   return marshalItem(o);
@@ -280,6 +375,7 @@ function itemOf(e: Entry): Item {
 function entryOf(i: Item): Entry {
   const o = unmarshalItem(i);
   const [, mission, version] = /^E#(.+)#([^#]+)$/.exec(String(o.pk)) ?? [];
+  const [, playerHash, site] = /^P#([0-9a-f]+)(?:#(.+))?$/.exec(String(o.sk)) ?? [];
   const slots: Partial<Record<BoardId, Slot>> = {};
   const plans: Partial<Record<BoardId, string>> = {};
   for (const b of BOARDS) {
@@ -290,7 +386,8 @@ function entryOf(i: Item): Entry {
   return {
     mission,
     version,
-    playerHash: String(o.sk).slice(2),
+    playerHash,
+    site: site ?? ALL,
     pid: String(o.pid),
     name: String(o.name),
     tag: String(o.tag),
@@ -302,4 +399,3 @@ function entryOf(i: Item): Entry {
     plans,
   };
 }
-

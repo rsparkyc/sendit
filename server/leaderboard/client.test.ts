@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as client from '../../src/leaderboard/client';
-import { encode, Harness, plan, TEST_MISSION } from './test-kit';
+import { CONFIG, encode, Harness, plan, SITES_MISSION, TEST_MISSION } from './test-kit';
 
 const V = String(TEST_MISSION.version);
 
@@ -60,6 +60,24 @@ describe('leaderboard client', () => {
     expect(me.player?.name).toBe('Ada');
     expect(me.ranks.deltaV?.rank).toBe(1);
     expect(store.m.get(client.SECRET_KEY)).toBe(secret); // same identity
+  });
+
+  it('filters boards, own ranks and plans by launch site', async () => {
+    const h = new Harness({ ...CONFIG, exposePlans: true }, { mission: SITES_MISSION });
+    const w = wire(h);
+    client.configure({ fetch: w.f });
+    const SV = String(SITES_MISSION.version);
+    const r = await client.submitFlight({ missionId: SITES_MISSION.id, missionVersion: SV, plan: encode(plan(h.engine, { site: 'cape-canaveral', burns: [100] })), name: 'Ada' });
+    expect(r).toMatchObject({ site: 'cape-canaveral', siteRanks: { deltaV: { rank: 1, site: 'cape-canaveral' } }, ranks: { deltaV: { rank: 1, site: 'cape-canaveral' } } });
+    await client.submitFlight({ missionId: SITES_MISSION.id, missionVersion: SV, plan: encode(plan(h.engine, { site: 'kourou', burns: [90] })), name: 'Ada' });
+    const cape = await client.getBoard(SITES_MISSION.id, SV, 'deltaV', { site: 'cape-canaveral' });
+    expect(cape).toMatchObject({ site: 'cape-canaveral', entries: [{ rank: 1, site: 'cape-canaveral', deltaV: 1000 }] });
+    expect(w.seen[w.seen.length - 1].url).toContain('site=cape-canaveral');
+    expect((await client.getBoard(SITES_MISSION.id, SV, 'deltaV', { site: client.ALL_SITES })).entries).toMatchObject([{ site: 'kourou', deltaV: 900 }]);
+    expect((await client.getMyRanks(SITES_MISSION.id, SV, { site: 'cape-canaveral' })).ranks.deltaV).toMatchObject({ rank: 1, deltaV: 1000 });
+    expect((await client.getMyRanks(SITES_MISSION.id, SV)).ranks.deltaV).toMatchObject({ site: 'kourou', deltaV: 900 });
+    const pid = r.player.pid;
+    expect((await client.getPlan(SITES_MISSION.id, SV, 'deltaV', pid, { site: 'cape-canaveral' })).site).toBe('cape-canaveral');
   });
 
   it('reports version mismatches as such, and checks compatibility up front', async () => {

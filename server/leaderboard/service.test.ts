@@ -5,8 +5,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createEngine, type Engine } from './engine';
+import { withHidden } from './group';
 import { reverify } from './reverify';
-import { CONFIG, CRAFT, encode, fakeFly, Harness, plan, secret, TEST_MISSION } from './test-kit';
+import { CONFIG, CRAFT, encode, fakeFly, Harness, plan, secret, SITES_MISSION, TEST_MISSION } from './test-kit';
 
 const DAY = 86400;
 const V = String(TEST_MISSION.version);
@@ -186,7 +187,7 @@ describe('boards', () => {
     const b = (await h.board('deltaV')).body;
     expect(b.entries[0]).toMatchObject({ rank: 1, deltaV: 1000, missionTime: 5 * DAY });
     expect(b.entries[0].submittedAt).toBe(new Date(Date.UTC(2026, 10, 26, 12)).toISOString());
-    expect(Object.keys(b.entries[0]).sort()).toEqual(['deltaV', 'missionTime', 'name', 'pid', 'rank', 'score', 'submittedAt', 'tag']);
+    expect(Object.keys(b.entries[0]).sort()).toEqual(['deltaV', 'missionTime', 'name', 'pid', 'rank', 'score', 'site', 'submittedAt', 'tag']);
     expect((await h.board('combined')).headers['cache-control']).toBe('public, max-age=10');
   });
 
@@ -232,8 +233,8 @@ describe('boards', () => {
     await h.submit(1, plan(h.engine, { burns: [100] }));
     await h.submit(2, plan(h.engine, { burns: [200] }));
     const pid = (await h.me(1)).body.player.pid;
-    const e = (await h.store.findByPid(TEST_MISSION.id, V, pid))!;
-    expect(await h.store.putEntry({ ...e, hidden: true })).toBe(true);
+    const g = (await h.store.findByPid(TEST_MISSION.id, V, pid))!;
+    expect(await h.store.putEntries(withHidden(g, true, h.clock))).toBe(true);
     expect((await h.board('combined')).body.entries.map((x: { name: string }) => x.name)).toEqual(['Player 2']);
     await h.submit(1, plan(h.engine, { burns: [50] }));
     expect((await h.board('deltaV')).body.entries.map((x: { name: string }) => x.name)).toEqual(['Player 2']);
@@ -251,7 +252,7 @@ describe('boards', () => {
     expect(r.body.error).toBe('plans-not-public');
     h.setEngine(h.engine, { ...CONFIG, exposePlans: true });
     r = await h.call('GET', '/api/leaderboard/plan', { query: q });
-    expect(r.body).toEqual({ pid, board: 'deltaV', plan: p });
+    expect(r.body).toEqual({ pid, board: 'deltaV', site: 'all', plan: p });
     expect(JSON.stringify((await h.board('deltaV')).body)).not.toContain(p);
   });
 });
@@ -303,7 +304,8 @@ describe('routing', () => {
   it('serves the mission list with the physics version, and splits routes between the two functions', async () => {
     const h = new Harness();
     const r = await h.call('GET', '/api/leaderboard/missions');
-    expect(r.body).toEqual({ physics: { model: h.engine.model, data: h.engine.fingerprint }, missions: [{ id: TEST_MISSION.id, version: V, title: TEST_MISSION.title }], exposePlans: false });
+    expect(r.body).toEqual({ physics: { model: h.engine.model, data: h.engine.fingerprint }, missions: [{ id: TEST_MISSION.id, version: V, title: TEST_MISSION.title, sites: h.engine.mission(TEST_MISSION.id)!.sites }], exposePlans: false });
+    expect(r.body.missions[0].sites.filter((x: { offered: boolean }) => x.offered).map((x: { id: string }) => x.id)).toEqual(['kourou']);
     expect((await h.call('GET', '/api/leaderboard/missions', { role: 'submit' })).status).toBe(404);
     expect((await h.call('POST', '/api/leaderboard/submit', { role: 'read', body: {} })).status).toBe(404);
     expect((await h.call('GET', '/api/leaderboard/submit')).status).toBe(405);
@@ -344,7 +346,9 @@ describe('re-verification', () => {
     const b = (await h.board('deltaV')).body.entries;
     expect(b.map((x: { name: string; deltaV: number }) => `${x.name}:${x.deltaV}`)).toEqual(['Player 1:1000', 'Player 3:3005']);
     const pid2 = (await h.me(2)).body.player.pid;
-    const e = (await h.store.findByPid(TEST_MISSION.id, V, pid2))!;
+    const g2 = (await h.store.findByPid(TEST_MISSION.id, V, pid2))!;
+    expect(g2.all!.slots.combined).toMatchObject({ status: 'invalid' });
+    const e = g2.sites.get('kourou')!;
     expect(e.slots.combined).toMatchObject({ status: 'invalid' });
     expect(e.slots.combined!.reason).toMatch(/objectives not met/);
     // Idempotent: a second run changes nothing.
@@ -363,5 +367,178 @@ describe('re-verification', () => {
     expect(r.body.entries.map((x: { name: string }) => x.name)).toEqual(['Player 1']);
     // The old version's board is gone from the API (version 3 is no longer current).
     expect((await h.board('deltaV')).body.error).toBe('mission-version');
+  });
+});
+
+describe('launch sites: per-site and all-sites boards', () => {
+  const SV = String(SITES_MISSION.version);
+  const fly = (site: string, dv: number, offset = 0) => (h: Harness) => plan(h.engine, { site, burns: [dv / 10], offset });
+  const rows = (r: { body: { entries: { name: string; site: string; deltaV: number; rank: number }[] } }) => r.body.entries.map((x) => `${x.rank}.${x.name}@${x.site}:${x.deltaV}`);
+
+  it('ranks each site board and the all-sites board; a player appears once per site and once overall', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    expect((await h.submit(1, fly('kourou', 1000)(h))).body).toMatchObject({ site: 'kourou', improved: { deltaV: true }, siteImproved: { deltaV: true } });
+    await h.submit(2, fly('cape-canaveral', 2000)(h));
+    await h.submit(3, fly('kourou', 1500)(h));
+    const two = (await h.submit(1, fly('cape-canaveral', 1200)(h))).body;
+    // Player 1's Cape flight is their Cape best but not their overall best.
+    expect(two).toMatchObject({ site: 'cape-canaveral', improved: { deltaV: false }, siteImproved: { deltaV: true } });
+    expect(two.ranks.deltaV).toMatchObject({ rank: 1, site: 'kourou', deltaV: 1000 });
+    expect(two.siteRanks.deltaV).toMatchObject({ rank: 1, site: 'cape-canaveral', deltaV: 1200 });
+
+    expect(rows(await h.board('deltaV', 20, undefined, 'kourou'))).toEqual(['1.Player 1@kourou:1000', '2.Player 3@kourou:1500']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'cape-canaveral'))).toEqual(['1.Player 1@cape-canaveral:1200', '2.Player 2@cape-canaveral:2000']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'equator'))).toEqual([]);
+    const all = await h.board('deltaV', 20, undefined, 'all');
+    expect(all.body.site).toBe('all');
+    expect(rows(all)).toEqual(['1.Player 1@kourou:1000', '2.Player 3@kourou:1500', '3.Player 2@cape-canaveral:2000']);
+    // No `site`: the all-sites board (old clients keep working).
+    expect(rows(await h.board('deltaV'))).toEqual(rows(all));
+    // Every board kind is filtered the same way.
+    for (const b of ['combined', 'time']) expect((await h.board(b, 20, undefined, 'cape-canaveral')).body.entries.map((x: { name: string }) => x.name).sort()).toEqual(['Player 1', 'Player 2']);
+  });
+
+  it('an improvement on one site leaves the other sites alone; a better flight elsewhere moves the all-sites best', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    await h.submit(1, fly('kourou', 1000)(h));
+    const kourouAt = (await h.board('deltaV', 20, undefined, 'kourou')).body.entries[0].submittedAt;
+    await h.submit(1, fly('cape-canaveral', 1300)(h));
+    h.clock += 60_000;
+    const better = (await h.submit(1, fly('cape-canaveral', 1100, 1)(h))).body;
+    expect(better).toMatchObject({ improved: { deltaV: false }, siteImproved: { deltaV: true } });
+    const k = (await h.board('deltaV', 20, undefined, 'kourou')).body.entries;
+    expect(k).toHaveLength(1);
+    expect(k[0]).toMatchObject({ deltaV: 1000, site: 'kourou', submittedAt: kourouAt });
+    expect(rows(await h.board('deltaV', 20, undefined, 'cape-canaveral'))).toEqual(['1.Player 1@cape-canaveral:1100']);
+    // A worse flight from a site changes nothing at all (no write).
+    const writes = h.db.calls.filter((c) => c.op === 'PutItem' || c.op === 'TransactWriteItems').length;
+    expect((await h.submit(1, fly('kourou', 1400, 2)(h))).body).toMatchObject({ improved: { deltaV: false }, siteImproved: { deltaV: false } });
+    expect(h.db.calls.filter((c) => c.op === 'TransactWriteItems').length + h.db.calls.filter((c) => c.op === 'PutItem').length - writes).toBe(1); // the score cache only
+    // The equator flight beats everything: the all-sites row switches site, the site boards keep theirs.
+    h.clock += 60_000;
+    expect((await h.submit(1, fly('equator', 800)(h))).body).toMatchObject({ improved: { deltaV: true }, siteImproved: { deltaV: true } });
+    expect(rows(await h.board('deltaV', 20, undefined, 'all'))).toEqual(['1.Player 1@equator:800']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'kourou'))).toEqual(['1.Player 1@kourou:1000']);
+    expect((await h.me(1)).body.ranks.deltaV).toMatchObject({ rank: 1, site: 'equator', deltaV: 800 });
+  });
+
+  it('own rank for a chosen site and for all sites', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    for (let i = 1; i <= 5; i++) await h.submit(i, fly(i % 2 ? 'kourou' : 'cape-canaveral', 1000 + 100 * i)(h));
+    await h.submit(5, fly('cape-canaveral', 1050)(h));
+    // Player 5: kourou 1500 (3rd of 1, 3, 5), cape 1050 (1st), all 1050 @ cape (1st).
+    const k = (await h.me(5, 'kourou')).body;
+    expect(k).toMatchObject({ site: 'kourou', player: { name: 'Player 5' } });
+    expect(k.ranks.deltaV).toMatchObject({ rank: 3, site: 'kourou', deltaV: 1500 });
+    expect((await h.me(5, 'cape-canaveral')).body.ranks.deltaV).toMatchObject({ rank: 1, deltaV: 1050 });
+    const a = (await h.me(5)).body;
+    expect(a.site).toBe('all');
+    expect(a.ranks.deltaV).toMatchObject({ rank: 1, site: 'cape-canaveral', deltaV: 1050 });
+    expect((await h.me(4, 'all')).body.ranks.deltaV).toMatchObject({ rank: 5, site: 'cape-canaveral', deltaV: 1400 });
+    // A site the player never flew from: a player, no ranks.
+    expect((await h.me(2, 'equator')).body).toMatchObject({ player: { name: 'Player 2' }, ranks: { combined: null, deltaV: null, time: null } });
+    // Bad site filters.
+    expect((await h.me(5, 'tanegashima')).status).toBe(400);
+    expect((await h.me(5, 'nowhere')).body.error).toBe('bad-request');
+  });
+
+  it('paginates site boards and the all-sites board with cursors', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION, pageSize: 2 });
+    for (let i = 1; i <= 7; i++) {
+      await h.submit(i, fly('kourou', 1000 + 10 * i)(h));
+      await h.submit(i, fly('equator', 2000 + 10 * i)(h));
+    }
+    for (const site of ['kourou', 'equator', 'all']) {
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const r = await h.board('deltaV', 3, cursor, site);
+        expect(r.status).toBe(200);
+        seen.push(...rows(r));
+        cursor = r.body.next ?? undefined;
+      } while (cursor);
+      expect(seen).toHaveLength(7);
+      expect(seen[0]).toBe(`1.Player 1@${site === 'equator' ? 'equator:2010' : 'kourou:1010'}`);
+      expect(seen[6]).toMatch(/^7\.Player 7@/);
+    }
+  });
+
+  it('refuses a flight from a site the mission does not offer, with the conformance reason, before flying it', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    const r = await h.submit(1, fly('tanegashima', 1000)(h));
+    expect(r.status).toBe(422);
+    expect(r.body.error).toBe('rule-violation');
+    expect(r.body.message).toMatch(/tanegashima not offered for this mission: test reason/);
+    expect(r.body.detail.issues.map((i: { code: string }) => i.code)).toEqual(['launch-site']);
+    expect(h.flights).toBe(0);
+    // Boards for that site do not exist either.
+    expect((await h.board('deltaV', 20, undefined, 'tanegashima')).body).toMatchObject({ error: 'bad-request' });
+    // The missions endpoint lists each site with its standing and reference values.
+    const ms = (await h.call('GET', '/api/leaderboard/missions')).body.missions[0].sites;
+    expect(ms.filter((s: { offered: boolean }) => s.offered).map((s: { id: string }) => s.id)).toEqual(['cape-canaveral', 'kourou', 'equator']);
+    expect(ms.find((s: { id: string }) => s.id === 'kourou')).toMatchObject({ offered: true, deltaV: 1000, maxDeltaV: 5000, name: expect.stringMatching(/Kourou/) });
+    expect(ms.find((s: { id: string }) => s.id === 'tanegashima')).toMatchObject({ offered: false, reason: 'test reason: no window from this site' });
+  });
+
+  it('hiding a player hides every site entry and the all-sites entry', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    await h.submit(1, fly('kourou', 1000)(h));
+    await h.submit(1, fly('cape-canaveral', 1000)(h));
+    await h.submit(2, fly('cape-canaveral', 1500)(h));
+    const g = (await h.store.findByPid(SITES_MISSION.id, SV, (await h.me(1)).body.player.pid))!;
+    expect([...g.sites.keys()].sort()).toEqual(['cape-canaveral', 'kourou']);
+    expect(await h.store.putEntries(withHidden(g, true, h.clock))).toBe(true);
+    for (const site of ['kourou', 'cape-canaveral', 'all']) expect((await h.board('deltaV', 20, undefined, site)).body.entries.map((x: { name: string }) => x.name)).toEqual(site === 'kourou' ? [] : ['Player 2']);
+    // Submitting again from a new site keeps the player hidden there too.
+    await h.submit(1, fly('equator', 500)(h));
+    expect((await h.board('deltaV', 20, undefined, 'equator')).body.entries).toEqual([]);
+    expect((await h.board('deltaV', 20, undefined, 'all')).body.entries.map((x: { name: string }) => x.name)).toEqual(['Player 2']);
+  });
+
+  it('a lost race on the group is retried and both flights count', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    await h.submit(1, fly('kourou', 1000)(h));
+    const [a, b] = await Promise.all([h.submit(1, fly('cape-canaveral', 900)(h)), h.submit(1, fly('equator', 800)(h))]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(rows(await h.board('deltaV', 20, undefined, 'all'))).toEqual(['1.Player 1@equator:800']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'cape-canaveral'))).toEqual(['1.Player 1@cape-canaveral:900']);
+  });
+
+  it('re-verification rebuilds site boards and recomputes the all-sites best from what still succeeds', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    await h.submit(1, fly('kourou', 1000)(h));
+    await h.submit(1, fly('equator', 800)(h));
+    await h.submit(2, fly('cape-canaveral', 900)(h));
+    // New physics: the equator plan (8 s burn... 80 s) no longer succeeds.
+    const fly2 = (p: Parameters<typeof fakeFly>[0], m: Parameters<typeof fakeFly>[1], o: Parameters<typeof fakeFly>[2]) => {
+      const v = fakeFly(p, m, o);
+      return p.start.kind === 'launch' && p.start.site === 'equator' ? { ...v, success: false } : v;
+    };
+    const fresh = createEngine({ catalogue: [SITES_MISSION], fly: fly2 });
+    const e2 = { ...fresh, fingerprint: 'feedf00d', physicsVersion: `${fresh.model}.feedf00d` };
+    h.setEngine(e2);
+    expect((await h.board('deltaV', 20, undefined, 'all')).body.entries).toEqual([]);
+    const s = await reverify({ engine: e2, store: h.store, mission: e2.mission(SITES_MISSION.id)! });
+    expect(s).toMatchObject({ entries: 2, plansFlown: 3, written: 2 });
+    expect(rows(await h.board('deltaV', 20, undefined, 'all'))).toEqual(['1.Player 2@cape-canaveral:900', '2.Player 1@kourou:1000']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'kourou'))).toEqual(['1.Player 1@kourou:1000']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'equator'))).toEqual([]);
+    const g = (await h.store.findByPid(SITES_MISSION.id, SV, (await h.me(1)).body.player.pid))!;
+    expect(g.sites.get('equator')!.slots.deltaV).toMatchObject({ status: 'invalid', reason: expect.stringMatching(/objectives not met/) });
+    expect(await reverify({ engine: e2, store: h.store, mission: e2.mission(SITES_MISSION.id)! })).toMatchObject({ unchanged: 2, written: 0 });
+  });
+
+  it('re-verification migrates entries stored before launch sites existed', async () => {
+    const h = new Harness(CONFIG, { mission: SITES_MISSION });
+    await h.submit(1, fly('cape-canaveral', 1000)(h));
+    // Rewrite player 1 as a pre-sites entry: one item, sk P#<hash>, slots without `site`.
+    const g = (await h.store.findByPid(SITES_MISSION.id, SV, (await h.me(1)).body.player.pid))!;
+    const legacy = { ...g.all!, slots: Object.fromEntries(Object.entries(g.all!.slots).map(([b, s]) => [b, { ...s!, site: undefined }])) };
+    for (const k of [...h.db.items.keys()]) if (k.includes('#cape-canaveral')) h.db.items.delete(k);
+    expect(await h.store.putEntry(legacy)).toBe(true);
+    expect((await h.board('deltaV', 20, undefined, 'all')).body.entries).toEqual([]);
+    expect(await reverify({ engine: h.engine, store: h.store, mission: h.engine.mission(SITES_MISSION.id)! })).toMatchObject({ entries: 1, written: 1 });
+    expect(rows(await h.board('deltaV', 20, undefined, 'all'))).toEqual(['1.Player 1@cape-canaveral:1000']);
+    expect(rows(await h.board('deltaV', 20, undefined, 'cape-canaveral'))).toEqual(['1.Player 1@cape-canaveral:1000']);
   });
 });

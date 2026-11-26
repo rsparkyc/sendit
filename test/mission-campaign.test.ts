@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import { CAMPAIGN } from '../src/mission/campaign';
 import { launchToParams } from '../src/mission/launch';
-import { checkPlanConformance, evaluate, initialMissionPlan, missionReplayOptions, PAR_SCORE, type CompleteMission } from '../src/mission/objectives';
+import { checkPlanConformance, evaluate, initialMissionPlan, missionForSite, missionReplayOptions, PAR_SCORE, type CompleteMission } from '../src/mission/objectives';
 import { decodePlan, encodePlan, makePlan, validatePlan, type MissionPlan, type PlanBurn } from '../src/mission/plan';
 import { replay } from '../src/mission/replay';
 import { SAMPLE_MISSIONS } from '../src/mission/samples';
@@ -75,7 +75,7 @@ describe('campaign definitions', () => {
     const isp = checkPlanConformance(m, { ...p, spacecraft: { ...p.spacecraft, engines: [{ thrust: 200e3, isp: 450.0000001 }] } });
     expect(isp.map((i) => [i.code, i.path])).toEqual([['spacecraft', 'spacecraft.engines[0].isp']]);
     const st = p.start.kind === 'launch' ? p.start : null;
-    expect(checkPlanConformance(m, { ...p, start: { ...st!, site: 'cape-canaveral' } }).map((i) => i.code)).toEqual(['launch-site']);
+    expect(checkPlanConformance(m, { ...p, start: { ...st!, site: 'nowhere' } }).map((i) => i.code)).toEqual(['launch-site']);
     const late = p.epoch + 90 * DAY;
     expect(checkPlanConformance(m, { ...p, epoch: late, start: { ...st!, params: [late, ...st!.params.slice(1)] } }).map((i) => i.code)).toEqual(['launch-window']);
     expect(checkPlanConformance(m, { ...p, duration: 8 * DAY }).map((i) => i.code)).toEqual(['duration']);
@@ -94,6 +94,7 @@ describe('campaign solutions (par)', () => {
       const plan = decodePlan(encodePlan(solutionPlan(m)));
       const r = replay(plan, world, missionReplayOptions(m));
       const ev = evaluate(m, r, world, plan.epoch, plan);
+      const s = SOLUTIONS[m.id];
       const detail = `${m.id}: ${r.outcome} ${r.reason}; ` + ev.objectives.map((o) => `${o.ok ? 'ok' : 'NO'} ${o.objective.kind}: ${o.detail}`).join('; ');
       expect(ev.success, detail).toBe(true);
       expect(ev.ruleViolations).toEqual([]);
@@ -102,9 +103,11 @@ describe('campaign solutions (par)', () => {
       expect(Math.abs(ev.missionTime - m.scoring.timeRef)).toBeLessThan(1);
       expect(Math.abs(ev.score - PAR_SCORE)).toBeLessThanOrEqual(30);
       expect(ev.keys).toBeDefined();
-      // Limits leave a margin over the solution: 8% delta-v (samples keep their original limits), 15-25% time.
-      const dvMargin = limit(m, 'max-delta-v') / ev.deltaV - 1;
-      const tMargin = limit(m, 'max-time') / ev.missionTime - 1;
+      // The default site's limits leave a margin over the solution: 8% delta-v (samples keep their original limits), 15-25% time.
+      expect(ev.site).toBe(s.site);
+      const ms = missionForSite(m, s.site);
+      const dvMargin = limit(ms, 'max-delta-v') / ev.deltaV - 1;
+      const tMargin = limit(ms, 'max-time') / ev.missionTime - 1;
       if (!SAMPLE_IDS.has(m.id)) {
         expect(dvMargin).toBeGreaterThanOrEqual(0.08);
         expect(dvMargin).toBeLessThan(0.1);

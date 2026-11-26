@@ -20,7 +20,8 @@ import { ChebyshevEphemeris } from '../../src/physics/chebyshev-ephemeris';
 import { ASSET_FIRST_DAY, ASSET_LAST_DAY, installCheckpointAsset } from '../../src/physics/checkpoint-asset';
 import { J2000_BODIES } from '../../src/physics/solar-system';
 import * as campaign from '../../src/mission/campaign';
-import { checkPlanConformance, evaluate, missionReplayOptions, type Evaluation, type MissionDefinition } from '../../src/mission/objectives';
+import { LAUNCH_SITES } from '../../src/mission/launch';
+import { allowedSites, checkPlanConformance, evaluate, missionReplayOptions, type Evaluation, type MissionDefinition } from '../../src/mission/objectives';
 import { decodePlan, encodePlan, LIMITS, PlanError, validatePlanIssues, type MissionPlan } from '../../src/mission/plan';
 import { replay, type ReplayOptions, type ReplayResult } from '../../src/mission/replay';
 import { SAMPLE_MISSIONS } from '../../src/mission/samples';
@@ -43,6 +44,38 @@ export interface MissionInfo {
   readonly version: string;
   readonly title: string;
   readonly def: MissionDefinition;
+  /** Every launch site of the site table with its standing in this mission (offered first, in table order). */
+  readonly sites: readonly SiteInfo[];
+}
+
+/** A launch site as the leaderboard reports it for a mission. */
+export interface SiteInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly offered: boolean;
+  /** Not offered: why. */
+  readonly reason?: string;
+  /** Offered with a reference solution (campaign missions): its delta-v (m/s) and time (s), and this site's limits. */
+  readonly deltaV?: number;
+  readonly time?: number;
+  readonly maxDeltaV?: number;
+  readonly maxTime?: number;
+}
+
+/** Board key of the site a plan launches from ('state' for a free state start, which only sandbox-like missions allow). */
+export function siteOfPlan(plan: MissionPlan): string {
+  return plan.start.kind === 'launch' ? plan.start.site : 'state';
+}
+
+function sitesOf(def: MissionDefinition): SiteInfo[] {
+  const allowed = allowedSites(def);
+  const out = LAUNCH_SITES.map((s): SiteInfo => {
+    const o = def.launchSites?.find((x) => x.site === s.id);
+    if (o && o.offered) return { id: s.id, name: s.name, offered: true, deltaV: o.deltaV, time: o.time, maxDeltaV: o.maxDeltaV, maxTime: o.maxTime };
+    if (o) return { id: s.id, name: s.name, offered: false, reason: o.reason };
+    return allowed === undefined || allowed.includes(s.id) ? { id: s.id, name: s.name, offered: true } : { id: s.id, name: s.name, offered: false, reason: 'not offered for this mission' };
+  });
+  return [...out.filter((s) => s.offered), ...out.filter((s) => !s.offered)];
 }
 
 /** Server limits on top of the mission's own rules. */
@@ -159,7 +192,7 @@ function buildCatalogue(defs: readonly MissionDefinition[]): MissionInfo[] {
   for (const def of defs) {
     if (seen.has(def.id)) throw new Error(`leaderboard: duplicate mission id ${def.id}`);
     seen.add(def.id);
-    out.push({ id: def.id, version: versionOf(def), title: def.title, def });
+    out.push({ id: def.id, version: versionOf(def), title: def.title, def, sites: sitesOf(def) });
   }
   return out.sort((a, b) => (a.id < b.id ? -1 : 1));
 }

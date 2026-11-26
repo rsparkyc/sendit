@@ -86,6 +86,9 @@ Resources:
         - { AttributeName: pk, KeyType: HASH }
         - { AttributeName: sk, KeyType: RANGE }
       # Sparse indexes: only entries with a valid, visible result on that board carry the keys.
+      # Launch sites need no schema change: a player's all-sites entry and per-site entries are
+      # separate items, and the site is part of the index partition VALUE (<mission>#<version>#
+      # <physics>#<site or *>), so each partition holds a player once (server/leaderboard/store.ts).
       GlobalSecondaryIndexes:
         - IndexName: combined
           KeySchema:
@@ -147,6 +150,7 @@ Resources:
                 Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:Query]
                 Resource: [!GetAtt Table.Arn, !Sub '${Table.Arn}/index/*']
+              # Group writes are TransactWriteItems of Puts, which IAM authorises per item as dynamodb:PutItem.
               - Sid: WriteEntriesAndScoreCache
                 Effect: Allow
                 Action: dynamodb:PutItem

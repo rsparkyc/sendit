@@ -32,6 +32,24 @@ export const TEST_MISSION: MissionDefinition = {
   maxDuration: 10 * DAY,
 };
 
+/**
+ * A mission offered from several launch sites (as the campaign's are), one
+ * site not offered with a reason, and per-site limits.
+ */
+export const SITES_MISSION: MissionDefinition = {
+  ...TEST_MISSION,
+  id: 'sites-mission',
+  title: 'Sites mission',
+  version: 1,
+  rules: { launchOnly: true, sites: ['kourou', 'cape-canaveral', 'equator'], window: [T0, T0 + 30 * DAY] },
+  launchSites: [
+    { site: 'kourou', offered: true, deltaV: 1000, time: 5 * DAY, maxDeltaV: 5000, maxTime: 10 * DAY },
+    { site: 'cape-canaveral', offered: true, deltaV: 1100, time: 5 * DAY, maxDeltaV: 5000, maxTime: 10 * DAY },
+    { site: 'equator', offered: true, deltaV: 900, time: 5 * DAY, maxDeltaV: 5000, maxTime: 10 * DAY },
+    { site: 'tanegashima', offered: false, reason: 'test reason: no window from this site' },
+  ],
+};
+
 export interface PlanSpec {
   /** Burn durations, s (the fake: delta-v = 10 x total burn time). */
   burns?: number[];
@@ -120,14 +138,17 @@ export class Harness {
   flights = 0;
   ipCounter = 0;
 
+  readonly mission: MissionDefinition;
+
   constructor(
     public config: Config = CONFIG,
-    opts: { pageSize?: number; fly?: typeof fakeFly; engine?: Engine } = {},
+    opts: { pageSize?: number; fly?: typeof fakeFly; engine?: Engine; mission?: MissionDefinition } = {},
   ) {
     this.db = new FakeDynamo(LEADERBOARD_INDEXES, opts.pageSize);
     this.store = new Store(this.db, config.table);
+    this.mission = opts.mission ?? TEST_MISSION;
     const fly = opts.fly ?? fakeFly;
-    this.setEngine(opts.engine ?? createEngine({ catalogue: [TEST_MISSION], fly: (p, m, o) => { this.flights++; return fly(p, m, o); } }));
+    this.setEngine(opts.engine ?? createEngine({ catalogue: [this.mission], fly: (p, m, o) => { this.flights++; return fly(p, m, o); } }));
   }
 
   setEngine(engine: Engine, config: Config = this.config): void {
@@ -158,15 +179,15 @@ export class Harness {
   submit(player: number, p: MissionPlan | string, extra: Record<string, unknown> = {}, ip?: string) {
     return this.call('POST', '/api/leaderboard/submit', {
       ip,
-      body: { missionId: TEST_MISSION.id, missionVersion: String(TEST_MISSION.version), plan: typeof p === 'string' ? p : encodePlan(p), name: `Player ${player}`, secret: secret(player), ...extra },
+      body: { missionId: this.mission.id, missionVersion: String(this.mission.version), plan: typeof p === 'string' ? p : encodePlan(p), name: `Player ${player}`, secret: secret(player), ...extra },
     });
   }
 
-  board(board: string, limit = 20, cursor?: string) {
-    return this.call('GET', '/api/leaderboard/board', { query: { mission: TEST_MISSION.id, version: String(TEST_MISSION.version), board, limit: String(limit), ...(cursor ? { cursor } : {}) } });
+  board(board: string, limit = 20, cursor?: string, site?: string) {
+    return this.call('GET', '/api/leaderboard/board', { query: { mission: this.mission.id, version: String(this.mission.version), board, limit: String(limit), ...(cursor ? { cursor } : {}), ...(site ? { site } : {}) } });
   }
 
-  me(player: number) {
-    return this.call('POST', '/api/leaderboard/me', { body: { missionId: TEST_MISSION.id, missionVersion: String(TEST_MISSION.version), secret: secret(player) } });
+  me(player: number, site?: string) {
+    return this.call('POST', '/api/leaderboard/me', { body: { missionId: this.mission.id, missionVersion: String(this.mission.version), secret: secret(player), ...(site ? { site } : {}) } });
   }
 }

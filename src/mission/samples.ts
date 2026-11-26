@@ -1,17 +1,20 @@
 /**
- * The three original sample missions, as data. Their objectives and limits
- * are unchanged from the first version (test/mission-samples.test.ts flies
- * them on simplified worlds); they are also campaign missions (campaign.ts),
- * so they carry the complete setup for the real ephemeris: Kourou launch in
- * January 2027, the spacecraft, and par-based scoring from the solutions in
- * test/mission-campaign.test.ts.
+ * The three original sample missions, as data. Their objectives are those of
+ * the first version (test/mission-samples.test.ts flies them on simplified
+ * worlds); they are also campaign missions (campaign.ts), so they carry the
+ * complete setup for the real ephemeris: a default Kourou launch in January
+ * 2027, the spacecraft, and par-based scoring from the solutions in
+ * test/mission-campaign.test.ts. Version 2 offers every launch site
+ * (campaign-sites.ts): Kourou keeps the first version's limits; the
+ * max-delta-v / max-time objectives carry the loosest site's.
  */
+import { CAMPAIGN_SITES, loosestLimits, offeredSites } from './campaign-sites';
 import type { CompleteMission } from './objectives';
 
 const DAY = 86400;
 /** 2027-01-10 12:00 UTC as TDB seconds from J2000 (TT - UTC = 69.184 s). */
 export const JAN_2027 = (Date.UTC(2027, 0, 10, 12) - Date.UTC(2000, 0, 1, 12)) / 1000 + 69.184;
-const LUNAR_RULES = { launchOnly: true, sites: ['kourou'], window: [JAN_2027, JAN_2027 + 60 * DAY] as const };
+const LUNAR_RULES = { launchOnly: true, window: [JAN_2027, JAN_2027 + 60 * DAY] as const };
 /** Lunar injection stage: 30 t, 200 kN, Isp 450 s (T/W 0.68: near-impulsive burns). */
 const TLI_STAGE = { wetMass: 30000, dryMass: 12000, engines: [{ thrust: 200e3, isp: 450 }] };
 const R_GEO = 42_164e3; // geostationary radius, m
@@ -20,14 +23,15 @@ const R_GEO = 42_164e3; // geostationary radius, m
 export const GEO_FROM_LEO: CompleteMission = {
   id: 'geo-from-leo',
   title: 'Geostationary',
-  version: 1,
+  version: 2,
   briefing: 'Climb from a low parking orbit to geostationary orbit: 42,164 km from Earth’s centre, circular, within 1° of the equator, held for three revolutions. Burn at the equator crossing to raise apogee, then circularise and remove the launch-site inclination together at apogee, where the plane change is cheapest.',
   epoch: JAN_2027,
   start: { kind: 'launch', site: 'kourou', azimuthDeg: 90, altitudeM: 250e3 },
-  rules: { launchOnly: true, sites: ['kourou'] },
+  rules: { launchOnly: true, sites: offeredSites('geo-from-leo') },
   spacecraft: { wetMass: 23000, dryMass: 2500, engines: [{ thrust: 100e3, isp: 450 }] },
   maxDuration: 6 * DAY,
   atmosphereIsFailure: true,
+  launchSites: CAMPAIGN_SITES['geo-from-leo'],
   objectives: [
     {
       kind: 'orbit',
@@ -38,8 +42,8 @@ export const GEO_FROM_LEO: CompleteMission = {
       reference: 'equator',
       revolutions: 3,
     },
-    { kind: 'max-delta-v', max: 4500 },
-    { kind: 'max-time', max: 6 * DAY },
+    { kind: 'max-delta-v', max: loosestLimits('geo-from-leo').maxDeltaV },
+    { kind: 'max-time', max: loosestLimits('geo-from-leo').maxTime },
   ],
   scoring: { deltaVRef: 3932, deltaVWeight: 1, timeRef: 347164, timeWeight: 1 },
 };
@@ -48,18 +52,19 @@ export const GEO_FROM_LEO: CompleteMission = {
 export const LUNAR_FLYBY: CompleteMission = {
   id: 'lunar-flyby',
   title: 'Lunar flyby',
-  version: 1,
-  briefing: 'Fly past the Moon between 100 and 10,000 km altitude without hitting it. Launch when Kourou passes under the Moon’s orbital plane, so one prograde burn in the parking orbit does the job; the burn’s timing sets where you meet the Moon.',
+  version: 2,
+  briefing: 'Fly past the Moon between 100 and 10,000 km altitude without hitting it. Launch when your site passes under the Moon’s orbital plane (from a site too far from the equator to reach that plane, into a plane through where the Moon will be), so one prograde burn in the parking orbit does the job; the burn’s timing sets where you meet the Moon.',
   epoch: JAN_2027,
   start: { kind: 'launch', site: 'kourou', azimuthDeg: 90, altitudeM: 200e3 },
-  rules: LUNAR_RULES,
+  rules: { ...LUNAR_RULES, sites: offeredSites('lunar-flyby') },
   spacecraft: TLI_STAGE,
   maxDuration: 7 * DAY,
   atmosphereIsFailure: true,
+  launchSites: CAMPAIGN_SITES['lunar-flyby'],
   objectives: [
     { kind: 'flyby', body: 'moon', minAltitude: 100e3, maxAltitude: 10_000e3 },
-    { kind: 'max-delta-v', max: 3500 },
-    { kind: 'max-time', max: 7 * DAY },
+    { kind: 'max-delta-v', max: loosestLimits('lunar-flyby').maxDeltaV },
+    { kind: 'max-time', max: loosestLimits('lunar-flyby').maxTime },
   ],
   scoring: { deltaVRef: 3167.2, deltaVWeight: 1, timeRef: 252044, timeWeight: 1 },
   spheres: [{ body: 'moon', radius: 66_100e3 }],
@@ -73,14 +78,15 @@ export const LUNAR_FLYBY: CompleteMission = {
 export const LUNAR_FREE_RETURN: CompleteMission = {
   id: 'lunar-free-return',
   title: 'Free return',
-  version: 1,
+  version: 2,
   briefing: 'One burn, no corrections: swing around the Moon and fall back into Earth’s atmosphere below 11.5 km/s, as Apollo’s free-return trajectories did. The budget covers the injection only, and a minute’s change in its timing misses the return corridor.',
   epoch: JAN_2027,
   start: { kind: 'launch', site: 'kourou', azimuthDeg: 90, altitudeM: 200e3 },
-  rules: LUNAR_RULES,
+  rules: { ...LUNAR_RULES, sites: offeredSites('lunar-free-return') },
   spacecraft: TLI_STAGE,
   maxDuration: 12 * DAY,
   atmosphereIsFailure: true,
+  launchSites: CAMPAIGN_SITES['lunar-free-return'],
   objectives: [
     {
       kind: 'sequence',
@@ -89,8 +95,8 @@ export const LUNAR_FREE_RETURN: CompleteMission = {
         { kind: 'reentry', body: 'earth', maxSpeed: 11_500 },
       ],
     },
-    { kind: 'max-delta-v', max: 3300 },
-    { kind: 'max-time', max: 12 * DAY },
+    { kind: 'max-delta-v', max: loosestLimits('lunar-free-return').maxDeltaV },
+    { kind: 'max-time', max: loosestLimits('lunar-free-return').maxTime },
   ],
   scoring: { deltaVRef: 3167.2, deltaVWeight: 1, timeRef: 704161, timeWeight: 1 },
 };

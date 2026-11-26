@@ -1,15 +1,27 @@
 /**
  * Leaderboard HTTP API: request and response shapes, shared by the browser
- * client (client.ts) and the server (server/leaderboard). Types only.
+ * client (client.ts) and the server (server/leaderboard). Types, and the ALL_SITES constant.
  *
  * Routes (same origin, under /api/leaderboard):
  *   GET  /api/leaderboard/missions                         -> MissionsResponse
- *   GET  /api/leaderboard/board?mission=&version=&board=&limit=&cursor=  -> BoardResponse
+ *   GET  /api/leaderboard/board?mission=&version=&board=&site=&limit=&cursor=  -> BoardResponse
  *   POST /api/leaderboard/submit   SubmitRequest            -> SubmitResponse
  *   POST /api/leaderboard/me       MeRequest                -> MeResponse
- *   GET  /api/leaderboard/plan?mission=&version=&board=&pid= -> PlanResponse (403 unless the deployment exposes plans)
+ *   GET  /api/leaderboard/plan?mission=&version=&board=&site=&pid= -> PlanResponse (403 unless the deployment exposes plans)
  * Every error is an ErrorResponse with the HTTP status listed at ErrorCode.
+ *
+ * LAUNCH SITES. Every board (combined, delta-v, time) exists per launch site
+ * and for all sites together. `site` is a launch-site id (one the mission
+ * offers: MissionsResponse.missions[].sites) or ALL_SITES ('all', the default,
+ * so calls without `site` get the all-sites boards). A player has one row per
+ * site on each site board; on an all-sites board, one row (their best over
+ * every site) labelled with the site it was flown from. Every row says its site.
  */
+
+/** The `site` value for the all-sites boards. */
+export const ALL_SITES = 'all';
+/** A launch-site id, or ALL_SITES. */
+export type SiteFilter = string;
 
 export type BoardId = 'combined' | 'deltaV' | 'time';
 
@@ -28,6 +40,8 @@ export interface MeRequest {
   readonly missionId: string;
   readonly missionVersion: string;
   readonly secret: string;
+  /** Launch-site id or ALL_SITES (default). */
+  readonly site?: SiteFilter;
 }
 
 export interface Values {
@@ -53,6 +67,8 @@ export interface RankInfo extends Values {
   readonly beyond?: number;
   /** ISO time of the submission that set this result. */
   readonly submittedAt: string;
+  /** Launch site this result was flown from. */
+  readonly site: string;
 }
 
 export interface BoardEntry extends Values {
@@ -61,12 +77,30 @@ export interface BoardEntry extends Values {
   readonly name: string;
   readonly tag: string;
   readonly submittedAt: string;
+  /** Launch site this result was flown from (on an all-sites board, where the player's best came from). */
+  readonly site: string;
+}
+
+/** A launch site's standing in a mission. */
+export interface MissionSite {
+  /** Launch-site id (src/mission/data/launch-sites.json). */
+  readonly id: string;
+  readonly name: string;
+  /** False: plans from this site are refused (rule-violation, code launch-site); `reason` says why. */
+  readonly offered: boolean;
+  readonly reason?: string;
+  /** Offered campaign sites: the reference solution from this site (delta-v m/s, time s) and this site's limits. */
+  readonly deltaV?: number;
+  readonly time?: number;
+  readonly maxDeltaV?: number;
+  readonly maxTime?: number;
 }
 
 export interface MissionsResponse {
   /** The physics a plan must be made with (plan.model / plan.data). */
   readonly physics: { readonly model: number; readonly data: string };
-  readonly missions: readonly { readonly id: string; readonly version: string; readonly title: string }[];
+  /** `sites`: every launch site, offered ones first. */
+  readonly missions: readonly { readonly id: string; readonly version: string; readonly title: string; readonly sites: readonly MissionSite[] }[];
   readonly exposePlans: boolean;
 }
 
@@ -74,6 +108,8 @@ export interface BoardResponse {
   readonly mission: string;
   readonly version: string;
   readonly board: BoardId;
+  /** Launch-site id or ALL_SITES, as requested. */
+  readonly site: SiteFilter;
   readonly entries: readonly BoardEntry[];
   /** Pass as `cursor` for the next page; null at the end. */
   readonly next: string | null;
@@ -82,25 +118,35 @@ export interface BoardResponse {
 export interface SubmitResponse {
   readonly mission: string;
   readonly version: string;
+  /** Launch site the flight was flown from. */
+  readonly site: string;
   /** What the server computed (never what the client claimed). */
   readonly result: Values & { readonly digest: string };
-  /** Boards on which this flight became the player's best. */
+  /** All-sites boards on which this flight became the player's best. */
   readonly improved: Readonly<Record<BoardId, boolean>>;
   readonly player: PlayerInfo;
+  /** The player's all-sites ranks (each RankInfo says which site that best came from). */
   readonly ranks: Readonly<Record<BoardId, RankInfo | null>>;
+  /** The same for this flight's site boards. */
+  readonly siteImproved: Readonly<Record<BoardId, boolean>>;
+  readonly siteRanks: Readonly<Record<BoardId, RankInfo | null>>;
 }
 
 export interface MeResponse {
   readonly mission: string;
   readonly version: string;
+  /** Launch-site id or ALL_SITES, as requested. */
+  readonly site: SiteFilter;
   /** Null if this secret has no entry for the mission version. */
   readonly player: PlayerInfo | null;
+  /** Ranks on that site's boards (null where the player has no result there). */
   readonly ranks: Readonly<Record<BoardId, RankInfo | null>>;
 }
 
 export interface PlanResponse {
   readonly pid: string;
   readonly board: BoardId;
+  readonly site: SiteFilter;
   readonly plan: string;
 }
 
