@@ -42,7 +42,11 @@ aws s3 sync dist/assets "s3://$BUCKET/assets" --exclude '*' --include '*.js' --i
   --content-type 'text/javascript; charset=utf-8' --cache-control "$IMMUTABLE"
 aws s3 sync dist/assets "s3://$BUCKET/assets" --exclude '*' --include '*.wasm' \
   --content-type 'application/wasm' --cache-control "$IMMUTABLE"
-aws s3 sync dist/assets "s3://$BUCKET/assets" --exclude '*.js' --exclude '*.mjs' --exclude '*.wasm' \
+# Planet textures (content-hashed by Vite): explicit image/webp, since the CLI's guess
+# depends on the local mimetypes table and can fall back to binary/octet-stream.
+aws s3 sync dist/assets "s3://$BUCKET/assets" --exclude '*' --include '*.webp' \
+  --content-type 'image/webp' --cache-control "$IMMUTABLE"
+aws s3 sync dist/assets "s3://$BUCKET/assets" --exclude '*.js' --exclude '*.mjs' --exclude '*.wasm' --exclude '*.webp' \
   --cache-control "$IMMUTABLE"
 
 # 2. Everything else (index.html and any unhashed public/ files): always revalidate.

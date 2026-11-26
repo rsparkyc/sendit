@@ -16,6 +16,7 @@
  */
 import * as THREE from 'three';
 import type { AnchoredSegment } from './paths';
+import { BodyVisuals } from './body-visuals';
 
 export const UNIT = 1000; // metres per render unit
 
@@ -108,7 +109,11 @@ export class SceneView {
     this.scene.add(this.trajectory.group, this.trajectoryPast.group, this.burnArcs.group);
     this.light = new THREE.PointLight(0xffffff, 3, 0, 0);
     this.scene.add(this.light, new THREE.AmbientLight(0xffffff, 0.06));
+    this.visuals = new BodyVisuals(this.renderer, this.bodies, lightBody); // textures, IAU orientation, rings
   }
+
+  /** Surface textures and orientation (body-visuals.ts). */
+  readonly visuals: BodyVisuals;
 
   resize(w: number, h: number): void {
     this.renderer.setSize(w, h, false);
@@ -173,6 +178,7 @@ export class SceneView {
     this.burnArcs.place(cam);
     const l = this.lightBody;
     if (l >= 0) this.light.position.copy(this.bodies[l].position);
+    this.visuals.update(c, this.renderer.domElement.clientHeight);
     this.renderer.render(this.scene, c);
   }
 
