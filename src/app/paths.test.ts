@@ -113,7 +113,8 @@ describe('body metadata from the real data', () => {
 });
 
 describe('physics adapter', () => {
-  it('never builds on evaluate, and installs transferred chunks in order', () => {
+  // Builds real ephemeris chunks (seconds each with 26 bodies); the default 5 s is too tight under load.
+  it('never builds on evaluate, and installs transferred chunks in order', { timeout: 60_000 }, () => {
     const worker = new Ephemeris();
     const main = new Ephemeris();
     const pos = new Float64Array(3 * main.count);
