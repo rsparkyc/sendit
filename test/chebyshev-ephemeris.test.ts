@@ -52,7 +52,7 @@ function heldOut(steps: number, dir: 1 | -1, every: number, fracs: number[], che
     if (i % every === 0) {
       it.getState(state);
       for (const f of fracs) {
-        const sub = new NBodyIntegrator(GM, state, 0, dir * f * H, KAHAN_LI_8, PHYSICS);
+        const sub = new NBodyIntegrator(GM, state, it.t, dir * f * H, KAHAN_LI_8, PHYSICS); // at its true time: the poles move
         sub.step();
         check(it.t + dir * f * H, sub.q, sub.v);
       }

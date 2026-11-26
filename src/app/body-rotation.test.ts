@@ -30,12 +30,10 @@ describe('IAU rotation model (display)', () => {
     for (const b of BODIES) {
       if (!b.pole) continue;
       const r = bodyToIcrf(IAU_ROTATION[b.id], 0);
-      // Same axis; the data gives Uranus's spin (positive) pole, the IAU its north pole, so compare up to sign.
-      const dot = Math.abs(r[2] * b.pole[0] + r[5] * b.pole[1] + r[8] * b.pole[2]);
-      // The data poles of the Moon and Mars omit the pck periodic terms (Moon E1: -3.88 sin in RA;
-      // Mars: +1.59 cos(166.3 deg + ...) in Dec, which puts the real J2000 pole at Dec 52.9, not 54.4),
-      // Neptune: 0.70 sin N in RA) so they differ by up to ~1.5 deg from the full model; every other body agrees to < 0.1 deg.
-      expect(Math.acos(Math.min(1, dot)) * (180 / Math.PI), b.id).toBeLessThan(['moon', 'mars', 'neptune'].includes(b.id) ? 2 : 0.1);
+      // The data poles are the same IAU model at J2000, periodic terms included and
+      // north-pole sense (Uranus too); test/orientation.test.ts checks physics against display at other dates.
+      const dot = r[2] * b.pole[0] + r[5] * b.pole[1] + r[8] * b.pole[2];
+      expect(Math.acos(Math.min(1, dot)) * (180 / Math.PI), b.id).toBeLessThan(1e-6);
     }
   });
 

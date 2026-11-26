@@ -6,6 +6,7 @@
  * Bodies are always looked up by id (`bodyIndexOf`), never by position: the
  * physics body list grows (moons are being added).
  */
+import { IAU_ROTATION } from '../physics/orientation';
 import type { BodyData } from '../physics/solar-system';
 import type { Ephemeris } from '../physics/spacecraft';
 import { Hasher } from './exact-math';
@@ -15,7 +16,12 @@ import { Hasher } from './exact-math';
  * plan is replayed with. Bump by hand whenever code changes could change replay
  * results; data changes are caught by the fingerprint automatically.
  */
-export const PHYSICS_MODEL = 1;
+export const PHYSICS_MODEL = 2;
+// Model history:
+//  1: fixed J2000 poles for every zonal field.
+//  2: time-dependent IAU poles (src/physics/orientation.ts) in the massive-body
+//     integrator and the spacecraft; Miranda modelled; Moon parented to Earth;
+//     outer moons no longer lumped into their planet's GM (Pluto, Saturn).
 
 /**
  * Atmosphere-top altitudes above the mean radius used by the physics data,
@@ -93,6 +99,12 @@ export function worldFromBodyData(ephemeris: Ephemeris, data: readonly BodyData[
   const extra: number[] = [];
   for (const b of data) {
     extra.push(...b.state, b.j2 ?? 0, b.j2Radius ?? 0, b.j4 ?? 0);
+    // The pole model the zonal field turns with (physics model 2).
+    const r = b.j2 !== undefined ? IAU_ROTATION[b.id] : undefined;
+    if (r) {
+      extra.push(...r.ra, ...r.dec);
+      for (const n of r.nut ?? []) extra.push(...n.angle, n.ra, n.dec);
+    }
   }
   return { ...makeWorld(ephemeris, bodies, extra), bodyData: data };
 }

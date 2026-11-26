@@ -195,18 +195,13 @@ def bodies_at(jd: float) -> list:
     systems = {s["id"]: s for s in fh.SYSTEMS}
     out = {}
     for sysd in fh.SYSTEMS:
+        if sysd["cmt"] is None:
+            continue  # Earth-Moon: SSB-centred DE441 states, as in fetch-horizons.py
         gms = fh.cmt_body_gms(sysd["cmt"])
-        sys_gm = gms["System"]
-        moon_gm = sum(gms[n] for _, _, n in sysd["moons"])
-        bary = by_id[sysd["id"]]["horizons"]
-        b0 = fh.vectors(bary, [jd])[0]["state"]
-        rels = {n: fh.vectors(n, [jd], f"500@{bary}")[0]["state"] for _, _, n in sysd["moons"]}
-        out[sysd["id"]] = fh.planet_state(b0, rels, gms, sysd, sys_gm - moon_gm)
-        for mid, _, n in sysd["moons"]:
-            out[mid] = fh.with_bary(b0, rels[n])
+        out.update(fh.system_members_at(sysd, jd, gms, by_id[sysd["id"]]["horizons"]))
     for b in data["bodies"]:
         if b["id"] not in out:
-            if b["id"] in systems:
+            if b["id"] in systems and systems[b["id"]]["cmt"] is not None:
                 sys.exit("unexpected")
             out[b["id"]] = fh.vectors(b["horizonsId"], [jd])[0]["state"]
     return [dict(id=b["id"], state=out[b["id"]]) for b in data["bodies"]]

@@ -9,6 +9,17 @@
  * optimisation must leave every one of them unchanged. If one changes, the
  * results changed: undo the change, do not re-record the digest.
  *
+ * RE-RECORDED ONCE, for physics model 2 (a deliberate change of the physics
+ * and data, not of the evaluation code, which is unchanged):
+ *  - evaluation digests: 27 bodies instead of 26 (Miranda; every count grows
+ *    by 27/26), and every chunk's coefficients changed because the integrated
+ *    trajectories did (time-dependent poles, the Moon stored relative to the
+ *    Earth-Moon barycenter in the Earth slot, new Pluto/Saturn/Uranus GMs and
+ *    states, retuned fits for earth, moon, ariel, new fit for miranda);
+ *  - propagation digests: the same ephemeris change, plus the Earth J2 field
+ *    (LEO cases) and Jupiter's J2/J4 (Jovian pass) now turn with the IAU pole.
+ *    Accepted-step counts (the number before the colon) are unchanged in all four.
+ *
  * Coverage: positions(), evaluate() with and without velocities, bodyState()
  * of every body and evaluateBodies() on several subsets, at a few thousand
  * pseudo-random times over chunks -2..2 (backward- and forward-integrated
@@ -119,21 +130,21 @@ function evalDigests(order: number[]): Record<string, string> {
 describe('ephemeris evaluation golden digests', () => {
   it('random times over chunks -2..2', () => {
     expect(evalDigests(times().random)).toEqual({
-      positions: '234000:f2bf1017997bd1f8',
-      evaluateNull: '234000:f2bf1017997bd1f8',
-      evaluateVel: '468000:c78bc69e219dda69',
-      bodyState: '468000:d968c5e2d52f2529',
-      evaluateBodies: '1053000:16b851d98740fd19',
+      positions: '243000:361c7812987bd848',
+      evaluateNull: '243000:361c7812987bd848',
+      evaluateVel: '486000:150528b248594db2',
+      bodyState: '486000:42476bb248ccae06',
+      evaluateBodies: '1080000:804d2a3bdfdece5b',
     });
   }, 120_000);
 
   it('chunk and segment boundaries', () => {
     expect(evalDigests(times().boundaries)).toEqual({
-      positions: '11700:bdf84c523491a6e0',
-      evaluateNull: '11700:bdf84c523491a6e0',
-      evaluateVel: '23400:2107a658139c033b',
-      bodyState: '23400:82d83be0d06c0076',
-      evaluateBodies: '52650:97d5f48d87fa4b8d',
+      positions: '12150:e591e81a8a78077a',
+      evaluateNull: '12150:e591e81a8a78077a',
+      evaluateVel: '24300:20c9b2a21ad546dd',
+      bodyState: '24300:1e7f4e5a2a1cdbce',
+      evaluateBodies: '54000:e20468c9c552f16b',
     });
   });
 
@@ -144,25 +155,25 @@ describe('ephemeris evaluation golden digests', () => {
     const rep = r.slice(0, 200).flatMap((t) => [t, t, t + 1e-3, t]);
     expect([evalDigests(asc), evalDigests(desc), evalDigests(rep)]).toEqual([
       {
-      positions: '46800:fc59f342d02797eb',
-      evaluateNull: '46800:fc59f342d02797eb',
-      evaluateVel: '93600:766952d66e06f7db',
-      bodyState: '93600:fa75e34e04a34863',
-      evaluateBodies: '210600:d4477f243793d28e',
+      positions: '48600:fc22b5448ba745a8',
+      evaluateNull: '48600:fc22b5448ba745a8',
+      evaluateVel: '97200:48829c8e7daa32ea',
+      bodyState: '97200:e7f6e2faa824de25',
+      evaluateBodies: '216000:c95f0cb036ecefd3',
     },
       {
-      positions: '46800:939b0b5aeb855bd4',
-      evaluateNull: '46800:939b0b5aeb855bd4',
-      evaluateVel: '93600:c73f77ce2d832308',
-      bodyState: '93600:54b090e692cf7b98',
-      evaluateBodies: '210600:73d86038da4b14f9',
+      positions: '48600:20182174cd88ff1e',
+      evaluateNull: '48600:20182174cd88ff1e',
+      evaluateVel: '97200:beb0607acb208d3f',
+      bodyState: '97200:cacfc41e76d5b26c',
+      evaluateBodies: '216000:458e9540a7f344c8',
     },
       {
-      positions: '62400:96e8f308a3b3287a',
-      evaluateNull: '62400:96e8f308a3b3287a',
-      evaluateVel: '124800:a61b76030befc6ba',
-      bodyState: '124800:7a9bf54f1da4b137',
-      evaluateBodies: '280800:d7d86f631f8bc71d',
+      positions: '64800:92e00c96186c30ab',
+      evaluateNull: '64800:92e00c96186c30ab',
+      evaluateVel: '129600:b746aecd8ebbb2e2',
+      bodyState: '129600:bb20d969d6fbabe0',
+      evaluateBodies: '288000:ea7eb6b397eb2103',
     },
     ]);
   }, 120_000);
@@ -201,7 +212,7 @@ describe('propagation golden digests (real ephemeris)', () => {
     const e = state(EARTH, 0);
     const R = 6_778_000;
     const v = Math.sqrt(J2000_BODIES[EARTH].gm / R);
-    expect(runDigest([e[0] + R, e[1], e[2], e[3], e[4] + v, e[5], 1000], 0, 30 * DAY)).toBe('185860:bc503785bf2328bb');
+    expect(runDigest([e[0] + R, e[1], e[2], e[3], e[4] + v, e[5], 1000], 0, 30 * DAY)).toBe('185860:4356716483ef18fc');
   }, 120_000);
 
   it('LEO backward in time with orbital-frame and inertial burns', () => {
@@ -213,14 +224,14 @@ describe('propagation golden digests (real ephemeris)', () => {
       { tStart: t0 + 3000, duration: 600, thrust: 50e3, isp: 450, direction: [1, 0.1, -0.05], frame: { kind: 'orbital', body: EARTH } },
       { tStart: t0 + 20000, duration: 300, thrust: 20e3, isp: 320, direction: [0.3, -1, 0.2], frame: { kind: 'inertial' } },
     ];
-    expect(runDigest([e[0], e[1] + R, e[2], e[3] - v, e[4], e[5] + 100, 20000], t0, t0 + 3 * DAY, burns)).toBe('8590:9e6d6d0ee4e26c47');
+    expect(runDigest([e[0], e[1] + R, e[2], e[3] - v, e[4], e[5] + 100, 20000], t0, t0 + 3 * DAY, burns)).toBe('8590:63720a5fdf1b83ad');
   }, 120_000);
 
   it('heliocentric cruise across chunks', () => {
     const e = state(EARTH, -C);
     const vn = Math.hypot(e[3], e[4], e[5]);
     const y0 = [e[0] + (1e9 * e[3]) / vn, e[1] + (1e9 * e[4]) / vn, e[2] + (1e9 * e[5]) / vn, e[3] * (1 + 3000 / vn), e[4] * (1 + 3000 / vn), e[5] * (1 + 3000 / vn), 1000];
-    expect(runDigest(y0, -C, 2.5 * C)).toBe('790:9001f6dcf95a606c');
+    expect(runDigest(y0, -C, 2.5 * C)).toBe('790:9807a448dbdd46f0');
   }, 120_000);
 
   it('Jovian system pass (J2/J4, moons, orbital burn about Jupiter)', () => {
@@ -228,6 +239,6 @@ describe('propagation golden digests (real ephemeris)', () => {
     const j = state(JUPITER, t0);
     const y0 = [j[0] + 3e9, j[1] - 1e9, j[2] + 2e8, j[3] - 9000, j[4] + 2500, j[5], 2000];
     const burns: Burn[] = [{ tStart: t0 + 2 * DAY, duration: 900, thrust: 4e3, isp: 320, direction: [-1, 0, 0.2], frame: { kind: 'orbital', body: JUPITER } }];
-    expect(runDigest(y0, t0, t0 + 12 * DAY, burns, 1e-11)).toBe('2050:f6221dea061c643e');
+    expect(runDigest(y0, t0, t0 + 12 * DAY, burns, 1e-11)).toBe('2050:3de1a5ee296fd335');
   }, 120_000);
 });

@@ -53,7 +53,8 @@ export function offGrid(run: GridRun, j: number, frac: number, pos: Float64Array
       state[6 * i + 3 + k] = samples[o + m + 3 * i + k];
     }
   }
-  const it = new NBodyIntegrator(gm, state, 0, frac * h, KAHAN_LI_8, PHYSICS);
+  // The force is time-dependent (the poles move): start the step at its true time.
+  const it = new NBodyIntegrator(gm, state, run.tStart + j * h, frac * h, KAHAN_LI_8, PHYSICS);
   it.step();
   pos.set(it.q);
   vel.set(it.v);

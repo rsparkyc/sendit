@@ -49,7 +49,8 @@ describe('full body set: numerics', () => {
       const s = new Float64Array(6 * N);
       it.getState(s);
       return s;
-    })(), 0, -DEFAULT_STEP, KAHAN_LI_8, PHYS);
+    })(), it.t, -DEFAULT_STEP, KAHAN_LI_8, PHYS);
+    // Starts at the forward run's end time (the poles make the force time-dependent).
     back.importState(it.exportState(), 0);
     for (let i = 0; i < steps; i++) back.step();
     let worst = 0;
@@ -88,54 +89,69 @@ describe('full body set: numerics', () => {
 });
 
 /**
- * Error thresholds against Horizons, km. Planets (and Sun, Moon): barycentric
- * position. Moons: position relative to their planet. Each is ~1.5x the
- * observed value at the time of writing (in the comment, worst of -t and +t,
- * and the phase error along the orbit in degrees).
+ * Error thresholds against Horizons, km. Planets (and Sun): barycentric
+ * position. Moons (the Moon too, now parented to Earth): position relative to
+ * their planet. Each is ~1.5x the observed value (physics model 2; in the
+ * comment, worst of -t and +t, then the model-1 value against the old fixture).
  *
- * Causes: the moons' errors grow linearly with time, i.e. mean-motion errors
- * from physics we leave out: unmodelled moons (Enceladus and Mimas, in
- * resonance with Dione and Tethys, dominate Tethys, Dione), tides, degree > 4
- * gravity, pole precession of the planets, and for Charon a residual 3e-4
- * mean-motion offset of unknown cause. The Uranian moons' ~400 km at 1 yr that
- * does not grow is a frame/parameter mismatch with ura184 (not resolved).
- * Planets: 10-50 km at 25 yr from the missing asteroids and Moon/Earth tides.
+ * The model-1 fixture's moon samples were wrong (SSB-centred states overwrote
+ * the planet-relative reference: 340-1050 km off DE441 + the satellite
+ * ephemerides for the Uranian moons, up to 320 km for Triton), so model-1
+ * numbers mix fixture error with model error; the model-2 numbers do not.
+ *
+ * Causes of what remains (errors grow linearly: mean-motion errors):
+ *  - Tethys, Dione: Mimas and Enceladus are not modelled (Tethys-Mimas 4:2,
+ *    Dione-Enceladus 2:1 resonances). Adding them in an experiment brought
+ *    Tethys to 104 km and Dione to 5 km at 1 yr; left for a later model.
+ *  - Io, Europa: the Laplace resonance with degree > 4 gravity and tides missing.
+ *  - Titania 7 km/yr: unexplained (Ariel, Umbriel, Oberon are at 1 km/yr).
+ *  - Miranda 9 km/yr: its inclined, resonance-affected orbit and ura182's own
+ *    fit (Miranda is modelled from model 2: without it Ariel was 184 km and
+ *    Umbriel 90 km off after a year).
+ *  - Charon 1.7 km/yr (was 39.5: Nix, Hydra, Kerberos and Styx, outside
+ *    Charon's orbit, were lumped into Pluto's GM).
+ *  - Planets: 10-50 km at 25 yr from the missing asteroids and tides.
  */
 const LIMIT_1: Record<string, number> = {
-  sun: 2, mercury: 2, venus: 2, earth: 2, moon: 7, mars: 2, jupiter: 2, saturn: 2, uranus: 2, neptune: 2, pluto: 7, // <= 4.3 (Moon, Pluto)
-  io: 220, // 145 km, 0.02 deg
-  europa: 12, // 6.7
-  ganymede: 25, // 15
-  callisto: 10, // 5.5
-  tethys: 750, // 493, 0.10 deg
-  dione: 275, // 181
-  rhea: 375, // 249
-  titan: 130, // 86
-  iapetus: 25, // 15
-  ariel: 675, // 450
-  umbriel: 630, // 419
-  titania: 585, // 388
-  oberon: 580, // 384
-  triton: 195, // 128
-  charon: 60, // 40, 0.116 deg
+  sun: 2, mercury: 2, venus: 2, earth: 2, mars: 2, jupiter: 2, saturn: 2, uranus: 2, neptune: 2, pluto: 2, // <= 0.3 (model 1: Pluto 4.2)
+  moon: 7, // 4.0 (geocentric; model 1, barycentric: 4.3)
+  io: 220, // 145, 0.02 deg (145)
+  europa: 12, // 6.7 (6.7)
+  ganymede: 25, // 15 (15)
+  callisto: 10, // 5.5 (5.5)
+  tethys: 1300, // 859, 0.17 deg (493: old fixture; Mimas missing)
+  dione: 165, // 107 (181)
+  rhea: 32, // 20 (249)
+  titan: 50, // 33 (86)
+  iapetus: 6, // 3.2 (15)
+  miranda: 14, // 9.2 (not modelled)
+  ariel: 2, // 1.2 (450)
+  umbriel: 1.2, // 0.7 (419)
+  titania: 11, // 7.2 (388)
+  oberon: 0.5, // 0.05 (384)
+  triton: 11, // 7.3 (128)
+  charon: 2.6, // 1.7 (40, 0.116 deg)
 };
 const LIMIT_25: Record<string, number> = {
-  sun: 16, mercury: 17, venus: 17, earth: 16, moon: 150, mars: 30, jupiter: 20, saturn: 24, uranus: 37, neptune: 72, pluto: 215, // 10, 11, 11, 11, 100, 20, 13, 16, 24, 48, 143
-  io: 4900, // 3271, 0.45 deg
-  europa: 2300, // 1521, 0.13
-  ganymede: 810, // 539
-  callisto: 195, // 128
-  tethys: 52000, // 34780, 6.8 deg (Mimas resonance)
-  dione: 8400, // 5569, 0.85
-  rhea: 9400, // 6245, 0.68
-  titan: 2900, // 1902, 0.09
-  iapetus: 520, // 348
-  ariel: 13500, // 9020, 2.7
-  umbriel: 1500, // 980
-  titania: 1700, // 1130
-  oberon: 1450, // 963
-  triton: 2800, // 1845, 0.29
-  charon: 1500, // 991, 2.9
+  sun: 16, mercury: 17, venus: 17, earth: 16, mars: 30, jupiter: 20, saturn: 24, uranus: 37, neptune: 72, // 10, 11, 11, 11, 19, 13, 16, 24, 48 (unchanged)
+  pluto: 80, // 53 (143)
+  moon: 150, // 100 (geocentric; 100)
+  io: 4900, // 3271, 0.45 deg (3271)
+  europa: 2300, // 1521, 0.13 (1521)
+  ganymede: 810, // 538 (539)
+  callisto: 195, // 128 (128)
+  tethys: 66000, // 43934, 8.6 deg (34780; Mimas missing)
+  dione: 1350, // 896 (5569)
+  rhea: 780, // 520 (6245)
+  titan: 790, // 522 (1902)
+  iapetus: 105, // 70 (348)
+  miranda: 400, // 260 (not modelled)
+  ariel: 130, // 84 (9020)
+  umbriel: 36, // 24 (980)
+  titania: 270, // 178 (1130)
+  oberon: 4, // 2.3 (963)
+  triton: 265, // 176 (1845)
+  charon: 65, // 42 (991, 2.9 deg)
 };
 
 function compare(years: number[], limit: Record<string, number>): void {

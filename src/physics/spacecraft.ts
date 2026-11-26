@@ -5,9 +5,11 @@
  * State vector: [x, y, z, vx, vy, vz, mass] in the ephemeris' inertial frame.
  *
  * Same determinism rule as dop853.ts: only exactly-defined operations (+ - * /,
- * Math.sqrt, Math.abs, Math.min/max, comparisons); no transcendental functions.
+ * Math.sqrt, Math.abs, Math.min/max, comparisons); no Math transcendental
+ * functions (a zonal field's time-dependent pole uses dmath, via PoleTable).
  */
 import { Dop853, type ScaleFn } from './dop853';
+import { PoleTable, polesAt, type IauRotation } from './orientation';
 
 export const G0 = 9.80665; // standard gravity, m/s^2 (defines Isp)
 export const STATE_SIZE = 7;
@@ -36,8 +38,30 @@ export interface BodyOblateness {
   readonly j4?: number;
   /** Reference radius, m. */
   readonly radius: number;
-  /** Spin-axis unit vector in the ephemeris frame. */
+  /** Spin-axis unit vector in the ephemeris frame. Used when `rotation` is absent. */
   readonly pole: ArrayLike<number>;
+  /**
+   * IAU rotation model: the field is oriented by the pole at the current time
+   * (orientation.ts PoleTable, a pure function of t), the same pole the
+   * massive-body integrator uses.
+   */
+  readonly rotation?: IauRotation;
+}
+
+/**
+ * One PoleTable per rotation model, shared by every propagation: a table's
+ * answer is a pure function of t (node values depend only on the node index),
+ * so sharing changes no bit, and it saves re-evaluating the IAU series at the
+ * nodes for each of the many short propagations a corrector or planner runs.
+ */
+const POLE_TABLES = new WeakMap<IauRotation, PoleTable>();
+function sharedPoleTable(m: IauRotation): PoleTable {
+  let t = POLE_TABLES.get(m);
+  if (t === undefined) {
+    t = new PoleTable(m);
+    POLE_TABLES.set(m, t);
+  }
+  return t;
 }
 
 /** Speed of light, m/s. */
@@ -164,6 +188,7 @@ export function propagate(
   const zF2: number[] = [];
   const zF4: number[] = [];
   const zPole: number[] = [];
+  const zTable: (PoleTable | null)[] = [];
   if (oblateness !== undefined) {
     for (let i = 0; i < nBodies; i++) {
       const ob = oblateness[i];
@@ -174,8 +199,12 @@ export function propagate(
       const R2 = ob.radius * ob.radius;
       zF4.push(j4 !== undefined && j4 !== 0 ? 0.125 * j4 * gm[i] * R2 * R2 : 0);
       zPole.push(ob.pole[0], ob.pole[1], ob.pole[2]);
+      zTable.push(ob.rotation !== undefined ? sharedPoleTable(ob.rotation) : null);
     }
   }
+  const anyTable = zTable.some((p) => p !== null);
+  const zTabs = zTable.filter((p): p is PoleTable => p !== null);
+  const zTabOff = Int32Array.from(zTable.flatMap((p, q) => (p !== null ? [3 * q] : [])));
   const nZonal = zBody.length;
   const zBodyA = Int32Array.from(zBody);
   const zF2A = Float64Array.from(zF2);
@@ -192,6 +221,7 @@ export function propagate(
   // reuse the last answer. Keys compare with Object.is so that -0 and 0 stay
   // distinct calls, as before.
   let posT = NaN;
+  let poleT = NaN;
   let sunT = NaN;
   let refT = NaN;
   let refBody = -1;
@@ -228,6 +258,10 @@ export function propagate(
 
     // Zonal J2 of every body that has one. r = spacecraft - body, s = r.pole:
     // a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ].
+    if (anyTable && !Object.is(t, poleT)) {
+      polesAt(zTabs, t, zPoleA, zTabOff);
+      poleT = t;
+    }
     for (let q = 0; q < nZonal; q++) {
       const i = zBodyA[q];
       const rx = x - bodyPos[3 * i];

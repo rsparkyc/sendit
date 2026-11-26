@@ -36,6 +36,7 @@ function canonical(over: Partial<MissionPlan> = {}): MissionPlan {
  */
 const GOLDEN: readonly { model: number; data: string; digest: string }[] = [
   { model: 1, data: '2cb83544', digest: '342786722dea0bca' },
+  { model: 2, data: '2a78461f', digest: 'efe76eec721faaf3' }, // time-dependent IAU poles, Miranda, Moon parented to Earth, outer moons out of planet GMs
 ];
 
 describe('replay hooks and abort', () => {

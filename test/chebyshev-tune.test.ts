@@ -2,7 +2,7 @@
  * Tuner for DEFAULT_FITS. Skipped unless TUNE=1 (takes a minute or two):
  *   TUNE=1 pnpm vitest run test/chebyshev-tune.test.ts
  * For every body and candidate (segment length, degree, samples) it fits
- * TUNE_CHUNKS chunks (default 1, 2.8 years: ~580 orbits of Io) and measures the
+ * TUNE_CHUNKS chunks (default 1, 128 days: ~72 orbits of Io) and measures the
  * maximum error at held-out mid-step times against the integrator, in the
  * quantity the body's slot stores: a moon's position relative to its system
  * barycenter, a planet's system barycenter, any other body's position. For several degree
@@ -62,7 +62,7 @@ describe.skipIf(!RUN)('Chebyshev fit tuner', () => {
     });
     const table: { fit: BodyFit; err: Float64Array }[] = [];
     const out = new Float64Array(m);
-    for (let seg = 4; seg <= 8192; seg *= 2) {
+    for (let seg = 4; seg <= S; seg *= 2) { // a segment must divide the chunk
       for (let deg = 5; deg <= 20; deg++) {
         const fit: BodyFit = { segSteps: seg, degree: deg, samples: Math.min(seg, 32) };
         if (3 * (sampleIntervals(fit) + 1) < 2 * (deg + 1)) continue;

@@ -38,6 +38,15 @@
  * not with the real Earth.
  */
 import { DEG, sincos } from '../physics/dmath';
+import { IAU_ROTATION } from '../physics/orientation';
+
+/**
+ * Earth's IAU constants, from the one generated source the physics and the
+ * display also read (src/physics/data/iau-rotation.json, pck00011): pole
+ * alpha0 = 0 - 0.641 T, delta0 = 90 - 0.557 T; W = 190.147 + 360.9856235 d.
+ * test/orientation.test.ts checks the launch-code pole against the physics pole.
+ */
+const IAU_EARTH = IAU_ROTATION.earth;
 
 export const SECONDS_PER_DAY = 86400;
 export const DAYS_PER_CENTURY = 36525;
@@ -73,7 +82,14 @@ export interface Ellipsoid {
  * W linear in TDB. Kept for comparison: 11 s of rotation off at J2000 and
  * drifting (its W0 and rate are only quoted to ~1e-3 deg and ~1e-7 deg/day).
  */
-export const EARTH_ROTATION_IAU: RotationModel = { ra0: 0, ra1: -0.641, dec0: 90, dec1: -0.557, w0: 190.147, wDot: 360.9856235 };
+export const EARTH_ROTATION_IAU: RotationModel = {
+  ra0: IAU_EARTH.ra[0],
+  ra1: IAU_EARTH.ra[1],
+  dec0: IAU_EARTH.dec[0],
+  dec1: IAU_EARTH.dec[1],
+  w0: IAU_EARTH.pm[0],
+  wDot: IAU_EARTH.pm[1],
+};
 
 /**
  * TT - UT1 (Delta-T), seconds, at 1 January of each year. 1950-2020: IERS /
@@ -116,13 +132,13 @@ export function deltaT(t: number): number {
  * offset: < 1e-5 rad (<~0.1 km) over +-50 y.
  */
 export const EARTH_ROTATION: RotationModel = {
-  ra0: 0,
-  ra1: -0.641,
-  dec0: 90,
-  dec1: -0.557,
+  ra0: IAU_EARTH.ra[0],
+  ra1: IAU_EARTH.ra[1],
+  dec0: IAU_EARTH.dec[0],
+  dec1: IAU_EARTH.dec[1],
   w0: 190.46061837504,
   wDot: 360.9856122880876, // 360 * 1.00273781191135448
-  w1: 0.641,
+  w1: -IAU_EARTH.ra[1],
   timeOffset: deltaT,
 };
 

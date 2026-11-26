@@ -1,7 +1,10 @@
-"""Extract IAU WGCCRE rotation constants for the bodies the viewer draws from
-NAIF's pck00011.tpc into src/app/data/iau-rotation.json (display-only data).
+"""Extract IAU WGCCRE rotation constants for the bodies of the physics data from
+NAIF's pck00011.tpc into src/physics/data/iau-rotation.json: the single source of
+body orientation for the physics (pole of each J2/J4 field, src/physics/orientation.ts),
+the launch code's Earth pole (checked against it in test/orientation.test.ts) and the
+display (textures, drawn axes and equators, src/app/body-rotation.ts).
 
-Usage: python3 -I scripts/gen-iau-rotation.py path/to/pck00011.tpc > src/app/data/iau-rotation.json
+Usage: python3 -I scripts/gen-iau-rotation.py path/to/pck00011.tpc > src/physics/data/iau-rotation.json
 Source: https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc
 Only \\begindata blocks are read; nothing in the kernel is executed.
 """
@@ -21,7 +24,7 @@ for m in re.finditer(r'(BODY\w+)\s*=\s*\(([^)]*)\)|(BODY\w+)\s*=\s*([^\s(][^\n]*
 IDS = {'sun': 10, 'mercury': 199, 'venus': 299, 'earth': 399, 'moon': 301, 'mars': 499, 'jupiter': 599,
        'saturn': 699, 'uranus': 799, 'neptune': 899, 'pluto': 999, 'io': 501, 'europa': 502, 'ganymede': 503,
        'callisto': 504, 'tethys': 603, 'dione': 604, 'rhea': 605, 'titan': 606, 'iapetus': 608, 'ariel': 701,
-       'umbriel': 702, 'titania': 703, 'oberon': 704, 'triton': 801, 'charon': 901}
+       'umbriel': 702, 'titania': 703, 'oberon': 704, 'miranda': 705, 'triton': 801, 'charon': 901}
 bodies = {}
 for name, n in IDS.items():
     k = f'BODY{n}'

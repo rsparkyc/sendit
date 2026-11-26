@@ -9,9 +9,9 @@
   "stateSource": "JPL Horizons API, EPHEM_TYPE=VECTORS (planetary ephemeris DE441)",
   "gmSource": "DE440 header constants, https://ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de440/header.440 (Park et al. 2021, AJ 161:105); Earth/Moon split from GMB with EMRAT=81.30056822149722",
   "j2Source": "Unnormalized J2 with reference radius j2Radius (m). Sun/Earth/Moon: DE440 header. Mars..Neptune: JPL satellite ephemeris headers (NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ mar099/jup365/sat441/ura111xl-799/nep097 .cmt). J4 (j4, same radius) for Jupiter..Neptune from the same headers. In systemBarycenters the planet's J2 is applied about the system barycenter (offset <~200 km for Jupiter).",
-  "poleSource": "IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc, J2000 value, ICRF unit vector; secular pole motion and nutation terms ignored.",
+  "poleSource": "IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc, as generated into src/physics/data/iau-rotation.json by scripts/gen-iau-rotation.py: J2000 value including the periodic terms, ICRF unit vector toward the IAU north pole (poleRaDecDeg: RA, Dec). The dynamics orient each J2/J4 field by the same model's time-dependent pole (src/physics/orientation.ts).",
   "radiusSource": "JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
-  "moonSource": "Planets Jupiter..Pluto (NAIF x99) and moons: state = DE441 system barycenter + Horizons state relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune are inconsistent with DE441's barycenters by 364/60 km); GM, J2, J4, RADIUS and pole from the satellite ephemeris Horizons uses (https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ jup365, sat441, ura184_part-1, nep098_part-1, plu060 .cmt); planet GM = that file's system GM minus the modelled moons; radius from https://ssd.jpl.nasa.gov/sats/phys_par/.",
+  "moonSource": "Satellite systems (Earth-Moon, Jupiter..Pluto; each moon has 'parent'): state = DE441 system barycenter + Horizons state relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune are inconsistent with DE441's barycenters by 364/60 km), all members shifted together so the modelled bodies' center of mass is the barycenter; GM, J2, J4 and RADIUS from the satellite ephemeris Horizons uses (https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ jup365, sat441, ura184_part-1, nep098_part-1, plu060 .cmt; Earth-Moon: DE440 header); planet GM = that file's system GM minus the modelled moons and minus the unmodelled moons outside the modelled moons' orbits (Hyperion, Phoebe, Helene; Nix, Hydra, Kerberos, Styx), which are left out; unmodelled inner moons stay lumped in the planet; radius from https://ssd.jpl.nasa.gov/sats/phys_par/.",
   "generatedBy": "scripts/fetch-horizons.py",
   "bodies": [
     {
@@ -132,13 +132,13 @@
       "gmSource": "GM_MOON",
       "radius": 1737400.0,
       "pole": [
-        -3.543751262843568e-05,
-        -0.39812154993705506,
-        0.9173326715101232
+        -0.02260867140418245,
+        -0.4118309009426125,
+        0.9109797785934295
       ],
       "poleRaDecDeg": [
-        269.9949,
-        66.5392
+        266.85773344495135,
+        65.64110274784535
       ],
       "j2": 0.000203214360135,
       "j2Radius": 1738000.0,
@@ -151,6 +151,7 @@
         -5695.841497884601,
         -2481.970773696848
       ],
+      "parent": "earth",
       "displayName": "Moon"
     },
     {
@@ -161,13 +162,13 @@
       "gmSource": "GM4",
       "radius": 3389500.0,
       "pole": [
-        0.42725938216877546,
-        -0.3946890453593222,
-        0.8134309914320348
+        0.4461552707768573,
+        -0.4062426653624658,
+        0.7974411396443181
       ],
       "poleRaDecDeg": [
-        317.269202,
-        54.432516
+        317.6808544073077,
+        52.88643927512738
       ],
       "j2": 0.001956608633534895,
       "j2Radius": 3396000.0,
@@ -187,18 +188,17 @@
       "name": "Jupiter",
       "horizonsId": "599",
       "gm": 1.2668653209772181e+17,
-      "gmSource": "jup365.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM5 = 126712764.09999996 km^3/s^2",
+      "gmSource": "jup365.cmt: system GM minus the modelled moons; inner unmodelled moons ['505', '514', '515', '516'] lumped in; DE440 GM5 = 126712764.09999996 km^3/s^2",
       "radius": 69911000.0,
       "pole": [
-        -0.014601347189159418,
-        -0.43033688255055846,
-        0.9025502579784288
+        -0.014597290902157927,
+        -0.43032959427365014,
+        0.9025537986129101
       ],
       "poleRaDecDeg": [
-        268.0566974810512,
-        64.49533881439783
+        268.05720404270755,
+        64.49580995339572
       ],
-      "poleSource": "NAIF jup365.cmt ZACPL5, ZDEPL5 (at POLTIM = J2000)",
       "j2": 0.0146965063,
       "j2Radius": 71492000.0,
       "j4": -0.0005866085,
@@ -217,30 +217,29 @@
       "id": "saturn",
       "name": "Saturn",
       "horizonsId": "699",
-      "gm": 3.793121799697025e+16,
-      "gmSource": "sat441.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM6 = 37940584.8418 km^3/s^2",
+      "gm": 3.793121707121713e+16,
+      "gmSource": "sat441.cmt: system GM minus the modelled moons and the outer unmodelled moons ['607', '609', '612'] (left out); inner unmodelled moons ['601', '602'] lumped in; DE440 GM6 = 37940584.8418 km^3/s^2",
       "radius": 58232000.0,
       "pole": [
-        0.0855062032483332,
-        0.07327440632797554,
-        0.993639547614394
+        0.0854788318610717,
+        0.0732357578775289,
+        0.9936447519469775
       ],
       "poleRaDecDeg": [
-        40.59487211316282,
-        83.53435144537646
+        40.589,
+        83.537
       ],
-      "poleSource": "NAIF sat441.cmt ZACPL6, ZDEPL6 (at POLTIM = J2000)",
       "j2": 0.01629061510215236,
       "j2Radius": 60330000.0,
       "j4": -0.0009351185734877162,
       "j2Source": "NAIF sat441.cmt J602, J604, RADIUS",
       "state": [
-        957317651980.4596,
-        923319434986.3898,
-        340162793274.82996,
-        -7421.898075784808,
-        6098.453220561052,
-        2837.5476353311265
+        957317651980.5073,
+        923319434986.3927,
+        340162793274.82947,
+        -7421.898075750487,
+        6098.453220576355,
+        2837.5476353241197
       ],
       "displayName": "Saturn"
     },
@@ -248,30 +247,29 @@
       "id": "uranus",
       "name": "Uranus",
       "horizonsId": "799",
-      "gm": 5793954843368137.0,
-      "gmSource": "ura184_part-1.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM7 = 5794556.399999998 km^3/s^2",
+      "gm": 5793950737840896.0,
+      "gmSource": "ura184_part-1.cmt: system GM minus the modelled moons; inner unmodelled moons ['715'] lumped in; DE440 GM7 = 5794556.399999998 km^3/s^2",
       "radius": 25362000.0,
       "pole": [
-        0.21198899852393574,
-        0.9415783899113633,
-        0.2617074705787806
+        -0.21199958153779855,
+        -0.9415591572895124,
+        -0.2617680858165514
       ],
       "poleRaDecDeg": [
-        77.31186370800411,
-        15.17140155748226
+        257.311,
+        -15.175
       ],
-      "poleSource": "NAIF ura184_part-1.cmt ZACPL7, ZDEPL7 (at POLTIM = J2000)",
       "j2": 0.003508966976546036,
       "j2Radius": 25559000.0,
       "j4": -3.579347133056984e-05,
       "j2Source": "NAIF ura184_part-1.cmt J702, J704, RADIUS",
       "state": [
-        2157907332099.682,
-        -1871306849606.9688,
-        -850106776876.916,
-        4646.5820955909785,
-        4251.110161902911,
-        1796.1255413827582
+        2157907332173.6084,
+        -1871306849631.6758,
+        -850106776828.1188,
+        4646.584842379216,
+        4251.110863992298,
+        1796.1217474588423
       ],
       "displayName": "Uranus"
     },
@@ -280,18 +278,17 @@
       "name": "Neptune",
       "horizonsId": "899",
       "gm": 6835103145462294.0,
-      "gmSource": "nep098_part-1.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM8 = 6836527.100580399 km^3/s^2",
+      "gmSource": "nep098_part-1.cmt: system GM minus the modelled moons; inner unmodelled moons ['803', '804', '805', '806', '807', '808'] lumped in; DE440 GM8 = 6836527.100580399 km^3/s^2",
       "radius": 24622000.0,
       "pole": [
-        0.3571042901236777,
-        -0.6334241118221116,
-        0.6864768171887768
+        0.3585765089087283,
+        -0.6380951021167844,
+        0.6813644604126335
       ],
       "poleRaDecDeg": [
-        299.4129156863023,
-        43.35186141539896
+        299.33373895877264,
+        42.95035902184485
       ],
-      "poleSource": "NAIF nep098_part-1.cmt ZACPL8, ZDEPL8 (at POLTIM = J2000)",
       "j2": 0.003536205996177839,
       "j2Radius": 24764000.0,
       "j4": -3.595236402334314e-05,
@@ -310,26 +307,25 @@
       "id": "pluto",
       "name": "Pluto",
       "horizonsId": "999",
-      "gm": 869329727608.1439,
-      "gmSource": "plu060.cmt: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); DE440 GM9 = 975.4999999999999 km^3/s^2",
+      "gm": 869326122631.1509,
+      "gmSource": "plu060.cmt: system GM minus the modelled moons and the outer unmodelled moons ['902', '903', '904', '905'] (left out); DE440 GM9 = 975.4999999999999 km^3/s^2",
       "radius": 1188300.0,
       "pole": [
-        -0.6780440212854516,
-        0.7269274837984139,
-        -0.10877839168493318
+        -0.677967909916917,
+        0.7272096774535675,
+        -0.10735733855105338
       ],
       "poleRaDecDeg": [
-        133.0073,
-        -6.2449
+        132.993,
+        -6.163
       ],
-      "poleSource": "NAIF plu060.cmt ZACPL9, ZDEPL9 (at POLTIM = J2000)",
       "state": [
-        -1478398629043.3394,
-        -4185974175130.9727,
-        -860876296436.747,
-        5269.162802666328,
-        -1951.463022191727,
-        -2209.3007867619344
+        -1478398629048.0781,
+        -4185974175133.7646,
+        -860876296425.2432,
+        5269.162865701841,
+        -1951.462968651855,
+        -2209.300822402308
       ],
       "displayName": "Pluto"
     },
@@ -414,12 +410,12 @@
       "gmSource": "sat441.cmt body table",
       "radius": 531100.0,
       "state": [
-        957534685871.8075,
-        923120299218.6846,
-        340153397243.25793,
-        178.88439691878284,
-        14441.917901447046,
-        1633.4343072285699
+        957534685701.9292,
+        923120299188.1969,
+        340153397244.36066,
+        178.88433812582005,
+        14441.917936176638,
+        1633.4343222937177
       ],
       "displayName": "Tethys"
     },
@@ -432,12 +428,12 @@
       "gmSource": "sat441.cmt body table",
       "radius": 561400.0,
       "state": [
-        957546200743.9398,
-        923020026785.9625,
-        340165021081.80273,
-        509.91350061628236,
-        12162.052244161165,
-        1706.4347689820827
+        957546200574.0615,
+        923020026755.4749,
+        340165021082.90546,
+        509.91344182331954,
+        12162.052278890756,
+        1706.4347840472306
       ],
       "displayName": "Dione"
     },
@@ -450,12 +446,12 @@
       "gmSource": "sat441.cmt body table",
       "radius": 763500.0,
       "state": [
-        956792889732.6206,
-        923296338097.2621,
-        340212334991.2625,
-        -6990.121492420047,
-        -2344.9379511374127,
-        3442.022241626126
+        956792889562.7423,
+        923296338066.7744,
+        340212334992.36523,
+        -6990.121551213009,
+        -2344.937916407821,
+        3442.0222566912735
       ],
       "displayName": "Rhea"
     },
@@ -468,12 +464,12 @@
       "gmSource": "sat441.cmt body table",
       "radius": 2574760.0,
       "state": [
-        956370849171.8918,
-        924143533282.7957,
-        340189875504.49603,
-        -10983.243906194954,
-        2053.203804752566,
-        3421.8330002894127
+        956370849002.0135,
+        924143533252.308,
+        340189875505.59875,
+        -10983.243964987916,
+        2053.203839482158,
+        3421.8330153545603
       ],
       "displayName": "Titan"
     },
@@ -486,12 +482,12 @@
       "gmSource": "sat441.cmt body table",
       "radius": 734300.0,
       "state": [
-        954463878871.5685,
-        921048219962.0822,
-        340323362551.7492,
-        -5501.123064904945,
-        3693.057823604033,
-        2026.78632143594
+        954463878701.6902,
+        921048219931.5945,
+        340323362552.8519,
+        -5501.123123697907,
+        3693.0578583336246,
+        2026.7863365010878
       ],
       "displayName": "Iapetus"
     },
@@ -568,6 +564,24 @@
       "displayName": "Oberon"
     },
     {
+      "id": "miranda",
+      "name": "Miranda",
+      "horizonsId": "705",
+      "parent": "uranus",
+      "gm": 4105527241.1815605,
+      "gmSource": "ura184_part-1.cmt body table",
+      "radius": 235800.0,
+      "state": [
+        2157803002640.582,
+        -1871271981598.77,
+        -850175642263.4729,
+        770.16018896898,
+        3260.282168581314,
+        7150.32415722438
+      ],
+      "displayName": "Miranda"
+    },
+    {
       "id": "triton",
       "name": "Triton",
       "horizonsId": "801",
@@ -594,12 +608,12 @@
       "gmSource": "plu060.cmt body table",
       "radius": 606000.0,
       "state": [
-        -1478405466833.227,
-        -4185982966572.002,
-        -860892422664.6816,
-        5124.8367009053045,
-        -2067.461522452079,
-        -2084.8897980441034
+        -1478405466769.1301,
+        -4185982966516.6333,
+        -860892422699.3376,
+        5124.836717829273,
+        -2067.461532419349,
+        -2084.8899658247865
       ],
       "displayName": "Charon"
     }
@@ -613,13 +627,13 @@
       "gmSource": "GM5",
       "radius": 69911000.0,
       "pole": [
-        -0.014602136035502304,
-        -0.43033742027421007,
-        0.9025499888288396
+        -0.014597290902157927,
+        -0.43032959427365014,
+        0.9025537986129101
       ],
       "poleRaDecDeg": [
-        268.056595,
-        64.495303
+        268.05720404270755,
+        64.49580995339572
       ],
       "j2": 0.0146965063,
       "j2Radius": 71492000.0,
@@ -700,13 +714,13 @@
       "gmSource": "GM8",
       "radius": 24622000.0,
       "pole": [
-        0.35588325685864897,
-        -0.6326232961330794,
-        0.6878480011437111
+        0.3585765089087283,
+        -0.6380951021167844,
+        0.6813644604126335
       ],
       "poleRaDecDeg": [
-        299.36,
-        43.46
+        299.33373895877264,
+        42.95035902184485
       ],
       "j2": 0.003536297303482466,
       "j2Radius": 24764000.0,

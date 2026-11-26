@@ -17,7 +17,8 @@ Body sets:
     the system GM. Replacing bodies[6..10] by these and dropping the moons gives
     the older 11-body planetary set, still used by the baseline tests.
 
-Usage:  python3 scripts/fetch-horizons.py
+Usage:  python3 scripts/fetch-horizons.py [--out DIR]
+        (needs src/physics/data/iau-rotation.json: run scripts/gen-iau-rotation.py first if the pck changes)
 
 Sources:
   * State vectors: JPL Horizons API (https://ssd.jpl.nasa.gov/api/horizons.api),
@@ -39,10 +40,14 @@ Sources:
       nep097 .cmt files, keys J402..J802 and RADIUS), under
       https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/
       Mercury, Venus, Pluto: omitted (no J2 in these sources; effects negligible here).
-  * Spin-pole direction: IAU WGCCRE 2015 (Archinal et al. 2018, Celest. Mech.
-    Dyn. Astr. 130:22) as given in NAIF pck00011.tpc, value at J2000 (the
-    secular rate and nutation terms are ignored), converted to an ICRF unit
-    vector here so the game code needs no trigonometry.
+  * Spin-pole direction ("pole", J2000 value): the IAU WGCCRE 2015 model
+    (Archinal et al. 2018, Celest. Mech. Dyn. Astr. 130:22) of NAIF
+    pck00011.tpc, read from src/physics/data/iau-rotation.json (made from the
+    kernel by scripts/gen-iau-rotation.py, the single source of orientation for
+    physics and display), periodic terms included, as an ICRF unit vector
+    toward the IAU north pole. The dynamics use the same model's
+    time-dependent pole (src/physics/orientation.ts); this vector is the J2000
+    value for the mission layer and display.
   * Mean radii: JPL Solar System Dynamics "Planetary Physical Parameters"
     (https://ssd.jpl.nasa.gov/planets/phys_par.html) and Horizons body data pages;
     moons: JPL SSD "Planetary Satellite Physical Parameters"
@@ -78,10 +83,10 @@ J2_SOURCES = {
     "uranus": ("ura111xl-799.cmt", "J702", "RADIUS", "J704"),
     "neptune": ("nep097.cmt", "J802", "RADIUS", "J804"),
 }
-# body id -> NAIF id whose IAU pole is used (planet itself, not the barycenter)
-POLE_IDS = {"sun": 10, "mercury": 199, "venus": 299, "earth": 399, "moon": 301, "mars": 499,
-            "jupiter": 599, "saturn": 699, "uranus": 799, "neptune": 899, "pluto": 999}
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+IAU_JSON = ROOT / "src/physics/data/iau-rotation.json"
+# Output root (default: the repository). `--out DIR` writes the same relative paths under DIR, e.g. to diff first.
+OUT = pathlib.Path(sys.argv[sys.argv.index("--out") + 1]).resolve() if "--out" in sys.argv else ROOT
 
 JD_J2000 = 2451545.0
 JULIAN_YEAR_DAYS = 365.25
@@ -105,6 +110,10 @@ BARYCENTER_IDS = ["jupiter", "saturn", "uranus", "neptune", "pluto"]
 # Satellite systems modelled with the planet and its major moons as separate
 # bodies. Planet: NAIF id of the planet itself. Moons: (id, name, NAIF id).
 # The selection and its reasons are in the header of src/physics/solar-system.ts.
+# The Earth-Moon system is one too (barycenter 3, GMs from the DE440 header, no
+# satellite file): the Moon gets parent "earth" like every other moon, so the
+# Chebyshev ephemeris stores the Earth-Moon barycenter and the Moon relative to
+# it. Earth and Moon keep their places (indices 3 and 4) in the body list.
 # cmt: the satellite ephemeris Horizons itself uses for these bodies (its
 # "Target body name ... {source: ...}" line): GMs, J2, J4, RADIUS and the
 # planet pole (ZACPL/ZDEPL at POLTIM = J2000) come from its header, so the
@@ -120,12 +129,14 @@ BARYCENTER_IDS = ["jupiter", "saturn", "uranus", "neptune", "pluto"]
 # consistent with the satellite ephemeris. The planet's state is the center of
 # mass of the planet and its unmodelled moons (planet_state).
 SYSTEMS = [
+    dict(id="earth", name="Earth", planet="399", cmt=None, moons=[("moon", "Moon", "301")]),
     dict(id="jupiter", name="Jupiter", planet="599", cmt="jup365.cmt",
          moons=[("io", "Io", "501"), ("europa", "Europa", "502"), ("ganymede", "Ganymede", "503"), ("callisto", "Callisto", "504")]),
     dict(id="saturn", name="Saturn", planet="699", cmt="sat441.cmt",
          moons=[("tethys", "Tethys", "603"), ("dione", "Dione", "604"), ("rhea", "Rhea", "605"), ("titan", "Titan", "606"), ("iapetus", "Iapetus", "608")]),
     dict(id="uranus", name="Uranus", planet="799", cmt="ura184_part-1.cmt",
-         moons=[("ariel", "Ariel", "701"), ("umbriel", "Umbriel", "702"), ("titania", "Titania", "703"), ("oberon", "Oberon", "704")]),
+         moons=[("ariel", "Ariel", "701"), ("umbriel", "Umbriel", "702"), ("titania", "Titania", "703"), ("oberon", "Oberon", "704"),
+                ("miranda", "Miranda", "705")]),
     dict(id="neptune", name="Neptune", planet="899", cmt="nep098_part-1.cmt", moons=[("triton", "Triton", "801")]),
     dict(id="pluto", name="Pluto", planet="999", cmt="plu060.cmt", moons=[("charon", "Charon", "901")]),
 ]
@@ -168,23 +179,71 @@ def with_bary(bary_state: list, rel_state: list) -> list:
     return [b + r for b, r in zip(bary_state, rel_state)]
 
 
-def planet_state(bary_state: list, moon_rel: dict, gms: dict, sysd: dict, planet_gm: float) -> list:
+def planet_rel(moon_rel: dict, ext_rel: dict, gms: dict, planet_gm: float) -> list:
     """
-    State of the planet body that carries the planet's GM plus every moon left
-    out: the center of mass of the planet and those moons, placed so that the
-    modelled system's barycenter is exactly DE441's. (Using the planet center
-    instead puts the left-out moons' momentum in the wrong place: the system
-    barycenter then drifts by 107 km/yr for Saturn (Enceladus, Mimas), 150 for
-    Uranus (Miranda, Puck), 90 for Neptune (Proteus), and the moons' orbits
-    around the planet get a mean-motion error, e.g. Titan 2e-6, Charon 7e-6
-    from Nix and Hydra.) Differs from the planet center (NAIF x99) by those
-    moons' reflex: < 0.3 km and a few mm/s.
+    State, relative to the system barycenter, of the planet body: the center of
+    mass of the planet and the unmodelled moons INSIDE the modelled moons'
+    orbits (Amalthea, Mimas, Enceladus, Puck, Proteus, ...), which carries their
+    GM. By the barycenter's definition (sum of GM r over every body of the
+    satellite file is 0) that is -(sum over modelled moons + sum over the
+    excluded outer moons of GM r) / planet_gm. Differs from the planet center
+    (NAIF x99) by the inner moons' reflex: < 0.3 km and a few mm/s.
+
+    Why only inner moons are lumped: a moon outside an orbit does not pull on
+    it like a mass at the planet's center (its orbit-averaged pull is a weak
+    outward tide), so lumping it adds a spurious central attraction. Lumping
+    Nix, Hydra, Kerberos and Styx (GM 0.0036 km^3/s^2, 3.7e-6 of the Pluto
+    system) into Pluto made Charon's mean motion 5.6e-6 too fast: 0.116 deg (40
+    km) per year ahead of Horizons; with them left out, 0.005 deg (1.7 km) per
+    year. Saturn's Hyperion and Phoebe (2.4e-8) and Helene are left out for the
+    same reason. Their mass is then missing from the system's total GM (3.7e-6
+    of Pluto's system, which changes Pluto's heliocentric mean motion by 1e-14).
     """
     rel = [0.0] * 6
-    for _, _, naif in sysd["moons"]:
+    for src in (moon_rel, ext_rel):
+        for naif, r in src.items():
+            for k in range(6):
+                rel[k] -= gms[naif] * r[k] / planet_gm
+    return rel
+
+
+def system_shift(ext_rel: dict, gms: dict, modelled_gm: float) -> list:
+    """
+    Offset added to every modelled member of a system so that their center of
+    mass is exactly the system barycenter (which moves on DE441's heliocentric
+    orbit) while their relative states stay exactly Horizons': + sum over the
+    excluded outer moons of GM r / (GM of the modelled bodies). Zero when no
+    moon is excluded; 82 m for Pluto-Charon.
+    """
+    s = [0.0] * 6
+    for naif, r in ext_rel.items():
         for k in range(6):
-            rel[k] -= gms[naif] * moon_rel[naif][k] / planet_gm
-    return with_bary(bary_state, rel)
+            s[k] += gms[naif] * r[k] / modelled_gm
+    return s
+
+
+def system_members_at(sysd: dict, jd: float, gms: dict, bary: str) -> dict:
+    """
+    SSB states (m, m/s) at jd of a system's modelled members, built as main()
+    builds them at J2000: DE441 barycenter + (member relative to it), the
+    planet as planet_rel, everything shifted by system_shift. Which moons are
+    left out is decided at J2000 (as in main), so the construction is the same
+    at every epoch. For other epochs' fixtures (fetch-voyager2-jupiter.py).
+    """
+    modelled = [n for _, _, n in sysd["moons"]]
+    others = {n: g for n, g in gms.items() if n not in ("System", sysd["planet"]) and n not in modelled and g > 0}
+    r0 = {n: vectors(n, [JD_J2000], f"500@{bary}")[0]["state"] for n in list(others) + modelled}
+    rmin = min(math.hypot(*r0[n][:3]) for n in modelled)
+    ext = [n for n in others if math.hypot(*r0[n][:3]) > rmin]
+    planet_gm = gms["System"] - sum(gms[n] for n in modelled) - sum(gms[n] for n in ext)
+    b0 = vectors(bary, [jd])[0]["state"]
+    rels = {n: vectors(n, [jd], f"500@{bary}")[0]["state"] for n in modelled}
+    ext_rel = {n: vectors(n, [jd], f"500@{bary}")[0]["state"] for n in ext}
+    shift = system_shift(ext_rel, gms, planet_gm + sum(gms[n] for n in modelled))
+    out = {sysd["id"]: with_bary(with_bary(b0, planet_rel(rels, ext_rel, gms, planet_gm)), shift)}
+    for mid, _, n in sysd["moons"]:
+        out[mid] = with_bary(with_bary(b0, rels[n]), shift)
+    return out
 
 
 def cmt_body_gms(name: str) -> dict:
@@ -213,15 +272,19 @@ def satellite_radii() -> dict:
     return out
 
 
-def pck_poles() -> dict:
-    text = get(PCK_URL)
+def iau_poles() -> dict:
+    """J2000 IAU pole (RA, Dec in degrees, ICRF unit vector) of every body in
+    src/physics/data/iau-rotation.json, periodic terms included (T = 0)."""
+    bodies = json.loads(IAU_JSON.read_text())["bodies"]
     poles = {}
-    for body, naif in POLE_IDS.items():
-        ra = re.search(rf"BODY{naif}_POLE_RA\s*=\s*\(\s*([-\d.]+)", text)
-        dec = re.search(rf"BODY{naif}_POLE_DEC\s*=\s*\(\s*([-\d.]+)", text)
-        a, d = math.radians(float(ra.group(1))), math.radians(float(dec.group(1)))
-        poles[body] = dict(raDeg=float(ra.group(1)), decDeg=float(dec.group(1)),
-                           vector=[math.cos(d) * math.cos(a), math.cos(d) * math.sin(a), math.sin(d)])
+    for body, m in bodies.items():
+        ra, dec = m["ra"][0], m["dec"][0]
+        for n in m.get("nut", []):
+            a = math.radians(n["angle"][0])
+            ra += n["ra"] * math.sin(a)
+            dec += n["dec"] * math.cos(a)
+        a, d = math.radians(ra), math.radians(dec)
+        poles[body] = dict(raDeg=ra, decDeg=dec, vector=[math.cos(d) * math.cos(a), math.cos(d) * math.sin(a), math.sin(d)])
     return poles
 
 
@@ -271,7 +334,7 @@ def main() -> None:
     c["GM_EARTH"] = c["GMB"] * emrat / (1.0 + emrat)
     c["GM_MOON"] = c["GMB"] / (1.0 + emrat)
 
-    poles = pck_poles()
+    poles = iau_poles()
     cmt_cache = {}
 
     def cmt(src):
@@ -335,39 +398,79 @@ def main() -> None:
     bodies = [dict(r) for r in planetary if r["id"] not in BARYCENTER_IDS]
     moons = []
     by_id = {b["id"]: b for b in BODIES}
+    in_place = {r["id"]: r for r in bodies}  # Earth and Moon: rows kept at their indices
+
+    def system_gms(sysd):
+        """NAIF id -> GM (km^3/s^2) of every body of the system, plus 'System'."""
+        if sysd["cmt"] is None:  # Earth-Moon: DE440 header
+            return {"399": c["GM_EARTH"], "301": c["GM_MOON"], "System": c["GMB"]}
+        return cmt_body_gms(sysd["cmt"])
+
+    def bary_id(sysd):
+        return "3" if sysd["id"] == "earth" else by_id[sysd["id"]]["horizons"]
+
+    # Per system: (barycenter Horizons id, modelled moon ids, excluded outer moons {naif: GM}, planet GM).
+    split = {}
     for sysd in SYSTEMS:
-        gms = cmt_body_gms(sysd["cmt"])
-        k = cmt(sysd["cmt"])
-        bary = by_id[sysd["id"]]
+        gms = system_gms(sysd)
+        bh = bary_id(sysd)
         sys_gm = gms["System"]  # km^3/s^2
-        moon_gm = sum(gms[n] for _, _, n in sysd["moons"])
-        b0 = vectors(bary["horizons"], [JD_J2000])[0]["state"]
-        rels = {naif: vectors(naif, [JD_J2000], f"500@{bary['horizons']}")[0]["state"] for _, _, naif in sysd["moons"]}
-        ps = planet_state(b0, rels, gms, sysd, sys_gm - moon_gm)
-        naif_body = sysd["planet"][0]
-        ra, dec = k["ZACPL" + naif_body], k["ZDEPL" + naif_body]
-        a, d = math.radians(ra), math.radians(dec)
-        j2 = k.get("J" + naif_body + "02", 0.0)
-        zon = {} if j2 == 0.0 else dict(
-            j2=j2, j2Radius=k["RADIUS"] * 1000.0, j4=k["J" + naif_body + "04"],
-            j2Source=f"NAIF {sysd['cmt']} J{naif_body}02, J{naif_body}04, RADIUS")
-        bodies.append(dict(
-            id=sysd["id"],
-            name=sysd["name"],
-            horizonsId=sysd["planet"],
-            gm=(sys_gm - moon_gm) * 1e9,
-            gmSource=f"{sysd['cmt']}: system GM minus the modelled moons (unmodelled moons stay lumped in the planet); "
-                     f"DE440 {bary['gmKey']} = {c[bary['gmKey']]!r} km^3/s^2",
-            radius=bary["radiusKm"] * 1000.0,
-            pole=[math.cos(d) * math.cos(a), math.cos(d) * math.sin(a), math.sin(d)],
-            poleRaDecDeg=[ra, dec],
-            poleSource=f"NAIF {sysd['cmt']} ZACPL{naif_body}, ZDEPL{naif_body} (at POLTIM = J2000)",
-            **zon,
-            state=ps,
-        ))
+        modelled = [n for _, _, n in sysd["moons"]]
+        moon_gm = sum(gms[n] for n in modelled)
+        b0 = vectors(bh, [JD_J2000])[0]["state"]
+        rels = {naif: vectors(naif, [JD_J2000], f"500@{bh}")[0]["state"] for naif in modelled}
+        # Unmodelled moons with mass: lumped into the planet if inside every
+        # modelled moon's orbit (distance at J2000), otherwise left out (planet_rel).
+        others = {n: g for n, g in gms.items() if n not in ("System", sysd["planet"]) and n not in modelled and g > 0}
+        orel = {n: vectors(n, [JD_J2000], f"500@{bh}")[0]["state"] for n in others}
+        rmin = min(math.hypot(*rels[n][:3]) for n in modelled)
+        ext = {n: others[n] for n in others if math.hypot(*orel[n][:3]) > rmin}
+        lumped = sorted(n for n in others if n not in ext)
+        ext_gm = sum(ext.values())
+        # Earth: DE440's GM_EARTH itself (GMB - GM_MOON rounds 1 ulp differently).
+        planet_gm = gms["399"] if sysd["id"] == "earth" else sys_gm - moon_gm - ext_gm
+        split[sysd["id"]] = (bh, modelled, ext, planet_gm)
+        ext_rel = {n: orel[n] for n in ext}
+        shift = system_shift(ext_rel, gms, planet_gm + moon_gm)
+        ps = with_bary(with_bary(b0, planet_rel(rels, ext_rel, gms, planet_gm)), shift)
+        print(f"{sysd['name']}: lumped {lumped}, left out {sorted(ext)} (GM {ext_gm:.3e}), shift {math.hypot(*shift[:3]):.1f} m", file=sys.stderr)
+        src = "DE440 header" if sysd["cmt"] is None else sysd["cmt"]
+        gm_note = (f"{src}: system GM minus the modelled moons" + (f" and the outer unmodelled moons {sorted(ext)} (left out)" if ext else "")
+                   + (f"; inner unmodelled moons {lumped} lumped in" if lumped else ""))
+        if sysd["id"] == "earth":
+            # Earth and Moon keep their SSB-centred DE441 states: unlike the
+            # satellite ephemerides, DE441 is one integration, so its Earth,
+            # Moon and Earth-Moon barycenter agree exactly (re-adding the
+            # relative state only adds rounding, ~3e-5 m).
+            in_place["moon"]["parent"] = "earth"
+            continue
+        else:
+            naif_body = sysd["planet"][0]
+            k = cmt(sysd["cmt"])
+            j2 = k.get("J" + naif_body + "02", 0.0)
+            zon = {} if j2 == 0.0 else dict(
+                j2=j2, j2Radius=k["RADIUS"] * 1000.0, j4=k["J" + naif_body + "04"],
+                j2Source=f"NAIF {sysd['cmt']} J{naif_body}02, J{naif_body}04, RADIUS")
+            bary = by_id[sysd["id"]]
+            bodies.append(dict(
+                id=sysd["id"],
+                name=sysd["name"],
+                horizonsId=sysd["planet"],
+                gm=planet_gm * 1e9,
+                gmSource=f"{gm_note}; DE440 {bary['gmKey']} = {c[bary['gmKey']]!r} km^3/s^2",
+                radius=bary["radiusKm"] * 1000.0,
+                pole=poles[sysd["id"]]["vector"],
+                poleRaDecDeg=[poles[sysd["id"]]["raDeg"], poles[sysd["id"]]["decDeg"]],
+                **zon,
+                state=ps,
+            ))
         for mid, mname, naif in sysd["moons"]:
             print(f"fetching {mname}", file=sys.stderr)
-            ms = with_bary(b0, rels[naif])
+            ms = with_bary(with_bary(b0, rels[naif]), shift)
+            if mid in in_place:
+                in_place[mid]["state"] = ms
+                in_place[mid]["parent"] = sysd["id"]
+                continue
             moons.append(dict(
                 id=mid, name=mname, horizonsId=naif, parent=sysd["id"],
                 gm=gms[naif] * 1e9, gmSource=f"{sysd['cmt']} body table",
@@ -377,38 +480,60 @@ def main() -> None:
     bodies.sort(key=lambda r: [p["id"] for p in planetary].index(r["id"]))
     bodies += moons
 
+    # Reference states of the full set at sat_jds. A system member: the
+    # barycenter (DE441) + its state relative to the barycenter (Horizons,
+    # satellite ephemeris), the same construction as the initial states, with
+    # no shift (the reference is the real motion). A planet: planet_rel, i.e.
+    # the center of mass of the planet and its lumped inner moons. Other
+    # bodies: Horizons SSB-centred states. (Moons used to take the SSB-centred
+    # states too, which for Uranus is a different chain: Horizons' SSB-centred
+    # Uranian moons are 340-1050 km from DE441's barycenter + the satellite
+    # ephemeris, and that, not the dynamics, was the "Uranian moons' 400 km".)
     sat_refs = []
-    bary_of = {}
+    bary_states = {}
     for sysd in SYSTEMS:
-        bh = by_id[sysd["id"]]["horizons"]
-        bary_of[sysd["id"]] = (bh, vectors(bh, sat_jds))
-        for _, _, naif in sysd["moons"]:
-            bary_of[naif] = bary_of[sysd["id"]]
+        bh = split[sysd["id"]][0]
+        bary_states[sysd["id"]] = vectors(bh, sat_jds)
+    system_of = {}
+    for sysd in SYSTEMS:
+        system_of[sysd["id"]] = sysd
+        for mid, _, _ in sysd["moons"]:
+            system_of[mid] = sysd
+    rel_cache = {}
+
+    def rel_series(naif, bh):
+        if (naif, bh) not in rel_cache:
+            rel_cache[(naif, bh)] = [r["state"] for r in vectors(naif, sat_jds, f"500@{bh}")]
+        return rel_cache[(naif, bh)]
+
     for b in bodies:
         print(f"fetching reference states for {b['name']}", file=sys.stderr)
-        if b.get("parent") is not None or b["id"] in [sd["id"] for sd in SYSTEMS]:
-            bh, bstates = bary_of[b["id"] if b.get("parent") is None else b["parent"]]
-            rel = vectors(b["horizonsId"], sat_jds, f"500@{bh}")
-            later = [dict(jd=r["jd"], state=with_bary(bs["state"], r["state"])) for bs, r in zip(bstates, rel)]
-        if b.get("parent") is None and b["id"] in [sd["id"] for sd in SYSTEMS]:
-            # Also the planet's own center (NAIF x99), for comparison with the
-            # lumped body (see planet_state).
-            centre = [dict(t=(x["jd"] - JD_J2000) * 86400.0, jd=x["jd"], state=x["state"]) for x in later]
-            sysd = [sd for sd in SYSTEMS if sd["id"] == b["id"]][0]
-            gms = cmt_body_gms(sysd["cmt"])
-            moon_rels = {naif: vectors(naif, sat_jds, f"500@{bh}") for _, _, naif in sysd["moons"]}
-            gp = b["gm"] / 1e9
-            later = [dict(jd=bs["jd"], state=planet_state(bs["state"], {n: moon_rels[n][j]["state"] for n in moon_rels}, gms, sysd, gp))
-                     for j, bs in enumerate(bstates)]
-        else:
+        sysd = system_of.get(b["id"])
+        entry = dict(id=b["id"], horizonsId=b["horizonsId"])
+        if sysd is None or sysd["id"] == "earth":  # Earth, Moon: SSB-centred DE441 (see above)
             later = vectors(b["horizonsId"], sat_jds)
-        entry = dict(id=b["id"], horizonsId=b["horizonsId"],
-                     samples=[dict(t=(s["jd"] - JD_J2000) * 86400.0, jd=s["jd"], state=s["state"]) for s in later])
-        if b.get("parent") is None and b["id"] in [sd["id"] for sd in SYSTEMS]:
-            entry["planetCenterSamples"] = centre
+        else:
+            bh, modelled, ext, planet_gm = split[sysd["id"]]
+            bstates = bary_states[sysd["id"]]
+            if b.get("parent") is not None:
+                rel = rel_series(b["horizonsId"], bh)
+                later = [dict(jd=bs["jd"], state=with_bary(bs["state"], r)) for bs, r in zip(bstates, rel)]
+            else:
+                gms = system_gms(sysd)
+                mrel = {n: rel_series(n, bh) for n in modelled}
+                erel = {n: rel_series(n, bh) for n in ext}
+                later = [dict(jd=bs["jd"], state=with_bary(bs["state"], planet_rel({n: mrel[n][j] for n in mrel}, {n: erel[n][j] for n in erel}, gms, planet_gm)))
+                         for j, bs in enumerate(bstates)]
+                # Also the planet's own center (NAIF x99), for comparison with the lumped body.
+                prel = rel_series(sysd["planet"], bh)
+                entry["planetCenterSamples"] = [dict(t=(bs["jd"] - JD_J2000) * 86400.0, jd=bs["jd"], state=with_bary(bs["state"], r))
+                                                for bs, r in zip(bstates, prel)]
+        entry["samples"] = [dict(t=(s["jd"] - JD_J2000) * 86400.0, jd=s["jd"], state=s["state"]) for s in later]
+        if "planetCenterSamples" in entry:
+            entry["planetCenterSamples"] = entry.pop("planetCenterSamples")
         sat_refs.append(entry)
-    sys_refs = [dict(id=sd["id"], horizonsId=bary_of[sd["id"]][0],
-                     samples=[dict(t=(s["jd"] - JD_J2000) * 86400.0, jd=s["jd"], state=s["state"]) for s in bary_of[sd["id"]][1]])
+    sys_refs = [dict(id=sd["id"], horizonsId=split[sd["id"]][0],
+                     samples=[dict(t=(s["jd"] - JD_J2000) * 86400.0, jd=s["jd"], state=s["state"]) for s in bary_states[sd["id"]]])
                 for sd in SYSTEMS]
 
     # Display name (for labels) separate from the technical name; ids stay stable.
@@ -425,14 +550,19 @@ def main() -> None:
         "Mars..Neptune: JPL satellite ephemeris headers (NAIF " + SAT_URL + " mar099/jup365/sat441/ura111xl-799/nep097 .cmt). "
         "J4 (j4, same radius) for Jupiter..Neptune from the same headers. In systemBarycenters the planet's J2 is "
         "applied about the system barycenter (offset <~200 km for Jupiter).",
-        poleSource="IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF " + PCK_URL + ", J2000 value, ICRF unit vector; "
-        "secular pole motion and nutation terms ignored.",
+        poleSource="IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF " + PCK_URL + ", as generated into "
+        "src/physics/data/iau-rotation.json by scripts/gen-iau-rotation.py: J2000 value including the periodic "
+        "terms, ICRF unit vector toward the IAU north pole (poleRaDecDeg: RA, Dec). The dynamics orient each J2/J4 "
+        "field by the same model's time-dependent pole (src/physics/orientation.ts).",
         radiusSource="JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
-        moonSource="Planets Jupiter..Pluto (NAIF x99) and moons: state = DE441 system barycenter + Horizons state "
-        "relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune are inconsistent with "
-        "DE441's barycenters by 364/60 km); GM, J2, J4, RADIUS and pole from the satellite ephemeris Horizons uses "
-        "(" + SAT_URL + " jup365, sat441, ura184_part-1, nep098_part-1, plu060 .cmt); planet GM = that file's "
-        "system GM minus the modelled moons; radius from " + SAT_PHYS_URL + ".",
+        moonSource="Satellite systems (Earth-Moon, Jupiter..Pluto; each moon has 'parent'): state = DE441 system "
+        "barycenter + Horizons state relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune "
+        "are inconsistent with DE441's barycenters by 364/60 km), all members shifted together so the modelled bodies' "
+        "center of mass is the barycenter; GM, J2, J4 and RADIUS from the satellite ephemeris Horizons uses "
+        "(" + SAT_URL + " jup365, sat441, ura184_part-1, nep098_part-1, plu060 .cmt; Earth-Moon: DE440 header); "
+        "planet GM = that file's system GM minus the modelled moons and minus the unmodelled moons outside the "
+        "modelled moons' orbits (Hyperion, Phoebe, Helene; Nix, Hydra, Kerberos, Styx), which are left out; "
+        "unmodelled inner moons stay lumped in the planet; radius from " + SAT_PHYS_URL + ".",
         generatedBy="scripts/fetch-horizons.py",
         bodies=bodies,
         systemBarycenters=barycenters,
@@ -442,21 +572,23 @@ def main() -> None:
         source="JPL Horizons API (DE441)",
         bodies=refs,
     )
-    (ROOT / "src/physics/data").mkdir(parents=True, exist_ok=True)
-    (ROOT / "test/fixtures").mkdir(parents=True, exist_ok=True)
-    (ROOT / "src/physics/data/solar-system-j2000.json").write_text(json.dumps(data, indent=2) + "\n")
-    (ROOT / "test/fixtures/horizons-reference.json").write_text(json.dumps(ref, indent=1) + "\n")
+    (OUT / "src/physics/data").mkdir(parents=True, exist_ok=True)
+    (OUT / "test/fixtures").mkdir(parents=True, exist_ok=True)
+    (OUT / "src/physics/data/solar-system-j2000.json").write_text(json.dumps(data, indent=2) + "\n")
+    (OUT / "test/fixtures/horizons-reference.json").write_text(json.dumps(ref, indent=1) + "\n")
     sat_ref = dict(
         description="Horizons barycentric ICRF states (m, m/s) of every body of the full set (planets and major "
         "moons, same order as solar-system-j2000.json 'bodies') at J2000 +-1, 10, 25 Julian years. "
         "t is seconds TDB from J2000.",
         source="JPL Horizons API (DE441 + JPL satellite ephemerides)",
-        construction="Planets Jupiter..Pluto and their moons: DE441 system barycenter + Horizons state relative to "
-        "that barycenter (as in solar-system-j2000.json); other bodies: Horizons SSB-centred states.",
+        construction="Members of satellite systems (Earth-Moon, Jupiter..Pluto): DE441 system barycenter + Horizons "
+        "state relative to that barycenter (as in solar-system-j2000.json, without the shift); the planet entry is the "
+        "center of mass of the planet and its lumped inner moons (planetCenterSamples: the planet's center); other "
+        "bodies: Horizons SSB-centred states.",
         bodies=sat_refs,
         systemBarycenters=sys_refs,
     )
-    (ROOT / "test/fixtures/horizons-moons.json").write_text(json.dumps(sat_ref, indent=1) + "\n")
+    (OUT / "test/fixtures/horizons-moons.json").write_text(json.dumps(sat_ref, indent=1) + "\n")
     print("done", file=sys.stderr)
 
 

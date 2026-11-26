@@ -91,7 +91,7 @@ export function chunkStepsFor(h: number): number {
 export const DEFAULT_CHUNK_STEPS = chunkStepsFor(DEFAULT_STEP);
 
 /**
- * Tuned by test/chebyshev-tune.test.ts (TUNE=1 TUNE_CHUNKS=2: 5.6 years, ~1150
+ * Tuned by test/chebyshev-tune.test.ts (TUNE=1 TUNE_CHUNKS=2: 0.7 years, ~145
  * orbits of Io): among segment lengths of 2^p steps and degrees 5..20, the fit
  * with the fewest coefficients per unit time whose maximum error against the
  * integrator, at held-out mid-step times, is below TUNE_TARGET, in the
@@ -114,8 +114,8 @@ export const DEFAULT_FITS: Readonly<Record<string, BodyFit>> = {
   sun: { segSteps: 512, degree: 9, samples: 32 }, // 16 d, 2.0 mm
   mercury: { segSteps: 128, degree: 10, samples: 32 }, // 4 d, 0.9 mm
   venus: { segSteps: 512, degree: 10, samples: 32 }, // 16 d, 2.2 mm
-  earth: { segSteps: 128, degree: 10, samples: 32 }, // 4 d, 0.3 mm
-  moon: { segSteps: 128, degree: 11, samples: 32 }, // 4 d, 2.5 mm
+  earth: { segSteps: 512, degree: 11, samples: 32 }, // 16 d, 1.8 mm (Earth-Moon barycenter)
+  moon: { segSteps: 128, degree: 11, samples: 32 }, // 4 d, 2.3 mm (relative to the Earth-Moon barycenter)
   mars: { segSteps: 1024, degree: 11, samples: 32 }, // 32 d, 1.4 mm
   jupiter: { segSteps: 1024, degree: 12, samples: 32 }, // 32 d, 2.3 mm (system barycenter)
   saturn: { segSteps: 2048, degree: 8, samples: 32 }, // 64 d, 2.2 mm (system barycenter)
@@ -131,10 +131,11 @@ export const DEFAULT_FITS: Readonly<Record<string, BodyFit>> = {
   rhea: { segSteps: 16, degree: 10, samples: 16 }, // 0.5 d, 1.7 mm
   titan: { segSteps: 32, degree: 10, samples: 32 }, // 1 d, 1.2 mm
   iapetus: { segSteps: 64, degree: 9, samples: 32 }, // 2 d, 2.3 mm
-  ariel: { segSteps: 16, degree: 11, samples: 16 }, // 0.5 d, 2.6 mm
+  ariel: { segSteps: 8, degree: 8, samples: 8 }, // 0.25 d, 2.4 mm (Miranda's 1.4 d perturbation needs the shorter segment)
   umbriel: { segSteps: 16, degree: 11, samples: 16 }, // 0.5 d, 2.7 mm
   titania: { segSteps: 16, degree: 8, samples: 16 }, // 0.5 d, 2.8 mm
   oberon: { segSteps: 32, degree: 11, samples: 32 }, // 1 d, 2.5 mm
+  miranda: { segSteps: 8, degree: 11, samples: 8 }, // 0.25 d, 1.6 mm
   triton: { segSteps: 64, degree: 12, samples: 32 }, // 2 d, 2.1 mm
   charon: { segSteps: 64, degree: 11, samples: 32 }, // 2 d, 2.9 mm
 };
@@ -870,7 +871,7 @@ export class ChebyshevEphemeris implements Ephemeris {
     this.gm = Float64Array.from(bodies.map((b) => b.gm));
     this.t0 = opts.t0 ?? 0;
     this.physics = opts.physics ?? solarSystemPhysics(bodies);
-    this.oblateness = bodies.map(oblatenessOf);
+    this.oblateness = bodies.map((b) => oblatenessOf(b));
     if (this.physics.relativity) this.relativity = { body: this.physics.relativity.sun };
     this.layout = opts.fits
       ? new ChebyshevLayout(opts.fits, h, chunkSteps, opts.centers ?? centersOf(bodies), this.gm)

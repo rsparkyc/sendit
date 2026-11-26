@@ -3,8 +3,9 @@
  * bodies. Units are SI; time is seconds TDB from the J2000 epoch.
  *
  * PHYSICS: Newtonian point masses, plus (optional, see NBodyPhysics)
- *  - zonal J2 of selected bodies acting on selected others, with the equal and
- *    opposite reaction (positions only: the scheme stays symplectic);
+ *  - zonal J2 (and J4) of selected bodies acting on selected others, with the
+ *    equal and opposite reaction, about a fixed pole or about the body's IAU
+ *    pole at the current time (see "TIME-DEPENDENT FORCES");
  *  - the Sun's first post-Newtonian (Schwarzschild, PPN beta=gamma=1) term on
  *    every other body, with the reaction on the Sun (velocity dependent: see
  *    "RELATIVITY" below).
@@ -43,6 +44,22 @@
  * moons. Moving the Sun-system pairs into the fast part changed nothing (the
  * error is the moons' own intra-system dynamics). Not adopted.
  *
+ * TIME-DEPENDENT FORCES: a zonal field oriented by the IAU pole model
+ * (ZonalHarmonic.rotation, src/physics/orientation.ts) is an explicitly
+ * time-dependent force. Time is treated as one more position coordinate with
+ * velocity 1 (the extended phase space): every drift of a_i*h also advances
+ * time by a_i*h, so the force after drift i is evaluated at the stage time
+ *   t_n + c_i h,   c_i = a_1 + ... + a_i,
+ * and the composition keeps its order 8 and its symmetry (the stage times of a
+ * step run backward from t_{n+1} are the same set, c_{s-i} = 1 - c_i). The
+ * stage time is computed as (t0 + n h) + c_i h with c_s set to exactly 1 and
+ * the last stage at t0 + (n+1) h, so the force at the end of a step is
+ * evaluated at bit for bit the time a resumed integrator (importState) uses,
+ * and the stage times depend only on (t0, h, step count): any chunk build or
+ * checkpoint resume sees the same times. The pole itself is a pure function of
+ * time (PoleTable). Tested in test/nbody-pole.test.ts (order with a fast
+ * precessing pole, reversibility, resume).
+ *
  * ROUNDOFF: positions and velocities are carried with Kahan compensated
  * summation (a second array holds the lost low-order bits), so the ~10^6 tiny
  * increments of a century-long run do not accumulate rounding error.
@@ -66,9 +83,12 @@
  * results are unchanged bit for bit.
  *
  * DETERMINISM: exactly-defined operations only (+ - * /, Math.sqrt, abs,
- * min/max, floor, comparisons). No transcendental functions (pow, exp, log,
+ * min/max, floor, comparisons), plus the deterministic sin/cos of dmath.ts
+ * inside the pole model. No Math transcendental functions (pow, exp, log,
  * trig): their results differ between JS engines.
  */
+
+import { PoleTable, type IauRotation } from './orientation';
 
 /** Speed of light, m/s (exact, SI definition). */
 export const C_LIGHT = 299792458;
@@ -85,8 +105,16 @@ export interface ZonalHarmonic {
   j4?: number;
   /** Reference (equatorial) radius, m. */
   radius: number;
-  /** Unit vector along the body's spin axis, in the integration frame (ICRF). */
+  /** Unit vector along the body's spin axis, in the integration frame (ICRF). Used when `rotation` is absent. */
   pole: readonly [number, number, number];
+  /**
+   * IAU rotation model of the body: the field is then oriented by its pole at
+   * the current time (PoleTable of this model), and `pole` is unused by the
+   * dynamics (it stays as the J2000 value, e.g. for conservedEnergy).
+   */
+  rotation?: IauRotation;
+  /** Node spacing of the pole table, s (default POLE_NODE_SPACING, one day); 0: the exact series at every force evaluation (tests). */
+  poleSpacing?: number;
   targets: readonly number[];
 }
 
@@ -170,14 +198,17 @@ export function accelerations(n: number, gm: ArrayLike<number>, q: ArrayLike<num
  * With J4, u = s/r, the pair potential adds GM_e GM_o J4 R^4 (35 u^4 - 30 u^2 + 3) / (8 r^5),
  * whose (minus) gradient on o is
  *   a_o += (J4 GM_e R^4 / (8 r^7)) [ (315 u^4 - 210 u^2 + 15) r - (140 u^3 - 60 u) r pole ].
+ * `poles`, if given, holds the pole of term z at poles[3z..3z+2] (overriding Z.pole).
+ * Every term is even in the pole (s pole, s^2, u pole, u^2): a pole and its
+ * opposite give bit-identical accelerations.
  */
-export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number>, zonal: readonly ZonalHarmonic[], out: Float64Array): void {
+export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number>, zonal: readonly ZonalHarmonic[], out: Float64Array, poles?: ArrayLike<number>): void {
   for (let z = 0; z < zonal.length; z++) {
     const Z = zonal[z];
     const e = Z.body;
-    const px = Z.pole[0];
-    const py = Z.pole[1];
-    const pz = Z.pole[2];
+    const px = poles !== undefined ? poles[3 * z] : Z.pole[0];
+    const py = poles !== undefined ? poles[3 * z + 1] : Z.pole[1];
+    const pz = poles !== undefined ? poles[3 * z + 2] : Z.pole[2];
     const R2 = Z.radius * Z.radius;
     const k = 1.5 * Z.j2 * R2;
     const j4 = Z.j4 ?? 0;
@@ -291,6 +322,12 @@ export class NBodyIntegrator {
   private readonly sun: number;
   private readonly apn: Float64Array;
   private readonly vt: Float64Array;
+  /** Per zonal term: its pole table (time-dependent poles), or null (fixed pole). */
+  private readonly poleTables: (PoleTable | null)[];
+  /** Current pole of every zonal term (3 per term), or undefined if all are fixed. */
+  private readonly poles: Float64Array | undefined;
+  /** Stage times: c[i] = a_1 + ... + a_{i+1} as a fraction of h, the last exactly 1. */
+  private readonly stageC: Float64Array;
 
   /**
    * @param state    [x,y,z,vx,vy,vz] per body (6n numbers), at time t0.
@@ -328,13 +365,44 @@ export class NBodyIntegrator {
     this.sun = physics.relativity ? physics.relativity.sun : -1;
     this.apn = new Float64Array(3 * n);
     this.vt = new Float64Array(3 * n);
-    this.forces();
+    this.poleTables = this.zonal.map((Z) => (Z.rotation !== undefined ? new PoleTable(Z.rotation, Z.poleSpacing) : null));
+    this.poles = this.poleTables.some((p) => p !== null) ? new Float64Array(3 * this.zonal.length) : undefined;
+    if (this.poles !== undefined) {
+      this.zonal.forEach((Z, z) => {
+        if (this.poleTables[z] === null) this.poles!.set(Z.pole, 3 * z);
+      });
+    }
+    const sa = scheme.a;
+    this.stageC = new Float64Array(sa.length);
+    let c = 0;
+    for (let i = 0; i < sa.length; i++) {
+      c += sa[i];
+      this.stageC[i] = c;
+    }
+    this.stageC[sa.length - 1] = 1;
+    this.forces(this.t);
   }
 
-  /** Position-dependent accelerations (Newtonian + zonal) at the current q, into acc. */
-  private forces(): void {
+  /** Position-dependent accelerations (Newtonian + zonal) at the current q and time `time`, into acc. */
+  private forces(time: number): void {
     accelerations(this.n, this.gm, this.q, this.acc);
-    if (this.zonal.length > 0) addZonalAccelerations(this.gm, this.q, this.zonal, this.acc);
+    if (this.zonal.length > 0) {
+      const poles = this.poles;
+      if (poles !== undefined) {
+        const tabs = this.poleTables;
+        for (let z = 0; z < tabs.length; z++) {
+          const tab = tabs[z];
+          if (tab !== null) tab.at(time, poles, 3 * z);
+        }
+      }
+      addZonalAccelerations(this.gm, this.q, this.zonal, this.acc, poles);
+    }
+  }
+
+  /** Time of the force evaluation after drift `st` of the current step (see TIME-DEPENDENT FORCES). */
+  private stageTime(st: number): number {
+    if (st === this.stageC.length - 1) return this.t0 + (this.steps + 1) * this.h;
+    return this.t0 + this.steps * this.h + this.stageC[st] * this.h;
   }
 
   /** Total acceleration at the current (q, v), including the velocity-dependent part. */
@@ -381,7 +449,7 @@ export class NBodyIntegrator {
         qc[k] = tmp - q[k] - y;
         q[k] = tmp;
       }
-      this.forces();
+      this.forces(this.stageTime(st));
     }
     this.steps++;
   }
@@ -420,7 +488,7 @@ export class NBodyIntegrator {
         q[k] = tmp;
       }
       // Explicit half-kick at the new position with v'.
-      this.forces();
+      this.forces(this.stageTime(st));
       relativisticAccelerations(n, gm, sun, q, v, apn);
       this.kick(half);
     }
@@ -455,7 +523,7 @@ export class NBodyIntegrator {
       this.vc[k] = data[3 * m + k];
     }
     this.steps = steps;
-    this.forces();
+    this.forces(this.t);
   }
 
   /** Write the current state as [x,y,z,vx,vy,vz] per body. */
