@@ -161,11 +161,25 @@ const layout = new Layout(hudRoot);
 document.documentElement.classList.toggle('touch', matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
-const scene = new SceneView(
-  canvas,
-  BODIES.map((b, i) => ({ radius: b.radius, color: meta[i].color, emissive: i === sunIndex })),
-  sunIndex,
-);
+/** Startup failed for good (no WebGL): say so on the page instead of leaving it blank, and stop. */
+function startupFailed(message: string, e: unknown): never {
+  document.documentElement.dataset.appError = message;
+  const box = el('div', { className: 'notice', role: 'alert', textContent: message });
+  box.style.cssText = 'position:fixed;inset:auto 1rem 1rem 1rem;z-index:10;padding:1rem;';
+  document.body.append(box);
+  throw e;
+}
+let sceneView: SceneView;
+try {
+  sceneView = new SceneView(
+    canvas,
+    BODIES.map((b, i) => ({ radius: b.radius, color: meta[i].color, emissive: i === sunIndex })),
+    sunIndex,
+  );
+} catch (e) {
+  startupFailed('This browser could not create a WebGL context, which the map needs. Check that WebGL (hardware acceleration) is enabled, or try another browser.', e);
+}
+const scene = sceneView;
 // Device pixel ratio: 2 at most, 1.5 on small touch screens (fill rate, battery).
 const DPR_CAP = smallTouch ? 1.5 : 2;
 scene.renderer.setPixelRatio(Math.min(DPR_CAP, window.devicePixelRatio || 1));
@@ -409,6 +423,8 @@ const replayClient = new ReplayClient(eph, {
   onError(message) {
     metrics.errors.push(message);
     console.error('replay worker:', message);
+    // The status is back to idle; say why the trajectory did not update instead of showing a stale one silently.
+    store.set({ notice: `The replay failed: ${message.split('\n')[0]}` });
   },
 });
 

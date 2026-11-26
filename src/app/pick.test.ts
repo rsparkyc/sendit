@@ -66,6 +66,33 @@ describe('History', () => {
     h.record(3, 'b', 5010);
     expect([h.undo(4), h.undo(3), h.undo(2), h.undo(1)]).toEqual([3, 2, 1, 0]);
   });
+  it('the idle window is measured between edits, not from the first', () => {
+    const h = new History<number>();
+    for (let i = 0; i < 6; i++) h.record(i, 'k', i * 1400); // 7 s in all, never 1.5 s idle
+    expect(h.undo(6)).toBe(0);
+    expect(h.canUndo).toBe(false);
+  });
+  it('inside a gesture a same-key burst is one step however slow, and only until another key, undo or the end', () => {
+    const h = new History<number>();
+    h.beginGesture();
+    for (let i = 0; i < 5; i++) h.record(i, 'dv:0:0', i * 10_000); // a slow machine: 10 s between clicks
+    h.record(5, 'dv:0:1', 40_010); // another value: a new step even inside the gesture
+    h.record(6, 'dv:0:0', 40_020); // and back: new step again (no other edit may sit inside a run)
+    h.endGesture();
+    h.record(7, 'dv:0:0', 40_030); // just after the gesture: the idle window still joins it
+    h.record(8, 'dv:0:0', 60_000); // long idle outside a gesture: a new step
+    expect([h.undo(9), h.undo(8), h.undo(6), h.undo(5), h.undo(0)]).toEqual([8, 6, 5, 0, null]);
+  });
+  it('a gesture does not join edits across a seal or an undo', () => {
+    const h = new History<number>();
+    h.beginGesture();
+    h.record(0, 'k', 0);
+    h.seal();
+    h.record(1, 'k', 1);
+    expect(h.undo(2)).toBe(1);
+    h.record(1, 'k', 2);
+    expect([h.undo(2), h.undo(1), h.undo(0)]).toEqual([1, 0, null]);
+  });
   it('a new edit clears redo; limit drops the oldest', () => {
     const h = new History<number>(3);
     for (let i = 0; i < 5; i++) h.record(i, null, i);

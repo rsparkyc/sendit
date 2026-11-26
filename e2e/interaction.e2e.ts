@@ -86,7 +86,12 @@ test.describe('desktop', () => {
     const dv = () => page.evaluate(() => (window as any).sendit.nodesOf()[0].node.dv[0] as number);
     await pro.getByRole('button', { name: 'Prograde: flip sign' }).click();
     expect(await dv()).toBeCloseTo(-600, 6);
-    for (let k = 0; k < 5; k++) await pro.getByRole('button', { name: 'Prograde: +10 m/s', exact: true }).click();
+    // The burst is grouped by interaction (the pointer stays on the button), not by wall-clock time: a pause
+    // longer than the 1.5 s idle window in the middle (what a loaded machine produces) still gives one step.
+    for (let k = 0; k < 5; k++) {
+      if (k === 2) await page.waitForTimeout(2000);
+      await pro.getByRole('button', { name: 'Prograde: +10 m/s', exact: true }).click();
+    }
     expect(await dv()).toBeCloseTo(-550, 9);
     await page.getByRole('button', { name: /^Undo/ }).click();
     expect(await dv()).toBeCloseTo(-600, 6);

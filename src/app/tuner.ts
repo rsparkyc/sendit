@@ -41,6 +41,12 @@ export interface TunerOptions {
   negate?(): void;
   /** Reset to zero (signed values only). */
   zero?(): void;
+  /**
+   * A pointer interaction starts (true) or ends (false): pressing a step button until the pointer
+   * leaves it (so a hold, or a burst of clicks on it, is one interaction however slow), or a drag
+   * of the strip. The editor groups the undo history by it.
+   */
+  gesture?(open: boolean): void;
 }
 
 export class Tuner {
@@ -102,14 +108,31 @@ export class Tuner {
     b.setAttribute('aria-label', label);
     let timer: ReturnType<typeof setTimeout> | null = null;
     let fired = false;
+    let open = false;
     const stop = () => {
       if (timer) clearTimeout(timer);
       timer = null;
+    };
+    const close = () => {
+      stop();
+      if (open) this.o.gesture?.(false);
+      open = false;
+      document.removeEventListener('pointerdown', elsewhere, true);
+    };
+    // Also ends when the player presses anywhere else (covers a button hidden under a resting pointer).
+    const elsewhere = (e: PointerEvent) => {
+      if (e.target instanceof Node && b.contains(e.target)) return;
+      close();
     };
     const fire = () => this.o.nudge(delta);
     b.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       fired = false;
+      if (!open) {
+        this.o.gesture?.(true);
+        document.addEventListener('pointerdown', elsewhere, true);
+      }
+      open = true;
       const repeat = (delay: number) => {
         timer = setTimeout(() => {
           fired = true;
@@ -119,7 +142,10 @@ export class Tuner {
       };
       repeat(450);
     });
-    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, stop);
+    // Releasing stops the repeat but keeps the interaction open while the pointer stays on the button
+    // (more clicks on it are the same burst); leaving the button or losing focus ends it.
+    b.addEventListener('pointerup', stop);
+    for (const ev of ['pointerleave', 'pointercancel', 'blur']) b.addEventListener(ev, close);
     // Click covers taps, mouse clicks and keyboard; skip it if holding already repeated.
     b.addEventListener('click', () => {
       stop();
@@ -146,6 +172,7 @@ export class Tuner {
       if (!flushTimer) flushTimer = setTimeout(flush, 70);
     };
     this.pad.addEventListener('pointerdown', (e) => {
+      if (!drag) this.o.gesture?.(true);
       drag = { x: e.clientX, acc: 0, id: e.pointerId };
       try {
         this.pad.setPointerCapture(e.pointerId);
@@ -171,6 +198,7 @@ export class Tuner {
       this.pad.classList.remove('dragging');
       if (flushTimer) clearTimeout(flushTimer);
       flush();
+      this.o.gesture?.(false);
     };
     this.pad.addEventListener('pointerup', end);
     this.pad.addEventListener('pointercancel', end);

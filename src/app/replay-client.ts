@@ -20,6 +20,8 @@ import type { FromReplay, ToReplay } from './protocol';
 
 export const DEBOUNCE_MS = 12;
 export const CANCEL_AFTER_MS = 150;
+/** Consecutive broken workers replaced before the client gives up (a worker that cannot load at all). */
+const MAX_WORKER_FAILURES = 3;
 
 export interface ReplayDelivery {
   plan: MissionPlan;
@@ -55,6 +57,7 @@ export class ReplayClient {
   private inFlight: (Job & { replayingSince: number | null }) | null = null;
   private queued: Job | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private failures = 0;
   readonly stats = { runs: 0, cancels: 0, lastLatencyMs: 0, lastReplayMs: 0, latencies: [] as number[] };
 
   constructor(
@@ -68,8 +71,38 @@ export class ReplayClient {
   private spawn(): Worker {
     const w = new Worker(new URL('./replay-worker.ts', import.meta.url), { type: 'module' });
     w.onmessage = (ev: MessageEvent<FromReplay>) => this.onMessage(w, ev.data);
-    w.onerror = (e) => this.hooks.onError(`replay worker failed: ${e.message}`);
+    w.onerror = (e) => {
+      e.preventDefault?.();
+      this.workerFailed(w, `replay worker failed: ${e.message || 'could not load or crashed'}`);
+    };
+    w.onmessageerror = () => this.workerFailed(w, 'replay worker: a message could not be read');
     return w;
+  }
+
+  /**
+   * A worker broke outside a run's own try/catch (failed to load, uncaught error, unreadable message).
+   * It will never answer, so the run in flight is reported as failed and the worker replaced; without
+   * this the status stayed 'chunks' or 'running' for good. A broken spare is just replaced.
+   */
+  private workerFailed(w: Worker, message: string): void {
+    this.hooks.onError(message);
+    w.terminate();
+    if (w === this.spare) {
+      this.spare = null;
+      return;
+    }
+    if (w !== this.worker) return;
+    this.inFlight = null;
+    // A worker that cannot even load would fail again at once: replace it a few times, then stop.
+    if (++this.failures > MAX_WORKER_FAILURES) {
+      this.queued = null;
+      this.hooks.onStatus('idle');
+      return;
+    }
+    this.worker = this.spare ?? this.spawn();
+    this.spare = null;
+    if (this.queued) this.dispatch();
+    else this.hooks.onStatus('idle');
   }
 
   /** Request a replay of `plan` (debounced; the newest request wins). */
@@ -86,6 +119,12 @@ export class ReplayClient {
   private dispatch(): void {
     const job = this.queued;
     if (!job) return;
+    if (this.failures > MAX_WORKER_FAILURES) {
+      this.queued = null;
+      this.hooks.onError('replay worker unavailable: it failed to start repeatedly (reload the page)');
+      this.hooks.onStatus('idle');
+      return;
+    }
     const f = this.inFlight;
     if (f) {
       if (f.replayingSince !== null && performance.now() - f.replayingSince > CANCEL_AFTER_MS) this.cancel();
@@ -147,6 +186,7 @@ export class ReplayClient {
       this.hooks.onError(m.message);
     } else {
       const latencyMs = performance.now() - f.requestedAt;
+      this.failures = 0;
       this.stats.runs++;
       this.stats.lastLatencyMs = latencyMs;
       this.stats.lastReplayMs = m.ms;

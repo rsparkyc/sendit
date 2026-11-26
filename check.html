@@ -13,9 +13,10 @@
       }
       body { margin: 0 auto; max-width: 60rem; padding: 1rem; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
       code, td, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #m2-verdict { font-size: 1.5rem; font-weight: 700; }
       #verdict { font-size: 2.5rem; font-weight: 700; margin: 0.5rem 0; }
-      #verdict.pass { color: var(--pass); }
-      #verdict.fail { color: var(--fail); }
+      #verdict.pass, #m2-verdict.pass { color: var(--pass); }
+      #verdict.fail, #m2-verdict.fail { color: var(--fail); }
       .scroll { overflow-x: auto; }
       table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
       th, td { border-bottom: 1px solid var(--line); padding: 0.3rem 0.5rem; text-align: left; white-space: nowrap; }
@@ -35,6 +36,13 @@
         <tbody id="rows"></tbody>
       </table>
     </div>
+    <h2>Model-2 mission replay</h2>
+    <p>Flies the fixture mission (real ephemeris from the checkpoint asset, Earth and Moon gravity fields, time-dependent poles) in a second worker and compares its digest with the V8 value.</p>
+    <div id="m2-verdict">Running…</div>
+    <dl>
+      <dt>Digest</dt><dd id="m2-digest" class="mono">–</dd>
+      <dt>Time (in worker)</dt><dd id="m2-time">–</dd>
+    </dl>
     <dl>
       <dt>Run time (in worker)</dt><dd id="time">–</dd>
       <dt>User agent</dt><dd id="ua" class="mono">–</dd>

@@ -602,6 +602,7 @@ export class NodesPanel {
       inputMode: 'text',
       levels: T_LEVELS,
       levelText: tText,
+      gesture: (open) => ctx.editor.gesture(open),
       nudge: (d) => { const i = sel(); if (i !== null) ctx.editor.nudgeTime(i, d); },
       commit: (text) => this.commitTime(text),
     });
@@ -612,6 +613,7 @@ export class NodesPanel {
       inputMode: 'decimal',
       levels: DV_LEVELS,
       levelText: dvText,
+      gesture: (open) => ctx.editor.gesture(open),
       zero: () => {
         const i = sel();
         const n = i !== null ? nodesOf(ctx.store.get().plan)[i]?.node : undefined;

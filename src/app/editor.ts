@@ -59,6 +59,12 @@ export class Editor {
     this.history.seal();
   }
 
+  /** A pointer interaction with one control (drag, hold, clicks while hovering one button) starts or ends. */
+  gesture(open: boolean): void {
+    if (open) this.history.beginGesture();
+    else this.history.endGesture();
+  }
+
   undo(): boolean {
     const s = this.history.undo(this.snapshot());
     if (s) this.store.set({ plan: s.plan, parked: s.parked, selectedNode: s.selectedNode });
