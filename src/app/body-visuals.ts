@@ -6,7 +6,7 @@
  * body-rotation.ts (x through the prime meridian, z along the IAU pole) with
  * u = east longitude / 360 and v = (latitude + 90) / 180; every shipped map is
  * re-encoded to that convention by scripts/make-planet-textures.py. Per frame
- * the mesh rotation is frameAxes * R(t), with R(t) the IAU body-fixed -> ICRF
+ * the mesh rotation is frameAxes * R(t), with R(t) the body-fixed -> ICRF (IAU; for Earth the launch code's model, see orientation.ts)
  * rotation at simulation time t and frameAxes the ICRF -> frame rotation of the
  * current plotting frame (frames.ts), because the scene is drawn in frame
  * coordinates. The app passes the simulation time and frame axes each frame
@@ -32,6 +32,7 @@
 import * as THREE from 'three';
 import { BODIES } from './physics';
 import { IAU_ROTATION, bodyToIcrf, mul3 } from './body-rotation';
+import { bodyOrientation } from './orientation';
 import { RING_PROFILE, ringProfileTexture } from './saturn-rings';
 
 const URLS = import.meta.glob('../assets/planets/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
@@ -272,7 +273,10 @@ export class BodyVisuals {
     if (ta) {
       for (const e of this.entries) {
         if (!e.rotation || e.index === this.sunIndex) continue;
-        bodyToIcrf(e.rotation, ta.t, this.rot);
+        // Earth: the launch code's rotation model, the same one the surface frame turns with (orientation.ts),
+        // so the ground is exactly still in that frame and launch sites sit on the right spot of the texture.
+        if (e.id === 'earth') bodyOrientation(e.index, ta.t, this.rot);
+        else bodyToIcrf(e.rotation, ta.t, this.rot);
         mul3(ta.axes, this.rot, this.m);
         const m = this.m;
         this.m4.set(m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0, 0, 0, 0, 1);

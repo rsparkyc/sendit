@@ -54,10 +54,20 @@ The main page is the game's core loop: an editable mission plan, replayed live.
 - Missions: the campaign from `src/mission/campaign.ts` plus Sandbox; a mission fixes the
   spacecraft and start rules (`checkPlanConformance`); a loaded plan that does not conform
   opens in Sandbox with a notice.
+- **View settings** (`view-settings.ts`, `view-ui.ts`, persisted): how much is drawn after the last burn
+  (auto: to the end of an escape, three revolutions of a closed orbit with the rest faint; or 1 / 3
+  revolutions, a chosen time, everything; display only, the replay and its digest are untouched), the
+  flight length (the plan's duration: replayed and scored, capped by the mission maximum), ascending /
+  descending nodes (`plane-nodes.ts`, pure: sign changes of the out-of-plane coordinate on the replayed
+  trajectory, refined on a cubic Hermite) against the reference body's equator or a body's orbital plane,
+  the rotation-axis and plane-disc overlays, and one distance convention for the whole UI (`units.ts`:
+  altitude above the surface by default, or radius from the centre; the Sun always from its centre).
+- **Timeline** (`timeline.ts`): zoomable about the cursor (wheel, pinch, buttons, fit presets), adaptive
+  MET axis, clustered ticks, overview strip when zoomed; it controls only what the scrubber shows.
 - Viewer pieces: `frames.ts`, `paths.ts`, `scene.ts`, `labels.ts`, `hud.ts`, `camera.ts`, `time.ts`.
 
 Keys: Space pauses, `,` and `.` change warp. With a node selected: W/S prograde, D/A
-normal, E/Q radial (Shift x10, Alt x0.1 of the step), `[` `]` move it in time, Delete
+normal, E/Q radial (Alt, none, Shift: the small, medium, large step, 0.1, 1, 10 m/s and 1 s, 1 min, 10 min for time), `[` `]` move it in time, Delete
 removes it, N adds a node at the time cursor. Clicking the trajectory adds a node there.
 The URL hash may also set the initial view, e.g. `#frame=rot:earth:moon&focus=earth&dist=1.3e9`.
 

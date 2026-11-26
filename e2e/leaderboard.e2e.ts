@@ -163,14 +163,12 @@ test.describe('phone', () => {
     await settled(page);
     mark('node added by tapping the trajectory');
 
-    // Tune: exact time and a first prograde value typed, then the drag strip (coarse) and +/- (fine).
+    // Tune: exact time and a first prograde value typed, then the drag strip (medium steps) and the step buttons.
     await page.locator('.sheet-grip').tap(); // half -> full
     await typeInto('input.met-input', '3019.5');
     await settled(page);
     await typeInto('input[title="Prograde delta-v, m/s"]', '3100');
     await settled(page);
-    await page.locator('select[title^="Delta-v step"]').tap();
-    await page.locator('select[title^="Delta-v step"]').selectOption('10');
     const prograde = page.locator('.tuner', { has: page.locator('input[title="Prograde delta-v, m/s"]') });
     const pad = prograde.locator('.tn-pad');
     await pad.scrollIntoViewIfNeeded();
@@ -181,13 +179,12 @@ test.describe('phone', () => {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await settled(page);
     const dv = () => page.evaluate(() => (window as any).sendit.nodesOf()[0].node.dv[0]);
-    expect(await dv()).toBeCloseTo(3160, 6); // 75 px = 6 steps of 10 m/s
-    await page.locator('select[title^="Delta-v step"]').selectOption('1');
-    const plus = prograde.getByRole('button', { name: 'Prograde: increase by one step' });
-    for (let k = 0; k < 7; k++) await plus.tap();
-    await page.getByRole('button', { name: 'Fine ×0.1' }).tap();
-    await plus.tap();
-    await plus.tap();
+    expect(await dv()).toBeCloseTo(3106, 6); // 75 px = 6 medium steps of 1 m/s
+    const bump = (n: string) => prograde.getByRole('button', { name: `Prograde: +${n} m/s`, exact: true });
+    for (let k = 0; k < 6; k++) await bump('10').tap();
+    await bump('1').tap();
+    await bump('0.1').tap();
+    await bump('0.1').tap();
     await settled(page);
     expect(await dv()).toBeCloseTo(3167.2, 6);
     mark('node tuned');

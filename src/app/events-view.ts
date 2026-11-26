@@ -8,9 +8,15 @@
  *    sphere of influence; for the Sun (no SOI) only while the craft is in no
  *    other body's SOI (`dominant`, when given, decides that);
  *  - one "closest approach" per other body, if the craft came within
- *    `nearFactor` sphere-of-influence radii of it.
+ *    `nearFactor` sphere-of-influence radii of it. It is a real encounter
+ *    (`distant: false`, marked on the map) only when the craft passed within
+ *    `encounterFactor` SOI radii or the body is a `target` (the mission's
+ *    objectives, or chosen by the player); otherwise it is a distant minimum
+ *    (the Moon seen from low Earth orbit), kept in the list under a collapsed
+ *    "distant bodies" summary and never drawn.
  */
 import type { EventKind, TrajectoryEvent } from './mission-layer';
+import { fromSurface } from './units';
 
 export interface ListedEvent {
   /** Index into result.events. */
@@ -19,6 +25,8 @@ export interface ListedEvent {
   /** 'closest' marks a per-body closest approach outside that body's SOI. */
   role: 'event' | 'closest';
   failure: boolean;
+  /** A closest approach that is not an encounter (see above). */
+  distant?: boolean;
 }
 
 export const FAILURE_KINDS: readonly EventKind[] = ['impact', 'atmosphere-entry'];
@@ -26,9 +34,11 @@ export const FAILURE_KINDS: readonly EventKind[] = ['impact', 'atmosphere-entry'
 export function listEvents(
   events: readonly TrajectoryEvent[],
   soi: ReadonlyMap<string, number>,
-  opts: { nearFactor?: number; max?: number; failureKinds?: readonly EventKind[]; dominant?: (t: number) => string } = {},
+  opts: { nearFactor?: number; encounterFactor?: number; targets?: readonly string[]; max?: number; failureKinds?: readonly EventKind[]; dominant?: (t: number) => string } = {},
 ): ListedEvent[] {
   const near = opts.nearFactor ?? 10;
+  const enc = opts.encounterFactor ?? 1.5;
+  const targets = opts.targets ?? [];
   const max = opts.max ?? 400;
   const failures = opts.failureKinds ?? FAILURE_KINDS;
   const out: ListedEvent[] = [];
@@ -44,12 +54,15 @@ export function listEvents(
       out.push({ index, ev, role: 'event', failure: false });
       return;
     }
-    if (ev.kind === 'periapsis' && r !== undefined && ev.distance < near * r) {
+    if (ev.kind === 'periapsis' && r !== undefined && (ev.distance < near * r || targets.includes(ev.body))) {
       const c = closest.get(ev.body);
       if (c === undefined || ev.distance < events[c].distance) closest.set(ev.body, index);
     }
   });
-  for (const index of closest.values()) out.push({ index, ev: events[index], role: 'closest', failure: false });
+  for (const [body, index] of closest) {
+    const r = soi.get(body)!;
+    out.push({ index, ev: events[index], role: 'closest', failure: false, distant: !(events[index].distance < enc * r) && !targets.includes(body) });
+  }
   out.sort((a, b) => a.ev.t - b.ev.t || a.index - b.index);
   if (out.length > max) {
     // Keep failures, crossings and closest approaches; thin the rest evenly.
@@ -74,23 +87,40 @@ const LABEL: Record<EventKind, string> = {
 };
 
 export function eventLabel(x: ListedEvent, bodyName: (id: string) => string): string {
-  if (x.role === 'closest') return `Closest approach ${bodyName(x.ev.body)}`;
+  if (x.role === 'closest') return `Closest to ${bodyName(x.ev.body)}${x.distant ? ' (distant)' : ''}`;
   return `${LABEL[x.ev.kind]} ${bodyName(x.ev.body)}`;
 }
 
 /** Short marker text for the 3D view. */
 export function eventMarker(x: ListedEvent, bodyName: (id: string) => string): string {
-  const km = (m: number) => `${Math.round(m / 1000).toLocaleString('en-US')} km`;
+  const d = fromSurface(x.ev.altitude, x.ev.body);
   const b = bodyName(x.ev.body);
   switch (x.role === 'closest' ? 'closest' : x.ev.kind) {
-    case 'closest': return `CA ${b} ${km(x.ev.altitude)}`;
-    case 'periapsis': return `Pe ${km(x.ev.altitude)}`;
-    case 'apoapsis': return `Ap ${km(x.ev.altitude)}`;
+    case 'closest': return `Closest to ${b} · ${d}`;
+    case 'periapsis': return `Periapsis ${d}`;
+    case 'apoapsis': return `Apoapsis ${d}`;
     case 'impact': return `IMPACT ${b}`;
     case 'atmosphere-entry': return `ENTRY ${b} ${(x.ev.speed / 1000).toFixed(2)} km/s`;
     case 'atmosphere-exit': return `exit atm ${b}`;
     case 'enter': return `→ ${b} SOI`;
     case 'exit': return `← ${b} SOI`;
+  }
+  return b;
+}
+
+/** One sentence saying what a marker is (tooltip and accessible name; shown on tap too). */
+export function eventExplain(x: ListedEvent, bodyName: (id: string) => string): string {
+  const b = bodyName(x.ev.body);
+  const d = fromSurface(x.ev.altitude, x.ev.body);
+  switch (x.role === 'closest' ? 'closest' : x.ev.kind) {
+    case 'closest': return `Event: the craft's closest approach to ${b} on this flight, ${d}${x.distant ? ' (a distant body, not an encounter)' : ''}.`;
+    case 'periapsis': return `Event: lowest point of the orbit around ${b}, ${d}.`;
+    case 'apoapsis': return `Event: highest point of the orbit around ${b}, ${d}.`;
+    case 'impact': return `Event: the craft hits ${b}'s surface here and the flight ends.`;
+    case 'atmosphere-entry': return `Event: the craft enters ${b}'s atmosphere at ${(x.ev.speed / 1000).toFixed(2)} km/s.`;
+    case 'atmosphere-exit': return `Event: the craft leaves ${b}'s atmosphere.`;
+    case 'enter': return `Event: the craft enters ${b}'s sphere of influence.`;
+    case 'exit': return `Event: the craft leaves ${b}'s sphere of influence.`;
   }
   return b;
 }

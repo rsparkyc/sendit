@@ -1,16 +1,18 @@
 /**
  * A value tuner usable with a mouse, a keyboard and a finger:
  *
- *   label | − | [value input] | + | ◂▸ drag strip
+ *   label | [value input] | 0 | ± | ◂▸ drag strip
+ *         | <<< << < | > >> >>>      (large, medium, small steps; each shows its step)
  *
  *  - the input takes direct entry (Enter or blur commits; `inputmode` picks
  *    the on-screen keyboard: decimal pad for Δv, full keyboard for times);
- *  - − / + nudge by one step and repeat while held;
- *  - the strip (role="slider") is dragged sideways: one step per 12 px, so a
+ *  - the six step buttons nudge by the small, medium or large step and
+ *    repeat while held; each shows its step under the arrows (no hover needed);
+ *  - the strip (role="slider") is dragged sideways: one medium step per 12 px, so a
  *    long drag is coarse and a short one fine; arrow keys on it nudge too;
  *  - on touch layouts a ± button negates (decimal pads have no minus key).
  *
- * The step comes from the caller (step select times the Fine toggle).
+ * The three step sizes come from the caller (`levels`).
  */
 import { el, setValue } from './dom';
 
@@ -22,13 +24,18 @@ export interface TunerOptions {
   title: string;
   inputClass: string;
   inputMode: 'decimal' | 'text';
-  step(): number;
+  /** Small, medium and large step. */
+  levels: readonly [number, number, number];
+  /** Text of a step, e.g. "1 m/s" or "10 min". */
+  levelText(v: number): string;
   /** Change by delta (one nudge or a drag increment). */
   nudge(delta: number): void;
   /** Direct entry; return an error message or null. */
   commit(text: string): string | null;
   /** Negate (signed values only). */
   negate?(): void;
+  /** Reset to zero (signed values only). */
+  zero?(): void;
 }
 
 export class Tuner {
@@ -52,14 +59,20 @@ export class Tuner {
       }
     });
     this.labelEl = el('span', { className: 'tn-label', textContent: o.label });
-    const dec = this.repeatButton('−', `${o.label}: decrease by one step`, -1);
-    const inc = this.repeatButton('+', `${o.label}: increase by one step`, 1);
+    const arrows = ['<', '<<', '<<<'];
+    const steps = [2, 1, 0].map((k) => this.repeatButton(arrows[k].replace(/</g, '‹'), o.levelText(o.levels[k]), `${o.label}: −${o.levelText(o.levels[k])}`, -o.levels[k]))
+      .concat([0, 1, 2].map((k) => this.repeatButton(arrows[k].replace(/</g, '›'), o.levelText(o.levels[k]), `${o.label}: +${o.levelText(o.levels[k])}`, o.levels[k])));
     this.pad = el('div', { className: 'tn-pad', tabIndex: 0, role: 'slider', title: `Drag sideways to tune ${o.label}` }, el('span', { ariaHidden: 'true', textContent: '◂ ▸' }));
     this.pad.setAttribute('aria-label', `${o.label}: drag sideways or use arrow keys`);
     this.wirePad();
     const neg = o.negate ? el('button', { className: 'btn tn-neg', type: 'button', textContent: '±', title: `Negate ${o.label}` }) : null;
     if (neg) neg.onclick = () => o.negate!();
-    this.root = el('div', { className: 'tuner' }, this.labelEl, el('div', { className: 'tn-ctl' }, dec, this.input, inc, this.pad, neg));
+    const zero = o.zero ? el('button', { className: 'btn tn-zero', type: 'button', textContent: '0', title: `Set ${o.label} to zero` }) : null;
+    if (zero) {
+      zero.setAttribute('aria-label', `${o.label}: set to zero`);
+      zero.onclick = () => o.zero!();
+    }
+    this.root = el('div', { className: 'tuner' }, this.labelEl, el('div', { className: 'tn-ctl' }, this.input, zero, neg, this.pad), el('div', { className: 'tn-steps' }, ...steps));
   }
 
   setLabel(t: string): void {
@@ -71,8 +84,8 @@ export class Tuner {
     this.pad.setAttribute('aria-valuetext', text);
   }
 
-  private repeatButton(text: string, label: string, sign: number): HTMLButtonElement {
-    const b = el('button', { className: 'btn tn-step', type: 'button', textContent: text, title: label });
+  private repeatButton(arrows: string, sub: string, label: string, delta: number): HTMLButtonElement {
+    const b = el('button', { className: `btn tn-step ${delta < 0 ? 'dec' : 'inc'}`, type: 'button', title: label }, el('span', { className: 'tn-arrows', textContent: arrows }), el('span', { className: 'tn-sub', textContent: sub }));
     b.setAttribute('aria-label', label);
     let timer: ReturnType<typeof setTimeout> | null = null;
     let fired = false;
@@ -80,7 +93,7 @@ export class Tuner {
       if (timer) clearTimeout(timer);
       timer = null;
     };
-    const fire = () => this.o.nudge(sign * this.o.step());
+    const fire = () => this.o.nudge(delta);
     b.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       fired = false;
@@ -116,7 +129,7 @@ export class Tuner {
       }
     };
     const queue = (steps: number) => {
-      pending += steps * this.o.step();
+      pending += steps * this.o.levels[1];
       if (!flushTimer) flushTimer = setTimeout(flush, 70);
     };
     this.pad.addEventListener('pointerdown', (e) => {
@@ -149,9 +162,9 @@ export class Tuner {
     this.pad.addEventListener('pointerup', end);
     this.pad.addEventListener('pointercancel', end);
     this.pad.addEventListener('keydown', (e) => {
-      const m = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
-      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this.o.nudge(m * this.o.step());
-      else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this.o.nudge(-m * this.o.step());
+      const m = this.o.levels[e.shiftKey ? 2 : e.altKey ? 0 : 1];
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') this.o.nudge(m);
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') this.o.nudge(-m);
       else return;
       e.preventDefault();
       e.stopPropagation();

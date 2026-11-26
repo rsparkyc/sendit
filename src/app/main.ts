@@ -13,8 +13,14 @@ import './style.css';
 import { deriveMeta } from './body-meta';
 import { OrbitCamera } from './camera';
 import { Editor } from './editor';
-import { bodyName, CraftPanel, EventsPanel, MissionPanel, NodesPanel, ResultsPanel, Scrubber, StartPanel, type UiContext } from './editor-ui';
-import { listEvents, eventMarker, type ListedEvent } from './events-view';
+import { bodyName, CraftPanel, DV_LEVELS, T_LEVELS, EventsPanel, MissionPanel, NodesPanel, ResultsPanel, StartPanel, type UiContext } from './editor-ui';
+import { listEvents, eventMarker, eventExplain, type ListedEvent } from './events-view';
+import { crossingsNear, planeCrossings, type PlaneCrossing, type RelSample } from './plane-nodes';
+import { drawnEnd, defaultDiscRadius, loadViewSettings } from './view-settings';
+import { ViewOptions } from './view-ui';
+import { Timeline } from './timeline';
+import { fromSurface, onDistanceMode, setDistanceMode } from './units';
+import { mul3 } from './body-rotation';
 import { computeFrame, frameCenter, frameKey, newFrameState, parseFrameKey, toFrame, type FrameSpec } from './frames';
 import { Hud, type Readout } from './hud';
 import { bodyOrientation } from './orientation';
@@ -22,11 +28,11 @@ import { Layout } from './layout';
 import { LeaderboardPanel } from './leaderboard-ui';
 import { MapInput, nearestOnScreen } from './map-input';
 import { poolSizing } from './schedule';
-import { statusOf } from './status';
+import { objectiveBodies, statusOf } from './status';
 import { formatMet, el } from './dom';
 import { Labels, type LabelItem } from './labels';
-import { makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, type EventKind } from './mission-layer';
-import { initialPlan, missionById, missionForLoadedPlan, MISSIONS } from './missions';
+import { geocentricLatitudeDeg, LAUNCH_SITES, makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, type EventKind } from './mission-layer';
+import { initialPlan, launchOf, missionById, missionForLoadedPlan, MISSIONS } from './missions';
 import { nodesOf } from './nodes';
 import { anchorSegments, bodyPath, frameAt, trajectoryPath, type FrameContext, type FramePath } from './paths';
 import { BODIES, BODY_DATA, BODY_GM, bodyIndex, Ephemeris } from './physics';
@@ -170,6 +176,20 @@ if (params.has('az')) camera.azimuth = Number(params.get('az'));
 if (params.has('el')) camera.elevation = Number(params.get('el'));
 
 const labels = new Labels(overlay, (key) => {
+  const at = labelPoint(key);
+  if (key.startsWith('pn:')) {
+    const c = crossings[Number(key.slice(3))];
+    if (!c) return;
+    const t = c.t;
+    store.set({ t, paused: true, loadingTarget: t });
+    showTapPop(t - store.get().plan.epoch, at.x, at.y, `${c.ascending ? 'Ascending' : 'Descending'} node: the orbit crosses ${crossingLabel} at ${c.inclinationDeg.toFixed(2)}° relative inclination. A plane change is cheapest here.`);
+    return;
+  }
+  if (key.startsWith('site:') || key.startsWith('ax')) {
+    const m = siteAndAxisTitles.get(key);
+    if (m) showTapPop(null, at.x, at.y, m);
+    return;
+  }
   if (key === 'sc') store.set({ focus: SPACECRAFT });
   else if (key.startsWith('node:')) store.set({ selectedNode: Number(key.slice(5)) });
   else if (key.startsWith('burn:')) store.set({ selectedNode: Number(key.split(':')[1]) });
@@ -177,8 +197,18 @@ const labels = new Labels(overlay, (key) => {
     const i = Number(key.slice(3));
     const ev = store.get().replay?.result.events[i];
     if (ev) store.set({ selectedEvent: i, t: ev.t, paused: true, loadingTarget: ev.t });
+    const x = listed.find((y) => y.index === i);
+    if (x && document.documentElement.classList.contains('touch')) showTapPop(null, at.x, at.y, eventExplain(x, bodyName));
   } else store.set({ focus: Number(key) });
-});
+}, canvas);
+/** Screen position of a label's anchor point (for popovers). */
+function labelPoint(key: string): { x: number; y: number } {
+  const e = overlay.querySelector(`[data-key="${CSS.escape(key)}"]`) as HTMLElement | null;
+  const m = e ? /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(e.style.transform) : null;
+  const r = canvas.getBoundingClientRect();
+  return m ? { x: Number(m[1]) + r.left, y: Number(m[2]) + r.top } : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+}
+const siteAndAxisTitles = new Map<string, string>();
 
 function jumpTo(t: number): void {
   store.set({ loadingTarget: t });
@@ -273,7 +303,14 @@ function failureKinds(): readonly EventKind[] {
 
 const planner = new PlannerOverlay(store, editor, eph, pool);
 const nodesPanel = new NodesPanel(ui);
-const eventsPanel = new EventsPanel(ui, () => ({ failureKinds: failureKinds(), dominant: (t: number) => dominantBody(t - store.get().plan.epoch) }));
+const eventsPanel = new EventsPanel(ui, () => ({ failureKinds: failureKinds(), targets: eventTargets(), dominant: (t: number) => dominantBody(t - store.get().plan.epoch) }));
+/** Bodies whose closest approach counts as an encounter: the mission's objective bodies, the node-plane target. */
+function eventTargets(): string[] {
+  const def = missionById(store.get().missionId)?.def;
+  const out = def ? objectiveBodies(def.objectives) : [];
+  if (viewSettings.nodePlane !== 'equator') out.push(viewSettings.nodePlane);
+  return out;
+}
 const leaderboard = new LeaderboardPanel(store, editor);
 hudRoot.append(leaderboard.dialog);
 // One instance of each panel; the layout puts it in a dock (wide) or a tab (side / sheet).
@@ -283,19 +320,30 @@ layout.add(new ResultsPanel(ui).root, 'results', 'left');
 layout.add(leaderboard.root, 'results', 'left');
 layout.add(new StartPanel(ui).root, 'start', 'left');
 layout.add(new CraftPanel(ui).root, 'mission', 'left');
-{
-  const all = el('input', { type: 'checkbox', id: 'show-all-revs' });
-  all.onchange = () => {
-    showAllRevs = all.checked;
-    viewDirty = true;
-  };
-  hud.viewPanel.querySelector('.sec-body')!.append(el('label', { className: 'check' }, all, ' Show all revolutions (else only the one at the cursor is bright)'));
-}
+const viewSettings = loadViewSettings();
+setDistanceMode(viewSettings.distances);
+onDistanceMode(() => {
+  markersDirty = true;
+  viewDirty = true;
+  const st = store.get();
+  if (st.replay) store.set({ replay: { ...st.replay } }); // re-render the status line and markers in the new convention
+});
+const viewOptions = new ViewOptions(store, editor, viewSettings, () => {
+  viewDirty = true;
+  crossingsDirty = true;
+  updateDrawn();
+});
 layout.add(hud.viewPanel, 'view', 'right');
+layout.add(viewOptions.root, 'view', 'right');
 layout.add(nodesPanel.root, 'nodes', 'right');
 layout.add(eventsPanel.root, 'events', 'right');
 layout.add(hud.infoPanel, 'view', 'right');
-layout.bottom.prepend(new Scrubber(ui).root);
+const timeline = new Timeline(store, {
+  events: () => listed.filter((x) => !x.distant).map((x) => ({ t: x.ev.t, label: eventMarker(x, bodyName), kind: x.failure ? 'failure' : 'event' })),
+  crossings: () => (viewSettings.showNodes ? crossings : []),
+  period: (t) => periodAt(t),
+});
+layout.bottom.prepend(timeline.root);
 // Selecting a node on a phone brings its editor up.
 store.subscribe((s, p) => {
   if (s.selectedNode !== null && s.selectedNode !== p.selectedNode && layout.mode !== 'wide') layout.showTab('nodes');
@@ -395,21 +443,29 @@ let tapPick: { t: number; x: number; y: number } | null = null;
 function hideTapPop(): void {
   tapPop.hidden = true;
   tapPick = null;
+  hoverHide();
 }
-function showTapPop(t: number, x: number, y: number): void {
-  tapPick = { t, x, y };
-  const add = el('button', { className: 'btn primary', type: 'button', textContent: 'Add node here' });
-  add.onclick = () => {
-    const p = tapPick;
-    hideTapPop();
-    if (p) addNodeAt(p.t);
-  };
+/** Popover at a screen point: a sentence (optional) and, for a trajectory time t (mission time), its readout and "Add node here". */
+function showTapPop(t: number | null, x: number, y: number, text?: string): void {
+  tapPick = t === null ? null : { t, x, y };
+  const kids: (HTMLElement | null)[] = [];
+  if (text) kids.push(el('div', { className: 'tp-text', textContent: text }));
+  if (t !== null) {
+    const add = el('button', { className: 'btn primary', type: 'button', textContent: 'Add node here' });
+    add.onclick = () => {
+      const p = tapPick;
+      hideTapPop();
+      if (p) addNodeAt(p.t);
+    };
+    kids.push(el('span', { className: 'tp-t', textContent: pointReadout(t) }), add);
+  }
   const close = el('button', { className: 'btn', type: 'button', textContent: '✕', ariaLabel: 'Dismiss' });
   close.onclick = hideTapPop;
-  tapPop.replaceChildren(el('span', { className: 'tp-t', textContent: formatMet(t, 0) }), add, close);
+  kids.push(close);
+  tapPop.replaceChildren(...kids.filter((k): k is HTMLElement => !!k));
   tapPop.hidden = false;
   const W = window.innerWidth;
-  const pw = 250;
+  const pw = Math.min(300, W - 16);
   tapPop.style.left = `${Math.max(8, Math.min(W - pw - 8, x - pw / 2))}px`;
   tapPop.style.top = `${Math.max(60, y - 74)}px`;
 }
@@ -429,8 +485,10 @@ new MapInput(canvas, {
       hideTapPop();
       return;
     }
-    if (touch) showTapPop(t, x, y);
-    else addNodeAt(t);
+    if (touch) {
+      showTapPop(t, x, y);
+      hoverShowAt(pickScreen.x, pickScreen.y, null); // the same marker the mouse hover shows
+    } else addNodeAt(t);
   },
   doubleTap(x, y) {
     hideTapPop();
@@ -457,10 +515,81 @@ function pickTrajectory(x: number, y: number, radius = 14): number | null {
     if (d2 < best) {
       best = d2;
       bestT = path.times[i];
+      pickScreen.x = pr.x + rect.left;
+      pickScreen.y = pr.y + rect.top;
     }
   }
   return bestT === null ? null : bestT - store.get().plan.epoch;
 }
+const pickScreen = { x: 0, y: 0 };
+
+/** "T+… · alt … km · … m/s (Earth)": the point's mission time, altitude and speed relative to its reference body. */
+function pointReadout(tm: number): string {
+  const r = store.get().replay;
+  const t = (r?.plan.epoch ?? store.get().plan.epoch) + tm;
+  const st = new Float64Array(6);
+  const bp = new Float64Array(3 * n);
+  const bv = new Float64Array(3 * n);
+  if (!trajectory || !stateAt(trajectory, t, st) || !eph.evaluate(t, bp, bv)) return formatMet(tm, 0);
+  const di = bodyIndex(dominantBody(tm));
+  const alt = Math.hypot(st[0] - bp[3 * di], st[1] - bp[3 * di + 1], st[2] - bp[3 * di + 2]) - BODIES[di].radius;
+  const v = Math.hypot(st[3] - bv[3 * di], st[4] - bv[3 * di + 1], st[5] - bv[3 * di + 2]);
+  return `${formatMet(tm, 0)} · ${fromSurface(alt, BODIES[di].id)} · ${v.toFixed(0)} m/s (${BODIES[di].name})`;
+}
+
+// Pointer feedback: over a point a click would add a node at, a crosshair cursor, a marker on the curve and a readout.
+// Same hit test and radius as the click (pickTrajectory, 14 px).
+const hoverMark = el('div', { className: 'hover-mark' });
+const hoverRead = el('div', { className: 'hover-read' });
+hoverMark.hidden = hoverRead.hidden = true;
+hudRoot.append(hoverMark, hoverRead);
+function hoverHide(): void {
+  hoverMark.hidden = hoverRead.hidden = true;
+  canvas.classList.remove('add-here');
+}
+function hoverShowAt(x: number, y: number, text: string | null): void {
+  hoverMark.hidden = false;
+  hoverMark.style.transform = `translate(${x}px, ${y}px)`;
+  hoverRead.hidden = text === null;
+  if (text !== null) {
+    hoverRead.textContent = text;
+    const w = hoverRead.offsetWidth || 240;
+    hoverRead.style.transform = `translate(${Math.max(4, Math.min(window.innerWidth - w - 4, x + 14))}px, ${y + 12}px)`;
+  }
+}
+let hoverQueued: { x: number; y: number } | null = null;
+let dragging = false;
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  dragging = true;
+  canvas.classList.add('grabbing');
+  hoverHide();
+});
+window.addEventListener('pointerup', () => {
+  dragging = false;
+  canvas.classList.remove('grabbing');
+});
+canvas.addEventListener('pointerleave', () => {
+  if (!dragging) hoverHide();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'mouse' || dragging || e.buttons !== 0) return;
+  if (!hoverQueued) {
+    requestAnimationFrame(() => {
+      const q = hoverQueued;
+      hoverQueued = null;
+      if (!q || dragging) return;
+      const t = pickTrajectory(q.x, q.y, 14);
+      if (t === null || t < simulationStartOffset(store.get().plan.start)) {
+        hoverHide();
+        return;
+      }
+      canvas.classList.add('add-here');
+      hoverShowAt(pickScreen.x, pickScreen.y, `${pointReadout(t)} · click: add node`);
+    });
+  }
+  hoverQueued = { x: e.clientX, y: e.clientY };
+});
 
 function addNodeAt(t: number): void {
   editor.addNode(Math.round(t * 10) / 10, { kind: 'orbital', body: dominantBody(t) });
@@ -472,17 +601,17 @@ window.addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || planner.isOpen || (e.target as HTMLElement).closest?.('dialog')) return;
   const s = store.get();
   const i = s.selectedNode;
-  const mult = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+  const level = e.shiftKey ? 2 : e.altKey ? 0 : 1;
   const nudge: Record<string, [0 | 1 | 2, number]> = { KeyW: [0, 1], KeyS: [0, -1], KeyD: [1, 1], KeyA: [1, -1], KeyE: [2, 1], KeyQ: [2, -1] };
   if (i !== null && nudge[e.code]) {
     e.preventDefault();
     const [axis, sign] = nudge[e.code];
-    editor.nudgeDv(i, axis, sign * mult * nodesPanel.step());
+    editor.nudgeDv(i, axis, sign * DV_LEVELS[level]);
     return;
   }
   if (i !== null && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
     e.preventDefault();
-    editor.nudgeTime(i, (e.code === 'BracketLeft' ? -1 : 1) * mult * nodesPanel.timeStep());
+    editor.nudgeTime(i, (e.code === 'BracketLeft' ? -1 : 1) * T_LEVELS[level]);
     return;
   }
   if (i !== null && (e.key === 'Delete' || e.key === 'Backspace')) {
@@ -528,6 +657,7 @@ interface Marker {
   pos: Float64Array;
   priority: number;
   color: string;
+  title?: string;
 }
 let markers: Marker[] = [];
 /** Ignition / cutoff marker pairs; drawn only when they are far enough apart on screen. */
@@ -612,8 +742,141 @@ function rebuildTrajectory(frame: FrameSpec): void {
     if (to - from >= 2) arcs.push(...anchorSegments(path.points.slice(3 * from, 3 * to), UNIT));
   });
   scene.setBurnArcs(arcs);
+  updateDrawn();
+  crossingsDirty = true;
   rebuildMarkers(frame);
 }
+
+/** Index of the last vertex at or before t. */
+function vertexAt(times: ArrayLike<number>, t: number): number {
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (times[m] <= t) lo = m + 1;
+    else hi = m;
+  }
+  return Math.max(0, lo - 1);
+}
+
+/** Drawn span after the last burn (display only: the replay and its digest are untouched). */
+let drawn = { t: Infinity, faintRest: false };
+function updateDrawn(): void {
+  viewDirty = true;
+  const r = store.get().replay;
+  if (!r || !trajectory || trajectory.n < 2) {
+    drawn = { t: Infinity, faintRest: false };
+    return;
+  }
+  const t0 = trajectory.data[0];
+  const end = trajectory.data[(trajectory.n - 1) * SAMPLE_STRIDE];
+  let last = t0;
+  r.plan.burns.forEach((b, i) => {
+    last = Math.max(last, r.plan.epoch + b.start + (r.result.burns[i]?.burnTime ?? b.duration));
+  });
+  drawn = drawnEnd(viewSettings, last, periodAt(Math.min(end, last)), end);
+}
+/** Orbital period about the dominant body at absolute time t; NaN if unbound. */
+function periodAt(t: number): number {
+  const r = store.get().replay;
+  const st = new Float64Array(6);
+  const bp = new Float64Array(3 * n);
+  const bv = new Float64Array(3 * n);
+  if (!r || !trajectory || !stateAt(trajectory, t, st) || !eph.evaluate(t, bp, bv)) return NaN;
+  const di = bodyIndex(dominantBody(t - r.plan.epoch));
+  if (di < 0) return NaN;
+  const d = Math.hypot(st[0] - bp[3 * di], st[1] - bp[3 * di + 1], st[2] - bp[3 * di + 2]);
+  const v2 = (st[3] - bv[3 * di]) ** 2 + (st[4] - bv[3 * di + 1]) ** 2 + (st[5] - bv[3 * di + 2]) ** 2;
+  const mu = BODIES[di].gm;
+  const inv = 2 / d - v2 / mu;
+  return inv > 0 ? 2 * Math.PI * Math.sqrt((1 / inv) ** 3 / mu) : NaN;
+}
+
+// ---------------------------------------------------------------------------
+// Ascending / descending nodes relative to the chosen reference plane
+
+let crossings: PlaneCrossing[] = [];
+let crossingPos: (Float64Array | null)[] = [];
+let crossingCenter = -1;
+let crossingLabel = '';
+/** Plane normal (ICRF) for the target-plane option at t, or null. */
+let crossingsDirty = true;
+const ROT_N = new Float64Array(9);
+function planeNormalAt(center: number, plane: string, t: number, bp: Float64Array, bv: Float64Array, out: number[]): boolean {
+  if (plane === 'equator') {
+    if (!Number.isFinite(bodyOrientation(center, t, ROT_N))) return false;
+    out[0] = ROT_N[2]; out[1] = ROT_N[5]; out[2] = ROT_N[8];
+    return true;
+  }
+  const k = bodyIndex(plane);
+  if (k < 0 || k === center) return false;
+  const rx = bp[3 * k] - bp[3 * center], ry = bp[3 * k + 1] - bp[3 * center + 1], rz = bp[3 * k + 2] - bp[3 * center + 2];
+  const vx = bv[3 * k] - bv[3 * center], vy = bv[3 * k + 1] - bv[3 * center + 1], vz = bv[3 * k + 2] - bv[3 * center + 2];
+  const hx = ry * vz - rz * vy, hy = rz * vx - rx * vz, hz = rx * vy - ry * vx;
+  const h = Math.hypot(hx, hy, hz);
+  if (!(h > 0)) return false;
+  out[0] = hx / h; out[1] = hy / h; out[2] = hz / h;
+  return true;
+}
+/** The node reference body: the frame's centre body, else the flight's home body. */
+function nodeCenter(): number {
+  const c = frameCenter(store.get().frame);
+  return c ?? home;
+}
+function computeCrossings(): void {
+  crossingsDirty = false;
+  crossings = [];
+  crossingPos = [];
+  const r = store.get().replay;
+  const center = nodeCenter();
+  crossingCenter = center;
+  const plane = viewSettings.nodePlane;
+  const target = plane === 'equator' ? -1 : bodyIndex(plane);
+  crossingLabel = plane === 'equator' || target === center ? `${BODIES[center].name}'s equator` : `${BODIES[target]?.name ?? plane}'s orbital plane`;
+  const usePlane = target === center ? 'equator' : plane;
+  if (!r || !trajectory || !viewSettings.showNodes) return;
+  const R = soi.get(BODIES[center].id) ?? Infinity;
+  const bp = new Float64Array(3 * n);
+  const bv = new Float64Array(3 * n);
+  const d = trajectory.data;
+  let run: RelSample[] = [];
+  const flush = () => {
+    if (run.length > 1) crossings.push(...planeCrossings(run));
+    run = [];
+  };
+  for (let i = 0; i < trajectory.n; i++) {
+    const o = i * SAMPLE_STRIDE;
+    const t = d[o];
+    if (!eph.evaluate(t, bp, bv)) { flush(); continue; }
+    const rel = [d[o + 1] - bp[3 * center], d[o + 2] - bp[3 * center + 1], d[o + 3] - bp[3 * center + 2], d[o + 4] - bv[3 * center], d[o + 5] - bv[3 * center + 1], d[o + 6] - bv[3 * center + 2]];
+    const nrm = [0, 0, 0];
+    if (Math.hypot(rel[0], rel[1], rel[2]) > R || !planeNormalAt(center, usePlane, t, bp, bv, nrm)) { flush(); continue; }
+    run.push({ t, s: rel, n: nrm });
+  }
+  flush();
+  // Positions in the current frame (on the drawn path).
+  const frame = store.get().frame;
+  const scratch = { pos: new Float64Array(3 * n), vel: new Float64Array(3 * n), fs: newFrameState() };
+  const st = new Float64Array(6);
+  crossingPos = crossings.map((c) => {
+    if (!stateAt(trajectory!, c.t, st)) return null;
+    const f = frameAt(ctx, frame, c.t, scratch);
+    if (!f) return null;
+    const q = new Float64Array(3);
+    toFrame(f, st, 0, q, 0);
+    return q;
+  });
+  eventsPanel.setCrossings(crossings, r.plan.epoch, crossingLabel);
+  const nx = crossings.findIndex((c) => c.t >= store.get().t);
+  viewOptions.setNodeSummary(crossings.length ? `${crossings.length} crossings of ${crossingLabel}${nx >= 0 ? `; next ${crossings[nx].ascending ? 'AN' : 'DN'} at ${formatMet(crossings[nx].t - r.plan.epoch, 0)}, ${crossings[nx].inclinationDeg.toFixed(2)}°` : ''}.` : `No crossings of ${crossingLabel} while near ${BODIES[center].name}.`);
+}
+store.subscribe((s, p) => {
+  if (s.frame !== p.frame) crossingsDirty = true;
+});
+const fmtIn = (dt: number) => {
+  const a = Math.abs(dt);
+  const h = Math.floor(a / 3600), m = Math.floor((a % 3600) / 60), sec = Math.floor(a % 60);
+  return h > 48 ? `${(a / 86400).toFixed(1)} d` : h > 0 ? `${h} h ${String(m).padStart(2, '0')} m` : `${m} m ${String(sec).padStart(2, '0')} s`;
+};
 
 function rebuildMarkers(frame: FrameSpec): void {
   markersDirty = false;
@@ -621,7 +884,7 @@ function rebuildMarkers(frame: FrameSpec): void {
   const s = store.get();
   const r = s.replay;
   if (!r || !trajectory) return;
-  listed = listEvents(r.result.events, soi, { failureKinds: failureKinds(), dominant: (t) => dominantBody(t - r.plan.epoch) });
+  listed = listEvents(r.result.events, soi, { failureKinds: failureKinds(), targets: eventTargets(), dominant: (t) => dominantBody(t - r.plan.epoch) });
   const scratch = { pos: new Float64Array(3 * n), vel: new Float64Array(3 * n), fs: newFrameState() };
   const st = new Float64Array(6);
   const place = (t: number): Float64Array | null => {
@@ -636,6 +899,7 @@ function rebuildMarkers(frame: FrameSpec): void {
     // Periapsis / apoapsis markers only for the selected event or bodies other than the many-orbit primary.
     const isExt = x.role === 'event' && (x.ev.kind === 'periapsis' || x.ev.kind === 'apoapsis');
     if (isExt && listed.length > 40 && s.selectedEvent !== x.index) continue;
+    if (x.distant && s.selectedEvent !== x.index) continue; // not an encounter: listed (collapsed), never drawn
     const pos = place(x.ev.t);
     if (!pos) continue;
     markers.push({
@@ -645,6 +909,7 @@ function rebuildMarkers(frame: FrameSpec): void {
       pos,
       priority: x.failure ? 900 : s.selectedEvent === x.index ? 800 : x.role === 'closest' ? 20 : 12,
       color: x.failure ? '#ff4d4d' : x.role === 'closest' ? '#ffd36b' : '#9fc6ff',
+      title: eventExplain(x, bodyName),
     });
   }
   // Nodes of the replayed plan, at the node (burn centre), and each burn's flown ignition and cutoff.
@@ -654,7 +919,7 @@ function rebuildMarkers(frame: FrameSpec): void {
       const pos = place(r.plan.epoch + x.node.t);
       if (!pos) return;
       const sel = s.selectedNode === i;
-      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: '#ff8a3d' });
+      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: '#ff8a3d', title: `Maneuver node ${i + 1}: the centre of a planned burn. Tap to edit it.` });
       const flown = r.result.burns[i];
       if (!flown || !(flown.burnTime > 0)) return;
       const t0 = r.plan.epoch + r.plan.burns[i].start;
@@ -685,6 +950,89 @@ store.subscribe((s, p) => {
 
 // ---------------------------------------------------------------------------
 // Frame loop
+
+const ROT_S = new Float64Array(9);
+/** "Cape Canaveral SFS SLC-40, Florida, USA" -> "Cape Canaveral". */
+const siteShort = (name: string) => name.split(',')[0].replace(/ (SFS|SFB|Space|Cosmodrome|Launch|LC|SLC|Site)\b.*$/, '');
+const ROT_F = new Float64Array(9);
+const sitePos = new Float64Array(3);
+
+/**
+ * Whether a frame-coordinate point is hidden behind a body as seen from the
+ * camera (the segment camera -> point passes inside a body's sphere). A point
+ * on the near surface is not occluded (the closest approach is the point itself).
+ */
+function behindBody(p: ArrayLike<number>, po: number): boolean {
+  const c = camera.position;
+  const dx = p[po] - c[0], dy = p[po + 1] - c[1], dz = p[po + 2] - c[2];
+  const L2 = dx * dx + dy * dy + dz * dz;
+  if (!(L2 > 0)) return false;
+  for (let i = 0; i < n; i++) {
+    const R = BODIES[i].radius * 0.998;
+    const wx = framePos[3 * i] - c[0], wy = framePos[3 * i + 1] - c[1], wz = framePos[3 * i + 2] - c[2];
+    const u = (wx * dx + wy * dy + wz * dz) / L2;
+    if (u <= 0) continue;
+    const k = Math.min(1, u);
+    const ex = wx - k * dx, ey = wy - k * dy, ez = wz - k * dz;
+    if (ex * ex + ey * ey + ez * ez < R * R) return true;
+  }
+  return false;
+}
+
+/** Axis and plane-disc overlays for this frame (scene) and their N / S labels. */
+const OV_M = new Float64Array(9);
+const OV_F = new Float64Array(9);
+const axisEnd = new Float64Array(3);
+function overlays(t: number, focus: number): LabelItem[] {
+  const out: LabelItem[] = [];
+  const st = viewSettings;
+  let b = st.overlayBody ? bodyIndex(st.overlayBody) : focus === SPACECRAFT ? nodeCenter() : focus;
+  if (b < 0) b = home;
+  const hasRot = (st.showAxis || st.showEquator) && Number.isFinite(bodyOrientation(b, t, OV_M));
+  let eq = null;
+  let ax = null;
+  const R = BODIES[b].radius;
+  const radii = st.discRadius > 1 ? st.discRadius : defaultDiscRadius(BODIES[b].id);
+  viewOptions.showRadius(radii, (radii * R) / 1000);
+  const pos = framePos.subarray(3 * b, 3 * b + 3);
+  if (hasRot) {
+    mul3(fs.axes, OV_M, OV_F);
+    const rot = Float64Array.from(OV_F);
+    if (st.showEquator) eq = { pos, rot, size: radii * R, opacity: st.discOpacity };
+    if (st.showAxis) {
+      ax = { pos, rot, size: 1.8 * R };
+      for (const [sign, key, text] of [[1, 'axN', 'N'], [-1, 'axS', 'S']] as const) {
+        for (let k = 0; k < 3; k++) axisEnd[k] = pos[k] + sign * 1.8 * R * OV_F[3 * k + 2];
+        const on = scene.project(axisEnd, 0, camera.position, proj);
+        siteAndAxisTitles.set(key, `${text === 'N' ? 'North' : 'South'} end of ${BODIES[b].name}'s rotation axis (IAU pole; the same pole the texture and the surface frame use).`);
+        items0.push({ key, text, color: sign > 0 ? '#ff6b6b' : '#6bb6ff', priority: 30, x: proj.x, y: proj.y, marker: false, offset: 4, onScreen: on, className: 'axis-end', title: siteAndAxisTitles.get(key), occluded: on && behindBody(axisEnd, 0) });
+      }
+      out.push(...items0.splice(0));
+    }
+  }
+  let tg = null;
+  if (st.showTargetPlane && st.nodePlane !== 'equator' && crossingCenter >= 0 && bodyIndex(st.nodePlane) !== crossingCenter && eph.evaluate(t, ovP, ovV)) {
+    const nrm = [0, 0, 0];
+    if (planeNormalAt(crossingCenter, st.nodePlane, t, ovP, ovV, nrm)) {
+      // Frame-space basis with the normal as third column.
+      const a = fs.axes;
+      const z = [a[0] * nrm[0] + a[1] * nrm[1] + a[2] * nrm[2], a[3] * nrm[0] + a[4] * nrm[1] + a[5] * nrm[2], a[6] * nrm[0] + a[7] * nrm[1] + a[8] * nrm[2]];
+      const h = Math.abs(z[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      const x = [h[1] * z[2] - h[2] * z[1], h[2] * z[0] - h[0] * z[2], h[0] * z[1] - h[1] * z[0]];
+      const xl = Math.hypot(x[0], x[1], x[2]);
+      for (let k = 0; k < 3; k++) x[k] /= xl;
+      const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+      const Rc = BODIES[crossingCenter].radius;
+      const rc = st.discRadius > 1 ? st.discRadius : defaultDiscRadius(BODIES[crossingCenter].id);
+      tg = { pos: framePos.subarray(3 * crossingCenter, 3 * crossingCenter + 3), rot: [x[0], y[0], z[0], x[1], y[1], z[1], x[2], y[2], z[2]], size: rc * Rc, opacity: st.discOpacity };
+    }
+  }
+  scene.setOverlays(eq, tg, ax);
+  return out;
+}
+const items0: LabelItem[] = [];
+const ovP = new Float64Array(3 * n);
+const ovV = new Float64Array(3 * n);
 
 const pos = new Float64Array(3 * n);
 const vel = new Float64Array(3 * n);
@@ -729,10 +1077,9 @@ function phaseAt(t: number): string {
  * revolution after it; the rest is drawn faint. "Show all revolutions" in
  * the View panel turns this off.
  */
-let showAllRevs = false;
 function revolutionWindow(t: number, times: Float64Array | number[], scVisible: boolean): [number, number] {
   const all: [number, number] = [0, times.length - 1];
-  if (showAllRevs || !scVisible || times.length < 2) return all;
+  if (viewSettings.brightAll || !scVisible || times.length < 2) return all;
   const r = store.get().replay;
   if (!r) return all;
   const di = bodyIndex(dominantBody(t - r.plan.epoch));
@@ -831,7 +1178,7 @@ function tick(now: number): void {
           if (times[mid] <= t) lo = mid + 1;
           else hi = mid;
         }
-        scene.setTrajectorySplit(Math.max(0, lo - 1), times.length, revolutionWindow(t, times, scVisible));
+        scene.setTrajectorySplit(Math.max(0, lo - 1), times.length, revolutionWindow(t, times, scVisible), vertexAt(times, drawn.t) + 1, drawn.faintRest);
       }
     }
 
@@ -863,20 +1210,69 @@ function tick(now: number): void {
     }
     if (scVisible) {
       const on = scene.project(scFrame, 0, camera.position, proj);
-      items.push({ key: 'sc', text: 'Spacecraft', color: '#7dffb0', priority: s.focus === SPACECRAFT ? 1000 : 13.5, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on });
+      items.push({ key: 'sc', text: 'Spacecraft', color: '#7dffb0', priority: s.focus === SPACECRAFT ? 1000 : 13.5, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, occluded: on && behindBody(scFrame, 0) });
     }
     // Markers are drawn in the frame at their own time; in a moving frame they sit on the drawn path, as the path does.
     for (const m of markers) {
       const on = scene.project(m.pos, 0, camera.position, proj);
-      items.push({ key: m.key, text: m.text, color: m.color, priority: m.priority, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: m.cls });
+      items.push({ key: m.key, text: m.text, color: m.color, priority: m.priority, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: m.cls, title: m.title, occluded: on && behindBody(m.pos, 0) });
     }
+    // Ascending / descending nodes: the ones around the cursor (all of them when few).
+    if (crossingsDirty) computeCrossings();
+    if (viewSettings.showNodes && crossings.length) {
+      const near = crossingsNear(crossings, t);
+      let nextA = -1, nextD = -1;
+      for (let k = 0; k < crossings.length; k++) {
+        if (crossings[k].t < t) continue;
+        if (crossings[k].ascending && nextA < 0) nextA = k;
+        if (!crossings[k].ascending && nextD < 0) nextD = k;
+        if (nextA >= 0 && nextD >= 0) break;
+      }
+      for (const k of near) {
+        const c = crossings[k];
+        const p = crossingPos[k];
+        if (!p) continue;
+        const on = scene.project(p, 0, camera.position, proj);
+        const next = k === nextA || k === nextD;
+        const text = `${c.ascending ? 'AN' : 'DN'} ${c.inclinationDeg.toFixed(2)}°${next ? ` · in ${fmtIn(c.t - t)}` : ''}`;
+        items.push({ key: `pn:${k}`, text, color: '#c9a2ff', priority: next ? 600 : 300, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker pnode ${c.ascending ? 'asc' : 'desc'}`, title: `${c.ascending ? 'Ascending' : 'Descending'} node: crosses ${crossingLabel} at ${c.inclinationDeg.toFixed(2)}° relative inclination. Tap to move the time cursor here.`, occluded: on && behindBody(p, 0) });
+      }
+    }
+    // Launch sites on Earth: in Earth's surface frame, or when Earth is large on screen.
+    siteAndAxisTitles.clear();
+    if (earth >= 0) {
+      const de = Math.hypot(framePos[3 * earth] - camera.position[0], framePos[3 * earth + 1] - camera.position[1], framePos[3 * earth + 2] - camera.position[2]);
+      const big = scene.pixelRadius(BODIES[earth].radius, de) > 200;
+      if ((s.frame.kind === 'surface' && s.frame.center === earth) || big) {
+        const selSite = launchOf(s.plan)?.site;
+        if (Number.isFinite(bodyOrientation(earth, t, ROT_S))) {
+          mul3(fs.axes, ROT_S, ROT_F);
+          for (const site of LAUNCH_SITES) {
+            const lat = (geocentricLatitudeDeg(site) * Math.PI) / 180;
+            const lon = (site.lonDeg * Math.PI) / 180;
+            const R = BODIES[earth].radius + site.heightM;
+            const b = [R * Math.cos(lat) * Math.cos(lon), R * Math.cos(lat) * Math.sin(lon), R * Math.sin(lat)];
+            for (let k = 0; k < 3; k++) sitePos[k] = framePos[3 * earth + k] + ROT_F[3 * k] * b[0] + ROT_F[3 * k + 1] * b[1] + ROT_F[3 * k + 2] * b[2];
+            const on = scene.project(sitePos, 0, camera.position, proj);
+            const sel = site.id === selSite;
+            const key = `site:${site.id}`;
+            const title = `Launch site ${site.name} (${site.latDeg.toFixed(2)}°, ${site.lonDeg.toFixed(2)}°)${sel ? ', the selected site' : ''}.`;
+            siteAndAxisTitles.set(key, title);
+            items.push({ key, text: siteShort(site.name), color: '#7dffb0', priority: sel ? 500 : 40, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker site${sel ? ' selected' : ''}`, title, occluded: on && behindBody(sitePos, 0) });
+          }
+        }
+      }
+    }
+    // Reference geometry overlays.
+    items.push(...overlays(t, s.focus));
     // Burn ends: expanded once ignition and cutoff are 28 px apart on screen, else the single "Burn N" marker stands for both.
+    const beOcc = (p: Float64Array) => behindBody(p, 0);
     for (const be of burnEnds) {
       const onA = scene.project(be.start.pos, 0, camera.position, projA);
       const onB = scene.project(be.end.pos, 0, camera.position, projB);
       if (!onA || !onB || Math.hypot(projA.x - projB.x, projA.y - projB.y) < 28) continue;
-      items.push({ key: be.start.key, text: be.start.text, color: be.start.color, priority: be.start.priority, x: projA.x, y: projA.y, marker: true, offset: 0, onScreen: true, className: be.start.cls });
-      items.push({ key: be.end.key, text: be.end.text, color: be.end.color, priority: be.end.priority, x: projB.x, y: projB.y, marker: true, offset: 0, onScreen: true, className: be.end.cls });
+      items.push({ key: be.start.key, text: be.start.text, color: be.start.color, priority: be.start.priority, x: projA.x, y: projA.y, marker: true, offset: 0, onScreen: true, className: be.start.cls, title: `Burn ${be.node.slice(5)} ignition: the engine starts here.`, occluded: beOcc(be.start.pos) });
+      items.push({ key: be.end.key, text: be.end.text, color: be.end.color, priority: be.end.priority, x: projB.x, y: projB.y, marker: true, offset: 0, onScreen: true, className: be.end.cls, title: `Burn ${be.node.slice(5)} cutoff: the engine stops here.`, occluded: beOcc(be.end.pos) });
     }
     labels.update(items);
     lastFramePos.set(framePos);
@@ -891,7 +1287,7 @@ function tick(now: number): void {
         const di = bodyIndex(dom);
         const alt = Math.hypot(scState[0] - pos[3 * di], scState[1] - pos[3 * di + 1], scState[2] - pos[3 * di + 2]) - BODIES[di].radius;
         const vr = Math.hypot(scState[3] - vel[3 * di], scState[4] - vel[3 * di + 1], scState[5] - vel[3 * di + 2]);
-        ro.push(readout('Spacecraft', scState, 0, scState, 3, frame, `${phaseAt(t)} · ${BODIES[di].name} altitude ${Math.round(alt / 1000).toLocaleString('en-US')} km, ${vr.toFixed(0)} m/s`));
+        ro.push(readout('Spacecraft', scState, 0, scState, 3, frame, `${phaseAt(t)} · ${BODIES[di].name} ${fromSurface(alt, BODIES[di].id)}, ${vr.toFixed(0)} m/s`));
       } else {
         ro.push({ title: 'Spacecraft', relativeTo: '—', distance: NaN, speed: NaN, extra: `Not flying at this time (${formatCalendar(tdbToCalendar(r.plan.epoch), false)} to ${Number.isFinite(r.result.finalT) ? formatCalendar(tdbToCalendar(r.result.finalT), false) : '—'} TDB).` });
       }
@@ -914,6 +1310,17 @@ requestAnimationFrame(tick);
 Object.assign(window, {
   sendit: {
     store,
+    timeline,
+    scene,
+    earthPole(t: number): number[] {
+      const m = new Float64Array(9);
+      bodyOrientation(earth, t, m);
+      return [m[2], m[5], m[8]];
+    },
+    viewSettings,
+    crossings: () => crossings,
+    crossingLabel: () => crossingLabel,
+    drawn: () => drawn,
     editor,
     camera,
     metrics,

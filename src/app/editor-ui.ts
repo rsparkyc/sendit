@@ -16,7 +16,10 @@
 import { el, esc, fillBodySelect, formatMet, parseDuration, section, setText, setValue } from './dom';
 import type { Editor } from './editor';
 import { Tuner } from './tuner';
+import { tooShort, objectiveBodies } from './status';
+import { bandFromCentre, convertText, fromCentre, fromSurface, onDistanceMode } from './units';
 import { eventLabel, listEvents, type ListedEvent } from './events-view';
+import { groupCrossings, type PlaneCrossing } from './plane-nodes';
 import { formatDistance, formatSpeed } from './format';
 import {
   LAUNCH_SITES, PAR_SCORE, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
@@ -106,6 +109,7 @@ export class MissionPanel {
     };
     this.root = section('Mission', 'mission', this.notice, el('div', { className: 'row' }, this.sel, reset), this.blurb, this.objectives, this.rules, this.score, this.par);
     ctx.store.subscribe((s, p) => this.render(s, p));
+    onDistanceMode(() => this.render(ctx.store.get(), null));
     this.render(ctx.store.get(), null);
   }
 
@@ -125,7 +129,7 @@ export class MissionPanel {
     if (!p || s.missionId !== p.missionId) {
       const m = missionById(s.missionId);
       setValue(this.sel, s.missionId);
-      setText(this.blurb, m?.blurb ?? '');
+      setText(this.blurb, convertText(m?.blurb ?? '', m?.def ? objectiveBodies(m.def.objectives)[0] ?? null : null));
     }
     if (!p || s.replay !== p.replay || s.missionId !== p.missionId || s.plan !== p.plan) {
       const m = missionById(s.missionId);
@@ -137,10 +141,22 @@ export class MissionPanel {
         for (const o of m.def.objectives) {
           const r = results.find((x) => x.objective === o) ?? results.find((x) => JSON.stringify(x.objective) === JSON.stringify(o));
           const state = !r ? 'pending' : r.ok ? 'ok' : 'no';
+          const short = !!r && !!s.replay && tooShort(r, s.replay.result.outcome);
+          const max = m.def.maxDuration;
+          let extend: HTMLElement | null = null;
+          if (short) {
+            const canExtend = max !== undefined && s.plan.duration < max;
+            extend = el('div', { className: 'too-short' }, el('span', { textContent: `Flight too short: it ends at ${(s.plan.duration / DAY).toFixed(2)} d while the orbit is still being held.${canExtend ? '' : ' It is already at the mission maximum: reach the orbit earlier.'}` }));
+            if (canExtend) {
+              const b = el('button', { className: 'btn small', type: 'button', textContent: `Extend to ${(max! / DAY).toFixed(1)} d (max)` });
+              b.onclick = () => this.ctx.editor.setDuration(max!);
+              extend.append(' ', b);
+            }
+          }
           this.objectives.append(
             el('li', { className: `obj ${state}${current ? '' : ' stale'}` },
               el('span', { className: 'mark', textContent: state === 'ok' ? '✓' : state === 'no' ? '✗' : '…' }),
-              el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), el('small', { textContent: r?.detail ?? '' }))));
+              el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), el('small', { textContent: convertText(r?.detail ?? '', objectiveBodies([o])[0] ?? null) }), extend)));
         }
         if (ev?.success) {
           const k = ev.keys;
@@ -160,13 +176,15 @@ export class MissionPanel {
   }
 }
 
+const bodyRadiusOf = (id: string) => { const i = bodyIndex(id); return i >= 0 ? BODIES[i].radius : 0; };
+
 function objectiveText(o: Objective): string {
   switch (o.kind) {
-    case 'flyby': return `Fly by ${bodyName(o.body)}${o.minAltitude !== undefined || o.maxAltitude !== undefined ? ` at ${o.minAltitude !== undefined ? km(o.minAltitude) : '0'}–${o.maxAltitude !== undefined ? km(o.maxAltitude) : '∞'} altitude` : ''}`;
-    case 'visit': return `Pass within ${km(o.within)} of ${bodyName(o.body)}`;
-    case 'orbit': return `Orbit ${bodyName(o.body)}: periapsis ${km(o.periapsis[0])}–${km(o.periapsis[1])}, apoapsis ${km(o.apoapsis[0])}–${km(o.apoapsis[1])}${o.inclination ? `, inclination ${o.inclination[0]}–${o.inclination[1]}°` : ''}, ${o.revolutions} revolutions (radius from centre)`;
+    case 'flyby': return `Fly by ${bodyName(o.body)}${o.minAltitude !== undefined || o.maxAltitude !== undefined ? ` at ${bandFromCentre((o.minAltitude ?? 0) + bodyRadiusOf(o.body), (o.maxAltitude ?? Infinity) + bodyRadiusOf(o.body), o.body)}` : ''}`;
+    case 'visit': return `Pass within ${fromCentre(o.within, o.body)} of ${bodyName(o.body)}`;
+    case 'orbit': return `Orbit ${bodyName(o.body)}: periapsis ${bandFromCentre(o.periapsis[0], o.periapsis[1], o.body)}, apoapsis ${bandFromCentre(o.apoapsis[0], o.apoapsis[1], o.body)}${o.inclination ? `, inclination ${o.inclination[0]}–${o.inclination[1]}°` : ''}, ${o.revolutions} revolutions`;
     case 'reentry': return `Enter ${bodyName(o.body)}'s atmosphere${o.maxSpeed !== undefined ? ` below ${(o.maxSpeed / 1000).toFixed(1)} km/s` : ''}`;
-    case 'return': return `Return to ${bodyName(o.body)} (below ${km(o.maxAltitude)})`;
+    case 'return': return `Return to ${bodyName(o.body)} (below ${fromSurface(o.maxAltitude, o.body)})`;
     case 'escape': return `Escape ${bodyName(o.body)} at ≥ ${o.minSpeed} m/s excess`;
     case 'sequence': return o.steps.map(objectiveText).join(', then ');
     case 'max-delta-v': return `Use at most ${fmtDv(o.max)}`;
@@ -473,8 +491,11 @@ export class CraftPanel {
 
 // ---------------------------------------------------------------------------
 
-const DV_STEPS = [0.01, 0.1, 1, 10, 100];
-const T_STEPS = [0.1, 1, 10, 60, 600, 3600];
+/** Small, medium, large steps (buttons ‹ ‹‹ ‹‹‹; keys with Alt, plain, Shift). Δv: trim to shape. Time: 1 s to 10 min. */
+export const DV_LEVELS = [0.1, 1, 10] as const;
+export const T_LEVELS = [1, 60, 600] as const;
+const dvText = (v: number) => `${v} m/s`;
+const tText = (v: number) => (v < 60 ? `${v} s` : `${v / 60} min`);
 const AXES = ['Prograde', 'Normal', 'Radial out'] as const;
 
 export class NodesPanel {
@@ -485,9 +506,6 @@ export class NodesPanel {
   private readonly planErr = el('div', { className: 'error' });
   // Detail controls.
   private readonly timeTuner: Tuner;
-  private readonly tStep = el('select', { title: 'Time step for − / + and [ ]' });
-  private readonly dvStep = el('select', { title: 'Delta-v step for − / + and the W S A D Q E keys' });
-  private readonly fine = el('button', { className: 'btn fine', type: 'button', textContent: 'Fine ×0.1', title: 'Fine: one tenth of the step for buttons and drag strips' });
   private readonly dvTuners: Tuner[] = [];
   private readonly frameSel = el('select', { title: 'Reference body of the orbital frame (prograde, normal, radial are relative to it)' });
   private readonly engineSel = el('select', { title: 'Engine' });
@@ -495,10 +513,6 @@ export class NodesPanel {
   private readonly nodeErr = el('div', { className: 'error' });
 
   constructor(private readonly ctx: UiContext) {
-    for (const s of DV_STEPS) this.dvStep.append(el('option', { value: String(s), textContent: `${s} m/s` }));
-    this.dvStep.value = '1';
-    for (const s of T_STEPS) this.tStep.append(el('option', { value: String(s), textContent: s < 60 ? `${s} s` : s < 3600 ? `${s / 60} min` : `${s / 3600} h` }));
-    this.tStep.value = '10';
     fillBodySelect(this.frameSel, (i) => BODIES[i].id, [{ value: '@inertial', label: 'Inertial (ICRF x y z)' }]);
     this.frameSel.onchange = () => {
       const i = ctx.store.get().selectedNode;
@@ -516,14 +530,13 @@ export class NodesPanel {
       b.onclick = f;
       return b;
     };
-    this.fine.setAttribute('aria-pressed', 'false');
-    this.fine.onclick = () => this.fine.setAttribute('aria-pressed', String(this.fine.getAttribute('aria-pressed') !== 'true'));
     this.timeTuner = new Tuner({
       label: 'Time',
       title: 'Burn centre, mission elapsed time: "T+1d 02:03:04", "3h 20m", or seconds',
       inputClass: 'met-input',
       inputMode: 'text',
-      step: () => this.timeStep() * this.fineMul(),
+      levels: T_LEVELS,
+      levelText: tText,
       nudge: (d) => { const i = sel(); if (i !== null) ctx.editor.nudgeTime(i, d); },
       commit: (text) => this.commitTime(text),
     });
@@ -532,7 +545,16 @@ export class NodesPanel {
       title: `${name} delta-v, m/s`,
       inputClass: 'num dv',
       inputMode: 'decimal',
-      step: () => this.step() * this.fineMul(),
+      levels: DV_LEVELS,
+      levelText: dvText,
+      zero: () => {
+        const i = sel();
+        const n = i !== null ? nodesOf(ctx.store.get().plan)[i]?.node : undefined;
+        if (!n || i === null) return;
+        const dv: [number, number, number] = [...n.dv];
+        dv[axis] = 0;
+        ctx.editor.updateNode(i, { dv });
+      },
       nudge: (d) => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, d); },
       commit: (text) => {
         const v = Number(text);
@@ -559,11 +581,7 @@ export class NodesPanel {
       btn('Disable', () => { const i = sel(); if (i !== null) ctx.editor.disableNode(i); }),
       btn('Delete', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }, 'Delete key'),
       btn('Target flyby…', () => { const i = sel(); if (i !== null) ctx.openPlanner?.('target', i); }, 'Correct this burn toward a closest-approach altitude at a body'));
-    const steps = el('div', { className: 'steps-row' },
-      el('label', {}, el('span', { textContent: 'Δv step' }), this.dvStep),
-      el('label', {}, el('span', { textContent: 'Time step' }), this.tStep),
-      this.fine);
-    this.detail.append(this.timeTuner.root, steps, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), this.readout, this.nodeErr, actions);
+    this.detail.append(this.timeTuner.root, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), this.readout, this.nodeErr, actions);
     const addCursor = btn('+ Node at cursor', () => this.addAtCursor(), 'Add a burn at the time cursor (or click the trajectory)');
     const planner = btn('Transfer planner…', () => ctx.openPlanner?.('transfer'), 'Porkchop plots, departure burns, flyby targeting and chains');
     this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or tap / click the trajectory' }), planner), this.list, this.detail, this.parked);
@@ -573,17 +591,6 @@ export class NodesPanel {
     this.render();
   }
 
-  step(): number {
-    return Number(this.dvStep.value);
-  }
-
-  timeStep(): number {
-    return Number(this.tStep.value);
-  }
-
-  fineMul(): number {
-    return this.fine.getAttribute('aria-pressed') === 'true' ? 0.1 : 1;
-  }
 
   private commitTime(text: string): string | null {
     const i = this.ctx.store.get().selectedNode;
@@ -691,10 +698,13 @@ export class EventsPanel {
   readonly root: HTMLElement;
   private readonly list = el('div', { className: 'event-list' });
   private readonly summary = el('div', { className: 'hint' });
+  private readonly planeList = el('div', { className: 'event-list plane-list' });
   listed: ListedEvent[] = [];
+  private crossings: { list: readonly PlaneCrossing[]; epoch: number; label: string } = { list: [], epoch: 0, label: '' };
 
   constructor(private readonly ctx: UiContext, private readonly listOptions: () => Parameters<typeof listEvents>[2]) {
-    this.root = section('Events', 'events', this.summary, this.list);
+    this.root = section('Events', 'events', this.summary, this.list, this.planeList);
+    onDistanceMode(() => this.render());
     ctx.store.subscribe((s, p) => {
       if (s.replay !== p.replay || s.selectedEvent !== p.selectedEvent) this.render();
     });
@@ -723,13 +733,14 @@ export class EventsPanel {
       const rowEl = el('div', { className: `event-row ${x.failure ? 'failure' : ''} ${x.role} k-${ev.kind}${s.selectedEvent === x.index ? ' selected' : ''}`, dataset: { index: String(x.index) } },
         el('span', { className: 'emet', textContent: formatMet(ev.t - epoch, 0) }),
         el('span', { className: 'ename', textContent: eventLabel(x, bodyName) }),
-        el('span', { className: 'eval', textContent: `${formatDistance(ev.altitude)} alt · ${formatSpeed(ev.speed)}` }),
+        el('span', { className: 'eval', textContent: `${fromSurface(ev.altitude, ev.body)} · ${formatSpeed(ev.speed)}` }),
         focus);
       rowEl.onclick = () => this.ctx.store.set({ selectedEvent: x.index, t: ev.t, paused: true, loadingTarget: ev.t });
       activatable(rowEl);
       return rowEl;
     };
-    for (const g of groupApsides(this.listed)) {
+    const distant = this.listed.filter((x) => x.distant);
+    for (const g of groupApsides(this.listed.filter((x) => !x.distant))) {
       if (g.length === 1) {
         this.list.append(row(g[0]));
         continue;
@@ -740,7 +751,7 @@ export class EventsPanel {
       const sum = el('button', { className: 'event-row apsis-group', type: 'button', ariaExpanded: String(open) },
         el('span', { className: 'emet', textContent: formatMet(g[0].ev.t - epoch, 0) }),
         el('span', { className: 'ename', textContent: `${open ? '▾' : '▸'} ${g.length} apsides at ${bodyName(g[0].ev.body)} (near-circular)` }),
-        el('span', { className: 'eval', textContent: `${formatDistance(Math.min(...alts))} – ${formatDistance(Math.max(...alts))} alt · until ${formatMet(g[g.length - 1].ev.t - epoch, 0)}` }));
+        el('span', { className: 'eval', textContent: `${fromSurface(Math.min(...alts), g[0].ev.body)} – ${fromSurface(Math.max(...alts), g[0].ev.body)} · until ${formatMet(g[g.length - 1].ev.t - epoch, 0)}` }));
       sum.onclick = () => {
         if (this.expanded.has(key)) this.expanded.delete(key);
         else this.expanded.add(key);
@@ -749,8 +760,65 @@ export class EventsPanel {
       this.list.append(sum);
       if (open) for (const x of g) this.list.append(row(x));
     }
+    if (distant.length) {
+      const open = this.expanded.has('distant') || distant.some((x) => x.index === s.selectedEvent);
+      const sum = el('button', { className: 'event-row apsis-group distant-group', type: 'button', ariaExpanded: String(open) },
+        el('span', { className: 'emet', textContent: '' }),
+        el('span', { className: 'ename', textContent: `${open ? '▾' : '▸'} Distant bodies (${distant.length})` }),
+        el('span', { className: 'eval', textContent: `closest points to ${distant.map((x) => bodyName(x.ev.body)).join(', ')}: not encounters, not drawn on the map` }));
+      sum.onclick = () => {
+        if (this.expanded.has('distant')) this.expanded.delete('distant');
+        else this.expanded.add('distant');
+        this.render();
+      };
+      this.list.append(sum);
+      if (open) for (const x of distant) this.list.append(row(x));
+    }
+    this.renderCrossings();
   }
   private readonly expanded = new Set<string>();
+
+  /** Ascending / descending node crossings of the reference plane (main.ts computes them from the replay). */
+  setCrossings(list: readonly PlaneCrossing[], epoch: number, label: string): void {
+    this.crossings = { list, epoch, label };
+    this.renderCrossings();
+  }
+
+  private renderCrossings(): void {
+    const { list, epoch, label } = this.crossings;
+    this.planeList.replaceChildren();
+    if (!list.length) return;
+    this.planeList.append(el('div', { className: 'sub', textContent: `Nodes on ${label}` }));
+    const row = (c: PlaneCrossing) => {
+      const r = el('div', { className: `event-row pnode ${c.ascending ? 'asc' : 'desc'}` },
+        el('span', { className: 'emet', textContent: formatMet(c.t - epoch, 0) }),
+        el('span', { className: 'ename', textContent: c.ascending ? '▲ Ascending node' : '▼ Descending node' }),
+        el('span', { className: 'eval', textContent: `${c.inclinationDeg.toFixed(2)}° relative inclination` }));
+      r.onclick = () => this.ctx.store.set({ t: c.t, paused: true, loadingTarget: c.t });
+      activatable(r);
+      return r;
+    };
+    for (const g of groupCrossings(list)) {
+      if (g.length === 1) {
+        this.planeList.append(row(list[g[0]]));
+        continue;
+      }
+      const key = `pn:${g[0]}`;
+      const open = this.expanded.has(key);
+      const a = list[g[0]], b = list[g[g.length - 1]];
+      const sum = el('button', { className: 'event-row apsis-group', type: 'button', ariaExpanded: String(open) },
+        el('span', { className: 'emet', textContent: formatMet(a.t - epoch, 0) }),
+        el('span', { className: 'ename', textContent: `${open ? '▾' : '▸'} ${g.length} node crossings at ${a.inclinationDeg.toFixed(2)}°` }),
+        el('span', { className: 'eval', textContent: `until ${formatMet(b.t - epoch, 0)}` }));
+      sum.onclick = () => {
+        if (open) this.expanded.delete(key);
+        else this.expanded.add(key);
+        this.renderCrossings();
+      };
+      this.planeList.append(sum);
+      if (open) for (const i of g) this.planeList.append(row(list[i]));
+    }
+  }
 }
 
 /**
@@ -879,66 +947,6 @@ export class ResultsPanel {
 
 // ---------------------------------------------------------------------------
 
-export class Scrubber {
-  readonly root: HTMLElement;
-  private readonly range = el('input', { type: 'range', min: '0', max: '10000', step: '1', className: 'scrub', title: 'Time along the flight' });
-  private readonly met = el('span', { className: 'scrub-met' });
-  private readonly ticks = el('div', { className: 'scrub-ticks' });
-
-  constructor(private readonly ctx: UiContext) {
-    this.range.addEventListener('input', () => {
-      const [a, b] = this.span();
-      const t = a + ((b - a) * Number(this.range.value)) / 10000;
-      ctx.store.set({ t, paused: true, loadingTarget: t });
-    });
-    const start = el('button', { className: 'btn small', textContent: '⏮', title: 'Flight start', type: 'button' });
-    start.onclick = () => {
-      const [a] = this.span();
-      ctx.store.set({ t: a, paused: true, loadingTarget: a });
-    };
-    this.root = el('div', { className: 'panel scrubber' }, start, el('div', { className: 'scrub-track' }, this.range, this.ticks), this.met);
-    ctx.store.subscribe((s, p) => {
-      if (s.t !== p.t || s.replay !== p.replay || s.selectedNode !== p.selectedNode || s.plan !== p.plan) this.render(s, p.replay !== s.replay || p.selectedNode !== s.selectedNode || p.plan !== s.plan);
-    });
-    this.render(ctx.store.get(), true);
-  }
-
-  private span(): [number, number] {
-    const s = this.ctx.store.get();
-    const r = s.replay;
-    const a = s.plan.epoch;
-    const end = r && Number.isFinite(r.result.finalT) ? r.result.finalT : a + s.plan.duration;
-    return [a, Math.max(end, a + 1)];
-  }
-
-  private render(s: AppState, ticks: boolean): void {
-    const [a, b] = this.span();
-    if (document.activeElement !== this.range) this.range.value = String(Math.round(((s.t - a) / (b - a)) * 10000));
-    setText(this.met, `${formatMet(s.t - s.plan.epoch, 0)} MET`);
-    if (ticks) {
-      this.ticks.replaceChildren();
-      const r = s.replay;
-      const flown = r && r.plan === s.plan && r.preview === null ? r.result.burns : null;
-      nodesOf(s.plan).forEach((n, i) => {
-        // The burn's span: flown ignition to cutoff when the replay is current, else the requested one.
-        const t0 = s.plan.epoch + n.burn.start;
-        const dur = flown?.[i] ? flown[i].burnTime : n.burn.duration;
-        const short = !!flown?.[i] && flown[i].burnTime < n.burn.duration * 0.999;
-        const x0 = ((t0 - a) / (b - a)) * 100;
-        const w = (dur / (b - a)) * 100;
-        if (x0 > 100 || x0 + w < 0) return;
-        const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}: ${formatMet(n.burn.start, 0)} to ${formatMet(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
-        sp.style.left = `${Math.max(0, x0)}%`;
-        sp.style.width = `${Math.min(100 - Math.max(0, x0), Math.max(w, 0))}%`;
-        this.ticks.append(sp);
-      });
-      if (r && r.result.outcome !== 'completed' && Number.isFinite(r.result.finalT)) {
-        this.ticks.append(tick('tick end', 'End of flight', 100));
-      }
-    }
-  }
-}
-
 /** A clickable row reachable and operable from the keyboard. */
 function activatable(e: HTMLElement, label?: string): void {
   e.tabIndex = 0;
@@ -950,10 +958,4 @@ function activatable(e: HTMLElement, label?: string): void {
       e.click();
     }
   });
-}
-
-function tick(className: string, title: string, leftPct: number): HTMLSpanElement {
-  const t = el('span', { className, title });
-  t.style.left = `${leftPct}%`;
-  return t;
 }

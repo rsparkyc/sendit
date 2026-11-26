@@ -19,6 +19,10 @@ export interface LabelItem {
   onScreen: boolean;
   /** Extra CSS class (e.g. event and node markers). */
   className?: string;
+  /** One sentence saying what the marker is (tooltip and accessible name). */
+  title?: string;
+  /** Behind a body as seen from the camera: drawn dimmed and not tappable. */
+  occluded?: boolean;
 }
 
 interface Entry {
@@ -33,7 +37,64 @@ export class Labels {
   constructor(
     private readonly root: HTMLElement,
     private readonly onPick: (key: string) => void,
-  ) {}
+    /** Map element that gets gestures started on a label (a drag or a second finger), so labels never block orbiting or pinching. */
+    private readonly gestureTarget?: HTMLElement,
+  ) {
+    if (gestureTarget) this.wireForwarding();
+  }
+
+  /**
+   * A press on a label is a pick only if it stays a single, still press. As
+   * soon as it moves beyond a few px or a second finger comes down, the
+   * pointers are replayed on the map element (down, then every move and up),
+   * and the label's click is suppressed.
+   */
+  private wireForwarding(): void {
+    const target = this.gestureTarget!;
+    const held = new Map<number, { down: PointerEvent; forwarded: boolean }>();
+    let suppressClick = false;
+    const clone = (type: string, e: PointerEvent) =>
+      new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: e.pointerId, pointerType: e.pointerType, isPrimary: e.isPrimary, clientX: e.clientX, clientY: e.clientY, button: e.button, buttons: e.buttons, pressure: e.pressure });
+    const forwardAll = () => {
+      for (const h of held.values()) {
+        if (h.forwarded) continue;
+        h.forwarded = true;
+        target.dispatchEvent(clone('pointerdown', h.down));
+      }
+      suppressClick = true;
+    };
+    this.root.addEventListener('pointerdown', (e) => {
+      if (!(e.target as HTMLElement).closest('.label')) return;
+      held.set(e.pointerId, { down: e, forwarded: false });
+      if (held.size > 1) forwardAll();
+    });
+    // A second finger that lands on the map while one is held on a label: forward the held one too.
+    target.addEventListener('pointerdown', (e) => {
+      if (e.isTrusted && held.size > 0 && !held.has(e.pointerId)) forwardAll();
+    }, true);
+    this.root.addEventListener('pointermove', (e) => {
+      const h = held.get(e.pointerId);
+      if (!h) return;
+      if (!h.forwarded && Math.hypot(e.clientX - h.down.clientX, e.clientY - h.down.clientY) > 8) forwardAll();
+      if (h.forwarded) target.dispatchEvent(clone('pointermove', e));
+    });
+    const end = (type: string) => (e: PointerEvent) => {
+      const h = held.get(e.pointerId);
+      if (!h) return;
+      held.delete(e.pointerId);
+      if (h.forwarded) target.dispatchEvent(clone(type, e));
+    };
+    // Pointers whose events were captured elsewhere (the map took them over): forget them.
+    for (const t of ['pointerup', 'pointercancel']) window.addEventListener(t, (e) => held.delete((e as PointerEvent).pointerId));
+    this.root.addEventListener('pointerup', end('pointerup'));
+    this.root.addEventListener('pointercancel', end('pointercancel'));
+    this.root.addEventListener('click', (e) => {
+      if (suppressClick) {
+        e.stopPropagation();
+        suppressClick = held.size > 0;
+      }
+    }, true);
+  }
 
   private entry(item: LabelItem): Entry {
     let e = this.entries.get(item.key);
@@ -96,7 +157,11 @@ export class Labels {
         continue;
       }
       e.el.style.display = '';
-      const cls = `label${item.className ? ` ${item.className}` : ''}`;
+      const cls = `label${item.className ? ` ${item.className}` : ''}${item.occluded ? ' occluded' : ''}`;
+      if (item.title !== undefined && e.text.title !== item.title) {
+        e.text.title = item.title;
+        e.text.setAttribute('aria-label', `${item.text}. ${item.title}`);
+      }
       if (e.el.dataset.cls !== cls) {
         e.el.dataset.cls = cls;
         e.el.className = cls;
@@ -104,7 +169,7 @@ export class Labels {
       e.el.style.transform = `translate(${item.x.toFixed(1)}px, ${item.y.toFixed(1)}px)`;
       e.dot.style.display = item.marker ? '' : 'none';
       e.dot.style.background = item.color;
-      e.text.textContent = item.text;
+      if (e.text.textContent !== item.text) e.text.textContent = item.text;
       e.text.style.display = chosen ? '' : 'none';
       if (chosen) {
         e.text.style.left = `${chosen.dx}px`;

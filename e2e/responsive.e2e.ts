@@ -166,8 +166,10 @@ test.describe('burn markers', () => {
     // 600 m/s at T/W 0.10: a burn of over ten minutes.
     await page.evaluate(() => (window as any).sendit.editor.addNode(4000, { kind: 'orbital', body: 'earth' }, [600, 0, 0]));
     await settled(page);
-    await page.evaluate(() => (window as any).sendit.camera.setDistance(3.5e7, true));
+    // Look from the side the burn is on (markers behind the planet are dimmed and not tappable).
+    await page.evaluate(() => { const c = (window as any).sendit.camera; c.azimuth += Math.PI; c.setDistance(3.5e7, true); });
     await page.waitForTimeout(800);
+    await expect(page.locator('.label.marker.burn-end.end:not(.occluded) .text').first()).toBeVisible();
     await expect(page.locator('.label.marker.burn-end.start .text').first()).toBeVisible();
     await expect(page.locator('.label.marker.burn-end.end .text').first()).toContainText('min');
     await expect(page.locator('.span.burn.selected')).toHaveCount(1);

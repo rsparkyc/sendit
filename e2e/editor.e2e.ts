@@ -131,11 +131,10 @@ test('trans-lunar burn tuned into a flyby, then a lunar impact flagged as failur
   await enter(page, 'input[title="Prograde delta-v, m/s"]', '3100');
   let s = await settled(page);
   const ca: number[] = [moonCa(s)];
-  // Coarse then fine nudges from the keyboard (step 10 m/s with Shift = 100... step select at 10).
-  await page.selectOption('select[title^="Delta-v step"]', '10');
+  // Coarse nudges from the keyboard: Shift is the large step (10 m/s).
   await page.locator('canvas#view').focus();
   for (let k = 0; k < 6; k++) {
-    await page.keyboard.press('KeyW');
+    await page.keyboard.press('Shift+KeyW');
     s = await settled(page);
     ca.push(moonCa(s));
   }
@@ -151,12 +150,11 @@ test('trans-lunar burn tuned into a flyby, then a lunar impact flagged as failur
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${SHOTS}/2-lunar-flyby.png` });
 
-  // Latency: ten fine nudges on the 10-day flight.
-  await page.selectOption('select[title^="Delta-v step"]', '0.1');
+  // Latency: ten fine nudges (Alt: small step, 0.1 m/s) on the 10-day flight.
   const lat: number[] = [];
   const rep: number[] = [];
   for (let k = 0; k < 10; k++) {
-    await page.keyboard.press(k % 2 ? 'KeyS' : 'KeyW');
+    await page.keyboard.press(k % 2 ? 'Alt+KeyS' : 'Alt+KeyW');
     s = await settled(page);
     await page.waitForTimeout(50);
     lat.push(await page.evaluate(() => (window as any).sendit.metrics.redrawLatencyMs));
@@ -282,8 +280,7 @@ test('2-year interplanetary coast: edit-to-redraw latency', async ({ page }) => 
   await page.getByRole('button', { name: '+ Node at cursor' }).click();
   await enter(page, 'input.met-input', '20d');
   s = await settled(page);
-  await page.selectOption('select[title^="Delta-v step"]', '1');
-  await page.locator('canvas#view').focus();
+  await page.locator('canvas#view').focus(); // plain W / S: the medium step, 1 m/s
   const lat: number[] = [];
   const rep: number[] = [];
   for (let k = 0; k < 10; k++) {

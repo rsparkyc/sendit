@@ -92,6 +92,9 @@ describe('event list', () => {
     const l = listEvents(events, soi);
     expect(l.map((x) => `${x.role}:${x.ev.kind}:${x.ev.body}`)).toEqual(['event:periapsis:earth', 'closest:periapsis:moon', 'event:enter:moon', 'event:impact:moon']);
     expect(l.at(-1)!.failure).toBe(true);
+    // A minimum far outside the Moon's SOI is not an encounter unless the Moon is a target.
+    expect(l[1].distant).toBe(true);
+    expect(listEvents(events, soi, { targets: ['moon'] })[1].distant).toBe(false);
     // Reentry missions: atmosphere entry is not a failure.
     expect(listEvents([ev('atmosphere-entry', 'earth', 1, 6.5e6)], soi, { failureKinds: ['impact'] })[0].failure).toBe(false);
   });

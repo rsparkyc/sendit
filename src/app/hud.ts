@@ -45,19 +45,31 @@ export const SHORTCUTS: readonly [string, string][] = [
   ['D / A', 'Normal + / −'],
   ['E / Q', 'Radial out + / −'],
   ['[ and ]', 'Move the node earlier / later'],
-  ['Shift, Alt', 'with the above: ×10, ×0.1 of the step'],
+  ['Alt / none / Shift', 'with the above: small / medium / large step (0.1, 1, 10 m/s; 1 s, 1 min, 10 min)'],
   ['Delete', 'Delete the selected node'],
   ['Esc', 'Clear the selection'],
   ['?', 'This reference'],
+];
+
+/** Map marker legend (help dialog). */
+export const LEGEND: readonly [string, string][] = [
+  ['◉ Burn 1 (orange, boxed)', 'A maneuver node you placed; ▶ / ■ mark where the burn starts and ends. The thick orange stretch of the path is the burn itself.'],
+  ['◆ Periapsis, Apoapsis (blue)', 'Event from the replay: lowest / highest point of the orbit'],
+  ['◆ Closest to Moon (yellow)', 'Event: closest approach to a body you actually pass near (or a mission target)'],
+  ['◆ IMPACT (red)', 'Event: the flight ends here'],
+  ['▲ AN / ▼ DN (violet)', 'Ascending / descending node: where the orbit crosses the reference plane (cheapest place to change plane)'],
+  ['■ Launch site (green)', 'Launch site on the surface; the selected one is ringed'],
+  ['Faded marker', 'Behind a planet as seen from the camera'],
 ];
 
 export const GESTURES: readonly [string, string][] = [
   ['Drag (one finger / mouse)', 'Orbit the camera'],
   ['Pinch / wheel', 'Zoom'],
   ['Two-finger drag', 'Tilt and turn'],
-  ['Tap near the trajectory', 'Pick a point, then “Add node here” (a mouse click adds directly)'],
+  ['Tap near the trajectory', 'Pick a point (time, altitude, speed shown), then “Add node here”; with a mouse the crosshair cursor shows where a click adds a node'],
+  ['Tap a marker', 'Says what it is; a node marker selects it, an AN / DN marker moves the time cursor there'],
   ['Double-tap a body', 'Focus it (or tap its label)'],
-  ['Drag a value’s ◂▸ strip', 'Tune it; “Fine” divides the step by ten'],
+  ['Drag a value’s ◂▸ strip', 'Tune it by medium steps; ‹ ‹‹ ‹‹‹ › ›› ››› step small / medium / large'],
 ];
 
 export class Hud {
@@ -153,7 +165,7 @@ export class Hud {
     close.onclick = () => this.keys.close();
     const table = (title: string, rows: readonly [string, string][]) =>
       el('section', {}, el('h3', { textContent: title }), el('dl', {}, ...rows.flatMap(([k, v]) => [el('dt', {}, el('kbd', { textContent: k })), el('dd', { textContent: v })])));
-    this.keys.append(el('h2', { textContent: 'Shortcuts and gestures' }), el('div', { className: 'keys-grid' }, table('Keyboard', SHORTCUTS), table('Touch and mouse', GESTURES)), close);
+    this.keys.append(el('h2', { textContent: 'Shortcuts and gestures' }), el('div', { className: 'keys-grid' }, table('Keyboard', SHORTCUTS), table('Touch and mouse', GESTURES), table('Map markers', LEGEND)), close);
     this.keys.addEventListener('click', (e) => {
       if (e.target === this.keys) this.keys.close();
     });

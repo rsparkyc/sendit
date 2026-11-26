@@ -58,6 +58,9 @@ export interface FreeRect {
 }
 
 const STORE_KEY = 'sendit.layout.v1';
+export const DOCK_MIN = 220;
+export const DOCK_MAX = 520;
+const clampWidth = (w: number) => Math.round(Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.min(w, (typeof window !== 'undefined' ? window.innerWidth : 2000) * 0.4))));
 
 export class Layout {
   readonly topbar = el('header', { className: 'topbar' });
@@ -78,6 +81,12 @@ export class Layout {
   tab: TabId = 'mission';
   sheetState: SheetState = 'peek';
   private collapsed = { left: false, right: false, side: false };
+  /** Dock widths set by dragging their inner edge (px; null: the default for the window size). */
+  private widths: { left: number | null; right: number | null } = { left: null, right: null };
+  /** Collapsed panels, by their section class. */
+  private panelCollapsed = new Set<string>();
+  /** Sheet height dragged between the snap points, px (null: the state's own height). */
+  private sheetPx: number | null = null;
 
   constructor(private readonly root: HTMLElement) {
     try {
@@ -85,6 +94,8 @@ export class Layout {
       if (saved && typeof saved === 'object') {
         if (TABS.some((t) => t.id === saved.tab)) this.tab = saved.tab;
         this.collapsed = { ...this.collapsed, ...(saved.collapsed ?? {}) };
+        for (const k of ['left', 'right'] as const) if (typeof saved.widths?.[k] === 'number') this.widths[k] = clampWidth(saved.widths[k]);
+        if (Array.isArray(saved.panels)) this.panelCollapsed = new Set(saved.panels.filter((x: unknown) => typeof x === 'string'));
       }
       else if (window.innerHeight < 520 && window.innerWidth > window.innerHeight) this.collapsed.side = true; // landscape phone: map first
     } catch {
@@ -99,8 +110,8 @@ export class Layout {
       };
       return b;
     };
-    this.left.append(dockToggle('left'), this.leftBody);
-    this.right.append(dockToggle('right'), this.rightBody);
+    this.left.append(dockToggle('left'), this.leftBody, this.resizeHandle('left'));
+    this.right.append(dockToggle('right'), this.rightBody, this.resizeHandle('right'));
     for (const t of TABS) {
       const b = el('button', { className: 'tab', type: 'button', role: 'tab', id: `tab-${t.id}` },
         el('span', { className: 'tab-icon', ariaHidden: 'true', textContent: t.icon }),
@@ -143,6 +154,21 @@ export class Layout {
   /** Register a panel: its tab (sheet / side modes) and dock (wide mode), in order. */
   add(panel: HTMLElement, tab: TabId, dock: Dock, order = this.entries.length): void {
     this.entries.push({ el: panel, tab, dock, order });
+    // Panel collapse by its header, remembered across reloads (sections from dom.ts).
+    const key = this.panelKey(panel);
+    const head = panel.querySelector(':scope > .sec-h > .sec-title') as HTMLElement | null;
+    if (key && head) {
+      if (this.panelCollapsed.has(key)) {
+        panel.classList.add('collapsed');
+        head.setAttribute('aria-expanded', 'false');
+      }
+      head.addEventListener('click', () => {
+        if (panel.classList.contains('collapsed')) this.panelCollapsed.add(key);
+        else this.panelCollapsed.delete(key);
+        this.persist();
+        this.emit();
+      });
+    }
     this.entries.sort((a, b) => a.order - b.order);
     this.place();
   }
@@ -176,6 +202,7 @@ export class Layout {
 
   setSheet(state: SheetState): void {
     this.sheetState = state;
+    this.sheetPx = null;
     this.apply();
   }
 
@@ -195,7 +222,7 @@ export class Layout {
 
   private persist(): void {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ tab: this.tab, collapsed: this.collapsed }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({ tab: this.tab, collapsed: this.collapsed, widths: this.widths, panels: [...this.panelCollapsed] }));
     } catch {
       /* not persistent */
     }
@@ -225,6 +252,15 @@ export class Layout {
     r.dataset.leftCollapsed = String(this.collapsed.left);
     r.dataset.rightCollapsed = String(this.collapsed.right);
     r.dataset.sideCollapsed = String(this.collapsed.side);
+    for (const k of ['left', 'right'] as const) {
+      const w = this.widths[k];
+      if (w === null) r.style.removeProperty(`--dock-${k[0]}`);
+      else r.style.setProperty(`--dock-${k[0]}`, `${w}px`);
+      const h = (k === 'left' ? this.left : this.right).querySelector('.dock-resize') as HTMLElement;
+      h.setAttribute('aria-valuenow', String(Math.round(this.dockWidth(k))));
+    }
+    this.sheet.style.height = this.mode === 'sheet' && this.sheetPx !== null ? `${this.sheetPx}px` : '';
+    r.dataset.sheetCustom = String(this.mode === 'sheet' && this.sheetPx !== null);
     document.documentElement.dataset.mode = this.mode;
     const tabbed = this.mode !== 'wide';
     for (const e of this.entries) e.el.hidden = tabbed && e.tab !== this.tab;
@@ -283,6 +319,61 @@ export class Layout {
     return out;
   }
 
+  private panelKey(panel: HTMLElement): string | null {
+    const c = [...panel.classList].find((x) => x !== 'panel' && x !== 'ed' && x !== 'collapsed');
+    return c ?? null;
+  }
+
+  private dockWidth(side: 'left' | 'right'): number {
+    const d = side === 'left' ? this.left : this.right;
+    return d.getBoundingClientRect().width || parseFloat(getComputedStyle(this.root).getPropertyValue(`--dock-${side[0]}`)) || 0;
+  }
+
+  /** Width handle on a dock's inner edge: drag, arrow keys (Shift: larger steps), double-click resets. */
+  private resizeHandle(side: 'left' | 'right'): HTMLElement {
+    const h = el('div', { className: 'dock-resize', tabIndex: 0, role: 'separator', title: 'Drag to resize; double-click to reset' });
+    h.setAttribute('aria-orientation', 'vertical');
+    h.setAttribute('aria-label', `Resize the ${side} panels`);
+    h.setAttribute('aria-valuemin', String(DOCK_MIN));
+    h.setAttribute('aria-valuemax', String(DOCK_MAX));
+    const set = (w: number | null) => {
+      this.widths[side] = w === null ? null : clampWidth(w);
+      this.persist();
+      this.apply();
+    };
+    let drag: { x: number; w: number } | null = null;
+    h.addEventListener('pointerdown', (e) => {
+      if (this.collapsed[side]) return;
+      drag = { x: e.clientX, w: this.dockWidth(side) };
+      try { h.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+      h.classList.add('dragging');
+      e.preventDefault();
+    });
+    h.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.x;
+      set(drag.w + (side === 'left' ? dx : -dx));
+    });
+    const end = () => {
+      drag = null;
+      h.classList.remove('dragging');
+    };
+    h.addEventListener('pointerup', end);
+    h.addEventListener('pointercancel', end);
+    h.addEventListener('dblclick', () => set(null));
+    h.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 40 : 10;
+      const grow = side === 'left' ? 'ArrowRight' : 'ArrowLeft';
+      const shrink = side === 'left' ? 'ArrowLeft' : 'ArrowRight';
+      if (e.key === grow) set(this.dockWidth(side) + step);
+      else if (e.key === shrink) set(this.dockWidth(side) - step);
+      else if (e.key === 'Home' || e.key === 'Enter') set(null);
+      else return;
+      e.preventDefault();
+    });
+    return h;
+  }
+
   private wireGrip(): void {
     let start: { y: number; h: number; moved: boolean } | null = null;
     const order: SheetState[] = ['peek', 'half', 'full'];
@@ -305,16 +396,21 @@ export class Layout {
       const s = start;
       start = null;
       this.sheet.classList.remove('dragging');
-      this.sheet.style.height = '';
       if (!s.moved) {
         if (e.type === 'pointerup') this.setSheet(order[(order.indexOf(this.sheetState) + 1) % 3]);
         return;
       }
       const h = s.h - (e.clientY - s.y);
       const H = window.innerHeight;
-      const targets: [SheetState, number][] = [['peek', 0], ['half', H * 0.48], ['full', H * 0.88]];
+      const targets: [SheetState, number][] = [['peek', 0], ['half', H * 0.45], ['full', H * 0.88]];
       targets.sort((a, b) => Math.abs(a[1] - h) - Math.abs(b[1] - h));
-      this.setSheet(targets[0][0]);
+      // Near a snap point (or below half the half height): snap; otherwise stay at the dragged height.
+      if (Math.abs(targets[0][1] - h) < 48 || h < H * 0.2) this.setSheet(targets[0][0]);
+      else {
+        this.sheetState = h > H * 0.66 ? 'full' : 'half';
+        this.sheetPx = Math.min(H - 96, h);
+        this.apply();
+      }
     };
     this.grip.addEventListener('pointerup', end);
     this.grip.addEventListener('pointercancel', end);

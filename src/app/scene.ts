@@ -15,6 +15,9 @@
  * Labels and markers are DOM elements positioned each frame (see labels.ts).
  */
 import * as THREE from 'three';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { AnchoredSegment } from './paths';
 import { BodyVisuals } from './body-visuals';
 
@@ -69,6 +72,102 @@ class AnchoredLine {
   }
 }
 
+/**
+ * Burn arcs: screen-space thick lines (three.js Line2, width in CSS px), so a
+ * powered arc reads as different from a coast by width, not only by colour.
+ * Depth-tested like the trajectory, so the far side hides behind a planet.
+ */
+class ThickAnchoredLine {
+  readonly group = new THREE.Group();
+  private segs: { anchor: Float64Array; line: Line2 }[] = [];
+  constructor(readonly material: LineMaterial) {}
+  set(segments: AnchoredSegment[]): void {
+    this.clear();
+    for (const s of segments) {
+      const g = new LineGeometry();
+      g.setPositions(s.verts);
+      const line = new Line2(g, this.material);
+      line.frustumCulled = false;
+      this.group.add(line);
+      this.segs.push({ anchor: s.anchor, line });
+    }
+  }
+  clear(): void {
+    for (const s of this.segs) {
+      s.line.geometry.dispose();
+      this.group.remove(s.line);
+    }
+    this.segs = [];
+  }
+  place(cam: Float64Array): void {
+    for (const s of this.segs) s.line.position.set((s.anchor[0] - cam[0]) / UNIT, (s.anchor[1] - cam[1]) / UNIT, (s.anchor[2] - cam[2]) / UNIT);
+  }
+}
+
+/** Radial alpha for the plane discs: solid core, smooth fade to zero at the rim, faint rings every quarter radius. */
+function discAlphaTexture(): THREE.Texture {
+  const N = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = N;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(N, N);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const r = Math.hypot(x + 0.5 - N / 2, y + 0.5 - N / 2) / (N / 2);
+      let a = r >= 1 ? 0 : r < 0.55 ? 1 : 0.5 + 0.5 * Math.cos((Math.PI * (r - 0.55)) / 0.45);
+      const ring = Math.abs(((r * 4 + 0.5) % 1) - 0.5) < 0.012 ? 0.6 : 0;
+      a = Math.min(1, a * (0.55 + ring));
+      const v = Math.round(a * 255);
+      const o = 4 * (y * N + x);
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
+      img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+
+/** A reference plane disc (equator or an orbital plane): translucent, fading rim, depth-tested but not depth-writing. */
+class PlaneDisc {
+  readonly mesh: THREE.Mesh;
+  readonly material: THREE.MeshBasicMaterial;
+  constructor(color: number, alpha: THREE.Texture) {
+    this.material = new THREE.MeshBasicMaterial({ color, alphaMap: alpha, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide });
+    this.mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 96), this.material);
+    this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
+    this.mesh.renderOrder = 1; // after the opaque globe, before the trajectory lines are blended over it
+  }
+}
+
+/** Rotation axis: north half red, south half blue, through the poles to `length` from the centre. */
+class AxisLine {
+  readonly group = new THREE.Group();
+  constructor() {
+    const mk = (sign: number, color: number) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 0, 0, sign]), 3));
+      const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
+      l.frustumCulled = false;
+      return l;
+    };
+    this.group.add(mk(1, 0xff6b6b), mk(-1, 0x6bb6ff));
+    this.group.visible = false;
+  }
+}
+
+export interface OverlayPose {
+  /** Centre in frame coordinates, m. */
+  pos: ArrayLike<number>;
+  /** Body-fixed (or plane) -> frame rotation, row-major 3x3; its third column is the plane normal / pole. */
+  rot: ArrayLike<number>;
+  /** Disc radius or axis half-length, m. */
+  size: number;
+  opacity?: number;
+}
+
 export class SceneView {
   readonly renderer: THREE.WebGLRenderer;
   readonly camera: THREE.PerspectiveCamera;
@@ -80,13 +179,19 @@ export class SceneView {
   /** Revolutions far from the time cursor, drawn faint so a body wrapped many times stays visible. */
   private readonly trajectoryFarBefore: AnchoredLine;
   private readonly trajectoryFarAfter: AnchoredLine;
-  private readonly burnArcs: AnchoredLine;
+  private readonly burnArcs: ThickAnchoredLine;
+  private readonly farMaterial: THREE.LineBasicMaterial;
+  private readonly equatorDisc: PlaneDisc;
+  private readonly targetDisc: PlaneDisc;
+  private readonly axis = new AxisLine();
+  private readonly overlayPos = { equator: new Float64Array(3), target: new Float64Array(3), axis: new Float64Array(3) };
+  private readonly m4 = new THREE.Matrix4();
   private readonly trajectoryMaterial: THREE.LineBasicMaterial;
   private readonly light: THREE.PointLight;
   private readonly lightBody: number;
 
   constructor(canvas: HTMLCanvasElement, visuals: readonly BodyVisual[], lightBody: number) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, stencil: true });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     this.renderer.setClearColor(0x05070b);
     this.camera = new THREE.PerspectiveCamera(50, 1, 1e-3, 1e12);
@@ -108,8 +213,15 @@ export class SceneView {
     this.trajectoryMaterial = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.9, depthWrite: false });
     this.trajectory = new AnchoredLine(this.trajectoryMaterial);
     this.trajectoryPast = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0x3b7a58, transparent: true, opacity: 0.8, depthWrite: false }));
-    this.burnArcs = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0xff8a3d, transparent: false, depthWrite: false, depthTest: false }));
-    const far = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.12, depthWrite: false });
+    this.burnArcs = new ThickAnchoredLine(new LineMaterial({ color: 0xff8a3d, linewidth: 4.5, worldUnits: false, transparent: true, opacity: 0.95, depthWrite: false }));
+    const alpha = discAlphaTexture();
+    this.equatorDisc = new PlaneDisc(0x9fc6ff, alpha);
+    this.targetDisc = new PlaneDisc(0xffd36b, alpha);
+    this.scene.add(this.equatorDisc.mesh, this.targetDisc.mesh, this.axis.group);
+    // Faint revolutions: each pixel is drawn at most once per frame (stencil), so 160 overlapping revolutions of a
+    // parking orbit stay one faint trace instead of saturating into an opaque band over the planet.
+    const far = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.1, depthWrite: false, stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc, stencilZPass: THREE.ReplaceStencilOp });
+    this.farMaterial = far;
     this.trajectoryFarBefore = new AnchoredLine(far);
     this.trajectoryFarAfter = new AnchoredLine(far);
     this.scene.add(this.trajectory.group, this.trajectoryPast.group, this.trajectoryFarBefore.group, this.trajectoryFarAfter.group, this.burnArcs.group);
@@ -123,6 +235,7 @@ export class SceneView {
 
   resize(w: number, h: number): void {
     this.renderer.setSize(w, h, false);
+    this.burnArcs.material.resolution.set(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -152,15 +265,48 @@ export class SceneView {
     (this.trajectoryMaterial.opacity) = dim ? 0.35 : 0.9;
   }
 
-  /** Vertex index of the current time along the trajectory polyline (fractional allowed: rounded). */
-  setTrajectorySplit(vertex: number, total: number, window: [number, number] = [0, total - 1]): void {
+  /**
+   * Vertex index of the current time along the trajectory polyline (fractional allowed: rounded).
+   * `window`: the bright vertex range around the cursor (the rest faint). `drawEnd`: last vertex
+   * drawn (the drawn span after the last burn; never before the cursor); past it the line is faint
+   * when `faintRest`, else hidden.
+   */
+  setTrajectorySplit(vertex: number, total: number, window: [number, number] = [0, total - 1], drawEnd = total - 1, faintRest = false): void {
     const v = Math.round(vertex);
+    const E = Math.min(total - 1, Math.max(v, Math.round(drawEnd)));
     const w0 = Math.max(0, Math.min(v, Math.round(window[0])));
-    const w1 = Math.min(total - 1, Math.max(v, Math.round(window[1])));
+    const w1 = Math.min(E, Math.max(v, Math.round(window[1])));
     this.trajectoryFarBefore.setRange(0, w0);
     this.trajectoryPast.setRange(w0, v);
     this.trajectory.setRange(v, w1);
-    this.trajectoryFarAfter.setRange(w1, total - 1);
+    this.trajectoryFarAfter.setRange(w1, faintRest ? total - 1 : E);
+  }
+
+  /** Tests and before / after screenshots: the faint revolutions without the draw-once stencil (and at the old opacity). */
+  setFaintAccumulate(on: boolean): void {
+    this.farMaterial.stencilWrite = !on;
+    this.farMaterial.opacity = on ? 0.12 : 0.1;
+    this.farMaterial.needsUpdate = true;
+  }
+
+  /** Reference geometry overlays (null hides): equatorial disc, a target's orbital-plane disc, the rotation axis. */
+  setOverlays(equator: OverlayPose | null, target: OverlayPose | null, axis: OverlayPose | null): void {
+    const pose = (o: THREE.Object3D, p: OverlayPose, keep: Float64Array) => {
+      const r = p.rot;
+      this.m4.set(r[0], r[1], r[2], 0, r[3], r[4], r[5], 0, r[6], r[7], r[8], 0, 0, 0, 0, 1);
+      o.quaternion.setFromRotationMatrix(this.m4);
+      o.scale.setScalar(p.size / UNIT);
+      keep.set([p.pos[0], p.pos[1], p.pos[2]]);
+    };
+    for (const [d, p, k] of [[this.equatorDisc, equator, this.overlayPos.equator], [this.targetDisc, target, this.overlayPos.target]] as const) {
+      d.mesh.visible = !!p;
+      if (p) {
+        pose(d.mesh, p, k);
+        d.material.opacity = p.opacity ?? 0.25;
+      }
+    }
+    this.axis.group.visible = !!axis;
+    if (axis) pose(this.axis.group, axis, this.overlayPos.axis);
   }
 
   setPathVisible(i: number, visible: boolean): void {
@@ -185,6 +331,9 @@ export class SceneView {
     this.trajectoryFarBefore.place(cam);
     this.trajectoryFarAfter.place(cam);
     this.burnArcs.place(cam);
+    for (const [o, k] of [[this.equatorDisc.mesh, this.overlayPos.equator], [this.targetDisc.mesh, this.overlayPos.target], [this.axis.group, this.overlayPos.axis]] as const) {
+      if (o.visible) o.position.set((k[0] - cam[0]) / UNIT, (k[1] - cam[1]) / UNIT, (k[2] - cam[2]) / UNIT);
+    }
     const l = this.lightBody;
     if (l >= 0) this.light.position.copy(this.bodies[l].position);
     this.visuals.update(c, this.renderer.domElement.clientHeight);

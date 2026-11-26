@@ -92,6 +92,14 @@ html.touch .ed .sec-title { min-height: 40px; }
 #hud[data-mode="wide"] .dock { display: flex; }
 .dock-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 6px; scrollbar-width: thin; overscroll-behavior: contain; }
 .dock-body > * { flex: none; }
+.dock { --rz: 10px; }
+.dock-resize { position: absolute; top: 0; bottom: 0; width: var(--rz); cursor: ew-resize; touch-action: none; z-index: 2; border-radius: 4px; }
+.dock.left .dock-resize { right: calc(-1 * var(--rz) + 2px); }
+.dock.right .dock-resize { left: calc(-1 * var(--rz) + 2px); }
+.dock-resize::after { content: ''; position: absolute; top: 50%; left: 50%; width: 4px; height: 44px; margin: -22px 0 0 -2px; border-radius: 2px; background: var(--muted); opacity: 0; transition: opacity 0.15s; }
+.dock-resize:hover::after, .dock-resize:focus-visible::after, .dock-resize.dragging::after { opacity: 0.9; }
+.dock-resize:focus-visible { outline: 2px solid var(--accent); }
+#hud[data-left-collapsed="true"] .dock.left .dock-resize, #hud[data-right-collapsed="true"] .dock.right .dock-resize { display: none; }
 .dock-toggle { align-self: flex-end; min-width: 28px; padding: 0 8px; background: var(--panel); }
 .dock.left .dock-toggle { align-self: flex-end; }
 .dock.right .dock-toggle { align-self: flex-start; }
@@ -137,9 +145,7 @@ html.touch .ed .sec-title { min-height: 40px; }
 #hud[data-mode="side"] .side-toggle { display: block; }
 .sheet-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
 .sheet-body > .panel { flex: none; background: transparent; border: 0; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
-.sheet-body > .panel.ed .sec-title { pointer-events: none; padding-left: 4px; }
-.sheet-body > .panel.ed .sec-title::before { content: ''; }
-.sheet-body > .panel.ed.collapsed .sec-body { display: grid; }
+.sheet-body > .panel.ed .sec-title { padding-left: 4px; min-height: 40px; }
 .sheet-body > .panel .sec-body { padding: 0 4px 6px; }
 
 /* Controls. */
@@ -257,27 +263,25 @@ table.burns td { text-align: right; padding: 1px 3px; }
 .digest { font: 11px var(--mono); color: var(--muted); word-break: break-all; }
 
 /* Tuner (tuner.ts). */
-.tuner { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 6px; }
+.tuner { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 4px 6px; }
 .tn-label { color: var(--muted); font-size: 12px; }
 .tn-ctl { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .tn-ctl input { flex: 1 1 5em; width: 100%; text-align: right; }
 .tn-ctl input.met-input { text-align: left; flex-basis: 9.5em; }
-#hud[data-mode="wide"] .topbar { flex-wrap: nowrap; }
-#hud[data-mode="wide"] .tb-status { flex-wrap: nowrap; }
-.tn-step { flex: none; padding: 0 6px; min-width: 26px; }
+.tn-steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; }
+.tn-step { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1px 2px; min-width: 0; line-height: 1.05; }
+.tn-arrows { font-size: 13px; letter-spacing: -1px; }
+.tn-sub { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tn-step.dec:nth-child(3) { margin-right: 4px; }
+.tn-zero { flex: none; min-width: 26px; padding: 0 6px; }
 .tn-neg { display: none; }
 .tn-pad { flex: none; width: 30px; min-height: 26px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; font-size: 11px; background: repeating-linear-gradient(90deg, transparent 0 11px, rgba(255,255,255,0.08) 11px 12px); }
 .tn-pad.dragging { border-color: var(--accent); color: var(--accent); }
-html.touch .tuner { grid-template-columns: 1fr; gap: 4px; }
-html.touch .tn-ctl { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; grid-template-areas: "dec inp inc neg" "pad pad pad pad"; gap: 4px; }
-html.touch .tn-ctl > .tn-step:first-child { grid-area: dec; }
-html.touch .tn-ctl > input { grid-area: inp; }
-html.touch .tn-ctl > .tn-step:nth-child(3) { grid-area: inc; }
-html.touch .tn-neg { display: block; grid-area: neg; }
-html.touch .tn-ctl:not(:has(.tn-neg)) { grid-template-columns: 44px minmax(0, 1fr) 44px; grid-template-areas: "dec inp inc" "pad pad pad"; }
-html.touch .tn-pad { grid-area: pad; width: auto; min-height: 44px; font-size: 14px; }
-.steps-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-.steps-row label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; }
+html.touch .tuner { grid-template-columns: 1fr; }
+html.touch .tn-steps { grid-column: 1; }
+html.touch .tn-step { min-height: 44px; }
+html.touch .tn-zero, html.touch .tn-neg { display: block; min-width: 44px; min-height: 44px; }
+html.touch .tn-pad { width: 56px; min-height: 44px; font-size: 14px; }
 
 /* Timeline. */
 .scrubber { display: flex; align-items: center; gap: 8px; padding: 4px 10px; }
@@ -292,6 +296,29 @@ html.touch .scrub { min-height: 44px; }
 .span.burn.short { border-right: 3px solid #ff4d4d; }
 .scrub-met { font: 12px var(--mono); min-width: 9em; text-align: right; }
 html.touch .scrubber .btn { min-width: 44px; }
+.scrubber { flex-wrap: wrap; row-gap: 2px; }
+.scrub-track { touch-action: pan-y; padding-bottom: 13px; }
+.scrub-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; pointer-events: none; }
+.scrub-axis .ax { position: absolute; transform: translateX(-50%); font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
+.scrub-axis .ax::before { content: ''; position: absolute; left: 50%; top: -3px; width: 1px; height: 3px; background: var(--muted); }
+.scrub-overview { display: none; position: relative; height: 10px; margin: 2px 0 1px; border-radius: 3px; background: rgba(255,255,255,0.07); cursor: grab; touch-action: none; }
+html.touch .scrub-overview { height: 16px; }
+.scrubber.zoomed .scrub-overview { display: block; }
+.ov-win { position: absolute; top: 0; bottom: 0; background: rgba(125,255,176,0.35); border: 1px solid var(--accent); border-radius: 3px; min-width: 4px; }
+.ov-cursor { position: absolute; top: -1px; bottom: -1px; width: 2px; margin-left: -1px; background: #fff; }
+.tick { top: 0; background: #9fc6ff; }
+.tick.node { background: #ff8a3d; height: 10px; top: -1px; }
+.tick.failure { background: #ff4d4d; }
+.tick.pnode { background: #c9a2ff; height: 5px; top: 3px; }
+.tick.many { width: 5px; margin-left: -2px; }
+.tl-zoom { display: flex; gap: 3px; align-items: center; }
+.tl-zoom .btn { min-width: 26px; }
+.tl-presets { max-width: 7.5em; }
+/* Phones and the side layout: one row (zoom in / out live in the Fit menu and in pinch); the MET sits above the track. */
+#hud[data-mode="sheet"] .scrubber, #hud[data-mode="side"] .scrubber { position: relative; flex-wrap: nowrap; gap: 4px; padding-top: 14px; }
+#hud[data-mode="sheet"] .tl-zin, #hud[data-mode="sheet"] .tl-zout, #hud[data-mode="side"] .tl-zin, #hud[data-mode="side"] .tl-zout { display: none; }
+#hud[data-mode="sheet"] .tl-presets, #hud[data-mode="side"] .tl-presets { max-width: 5.5em; min-height: 44px; }
+#hud[data-mode="sheet"] .scrub-met, #hud[data-mode="side"] .scrub-met { position: absolute; right: 10px; top: 0; min-width: 0; font-size: 11px; }
 
 /* Map markers. */
 .label.marker .text { font-size: 11px; color: #cfe0ff; }
@@ -402,3 +429,38 @@ html.touch .fctl .btn.small { min-width: 44px; flex: 1 0 44px; }
 .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; } html.touch .check { min-height: 44px; } .check input { min-height: 0; width: 18px; height: 18px; }
 .apsis-group { width: 100%; text-align: left; font: 12px var(--mono); color: var(--fg); background: rgba(255,255,255,0.03); border: 1px dashed var(--line); }
 .apsis-group .ename { color: var(--muted); }
+
+/* Narrower docks on smaller desktop windows (1280 x 720 keeps ~60% of the width for the map); resizable (layout.ts). */
+@media (max-width: 1439px) {
+  :root { --dock-l: 248px; --dock-r: 264px; }
+}
+
+/* Marker kinds: events are blue / yellow diamonds with plain text; maneuver nodes and burn ends are orange, bold, boxed;
+   plane nodes are violet triangles; launch sites green squares. Shape and weight differ, not only colour. */
+.label.marker.ev .dot { border-radius: 1px; transform: rotate(45deg); }
+.label.marker.node .dot, .label.marker.burn-end .dot { width: 9px; height: 9px; left: -4.5px; top: -4.5px; border-radius: 50%; box-shadow: 0 0 0 2px #000, 0 0 0 3px #ff8a3d; }
+.label.marker.node .text { border: 1px solid rgba(255,138,61,0.7); border-radius: 3px; padding: 0 3px; background: rgba(20,12,6,0.6); }
+.label.marker.pnode .dot { border-radius: 0; width: 0; height: 0; left: -5px; top: -7px; background: none !important; box-shadow: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid #c9a2ff; }
+.label.marker.pnode.desc .dot { border-bottom: 0; border-top: 9px solid #c9a2ff; top: -2px; }
+.label.marker.pnode .text { color: #dcc6ff; }
+.label.marker.site .dot { border-radius: 1px; width: 7px; height: 7px; left: -3.5px; top: -3.5px; }
+.label.marker.site .text { color: #a8f0c0; }
+.label.marker.site.selected .dot { width: 11px; height: 11px; left: -5.5px; top: -5.5px; box-shadow: 0 0 0 2px #000, 0 0 0 4px #7dffb0; }
+.label.marker.site.selected .text { color: #fff; font-weight: 600; background: rgba(20,60,35,0.7); }
+.label.axis-end .text { font-weight: 700; }
+.label.occluded { opacity: 0.28; }
+.label.occluded .text { pointer-events: none; }
+.hover-mark { position: absolute; left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; border: 2px solid #7dffb0; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 1px #000; z-index: 3; }
+.hover-read { position: absolute; left: 0; top: 0; pointer-events: none; font: 11px/1.35 var(--mono); color: var(--fg); background: var(--panel-solid); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; white-space: nowrap; z-index: 3; }
+canvas#view { cursor: grab; }
+canvas#view.grabbing { cursor: grabbing; }
+canvas#view.add-here { cursor: crosshair; }
+.too-short { margin-top: 4px; color: var(--warn); font-size: 12px; }
+.dur-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.dur-text { font-family: var(--mono); font-size: 12px; min-width: 7em; text-align: center; }
+.traj-view select { width: 100%; }
+.legend { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: center; }
+.legend .sw { font-weight: 700; }
+
+/* A full-height sheet leaves no room for the timeline above it (it would slide under the status bar). */
+#hud[data-mode="sheet"][data-sheet="full"] .bottom { display: none; }
