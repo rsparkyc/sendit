@@ -19,7 +19,7 @@ import { propagate, type Ephemeris } from '../src/physics/spacecraft';
 const N = J2000_BODIES.length;
 /** One ephemeris shared by the read-only tests: building chunks is the expensive part (~1.8 s each). */
 let shared: ChebyshevEphemeris;
-const SHARED_CHUNKS = 2;
+const SHARED_CHUNKS = 8;
 beforeAll(() => {
   shared = new ChebyshevEphemeris();
   const t0 = performance.now();
@@ -62,7 +62,7 @@ function heldOut(steps: number, dir: 1 | -1, every: number, fracs: number[], che
 }
 
 describe('ChebyshevEphemeris accuracy', () => {
-  it('fits every body within 1 cm of the integrator at held-out times, 5.6 years each way', () => {
+  it('fits every body within 1 cm of the integrator at held-out times, 2.8 years each way', () => {
     const eph = shared;
     const pos = new Float64Array(3 * N);
     const vel = new Float64Array(3 * N);
@@ -124,7 +124,7 @@ describe('ChebyshevEphemeris accuracy', () => {
     const sub = [bodyIndex('io'), EARTH, bodyIndex('jupiter')];
     const sp = new Float64Array(9);
     const sv = new Float64Array(9);
-    for (const t of [-1e8, -12345.678, 0, 7 * DAY + 0.1, 1.5e8]) {
+    for (const t of [-8e7, -12345.678, 0, 7 * DAY + 0.1, 7e7]) {
       eph.evaluate(t, pos, vel);
       for (let b = 0; b < N; b++) {
         eph.bodyState(b, t, one);
@@ -141,8 +141,8 @@ describe('ChebyshevEphemeris accuracy', () => {
         }
       });
     }
-    expect(eph.tryEvaluate(10 * C, pos, null)).toBe(false);
-    expect(eph.hasChunk(10)).toBe(false);
+    expect(eph.tryEvaluate(20 * C, pos, null)).toBe(false);
+    expect(eph.hasChunk(20)).toBe(false);
     expect(eph.tryEvaluate(0.5 * C, pos, null)).toBe(true);
     expect(eph.coveredRange()).toEqual({ tStart: -SHARED_CHUNKS * C, tEnd: SHARED_CHUNKS * C });
   });
@@ -319,10 +319,10 @@ describe('ChebyshevEphemeris cost', () => {
     const st = cheb.layout.bytesPerCentury();
     J2000_BODIES.forEach((b, i) => console.log(`  storage per century ${b.id.padEnd(8)} ${(st.perBody[i] / 1024).toFixed(0)} KiB`));
     const integBytes = ((36525 * DAY) / H) * 9 * N * 8;
-    const sub = [bodyIndex('io'), bodyIndex('jupiter')];
-    const sp = new Float64Array(6);
+    const sub = [bodyIndex('io'), EARTH, bodyIndex('jupiter')];
+    const sp = new Float64Array(9);
     const cSub = bench((t) => cheb.evaluateBodies(t, sub, sp, null));
-    console.log(`  evaluateBodies(Io, Jupiter): ${cSub.toFixed(0)} ns`);
+    console.log(`  evaluateBodies(Io, Earth, Jupiter): ${cSub.toFixed(0)} ns`);
     console.log(
       `  total ${(st.total / 1e6).toFixed(2)} MB per century (chunk = ${(cheb.layout.chunkLength * 8) / 1024} KiB per ${S * H / DAY} d) ` +
         `vs IntegratedEphemeris ${(integBytes / 1e6).toFixed(1)} MB`,

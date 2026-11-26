@@ -7,7 +7,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:slow": "SLOW=1 vitest run test/nbody-moons.test.ts",
     "typecheck": "tsc --noEmit",
+    "gen:checkpoints": "node scripts/gen-checkpoints.mjs",
     "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts",
     "test:browsers": "playwright test --config e2e/playwright.config.ts"
   },

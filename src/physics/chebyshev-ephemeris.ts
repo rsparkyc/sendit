@@ -4,8 +4,8 @@
  * continuous trajectories).
  *
  * REPRESENTATION
- *  - Time is split into CHUNKS of CHUNK_DAYS = 1024 days (`chunkSteps`
- *    integrator steps: 32768 at the default 1/32 d step), numbered by a signed
+ *  - Time is split into CHUNKS of CHUNK_DAYS = 128 days (`chunkSteps`
+ *    integrator steps: 4096 at the default 1/32 d step), numbered by a signed
  *    index k: chunk k covers [t0 + k*C, t0 + (k+1)*C). Chunks k >= 0 come from
  *    forward integration from the epoch, chunks k < 0 from backward integration.
  *  - Inside a chunk each body has its own segment length L_b (a power-of-two
@@ -70,7 +70,15 @@ export interface BodyFit {
 }
 
 /** Chunk duration, days. */
-export const CHUNK_DAYS = 1024;
+/**
+ * Chunk span. Build cost is linear in the span with no measurable per-chunk
+ * overhead (26 bodies, Node: 211 ms per 128 d, 421 per 256 d, 1678 per 1024 d,
+ * all 1.67 yr/s), so the span sets time-to-first-view after a jump (one chunk
+ * build from a shipped checkpoint) against the checkpoint asset size (1950-2100:
+ * 1.07 MB at 128 d, 0.54 MB at 256 d, 0.13 MB at 1024 d). 128 d is the
+ * smallest span the planetary segments allow (Uranus's barycenter: 128 d).
+ */
+export const CHUNK_DAYS = 128;
 
 /** Integrator steps per chunk at step h (CHUNK_DAYS must be a whole number of steps). */
 export function chunkStepsFor(h: number): number {
@@ -79,7 +87,7 @@ export function chunkStepsFor(h: number): number {
   return s;
 }
 
-/** Steps per chunk at DEFAULT_STEP (32768). */
+/** Steps per chunk at DEFAULT_STEP (4096). */
 export const DEFAULT_CHUNK_STEPS = chunkStepsFor(DEFAULT_STEP);
 
 /**
@@ -873,6 +881,17 @@ export class ChebyshevEphemeris implements Ephemeris {
     if (coeffs.length !== this.layout.chunkLength) throw new Error('chunk size does not match layout');
     this.chunks.set(k, coeffs);
     if (end) this.addCheckpoint(end);
+  }
+
+  /**
+   * Drop built chunks to free memory (about 1.07 MB each). Known checkpoints are
+   * kept (2.5 KB each), so an evicted chunk is rebuilt, bit-identical, from the
+   * checkpoint at its start if it is needed again. Returns how many were dropped.
+   */
+  evict(chunks: Iterable<number>): number {
+    let n = 0;
+    for (const k of chunks) if (this.chunks.delete(k)) n++;
+    return n;
   }
 
   /** Build every chunk needed to cover [ta, tb]. */
