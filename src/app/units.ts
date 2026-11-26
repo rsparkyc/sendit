@@ -39,6 +39,20 @@ export function bodyRadius(id: string): number {
 const AU = 149_597_870_700;
 const km = (m: number) => `${Math.round(m / 1000).toLocaleString('en-US')} km`;
 
+/**
+ * A labelled distance row for a readout: the distance (m) from the centre of
+ * `body` (a body id, or null for a barycentre), as [label, value]. Bodies
+ * follow the setting ("Altitude above Earth" / "Radius from Earth’s centre");
+ * the Sun and barycentres are always from the centre (km, or AU when large).
+ */
+export function distanceRow(d: number, body: string | null, name: string): [string, string] {
+  const big = (m: number) => (!Number.isFinite(m) ? '—' : Math.abs(m) >= 0.01 * AU ? `${(m / AU).toFixed(4)} AU` : km(m));
+  if (body === null) return ['Distance from barycentre', big(d)];
+  if (body === 'sun') return ['Distance from Sun’s centre', big(d)];
+  if (!Number.isFinite(d)) return [mode === 'radius' ? `Radius from ${name}’s centre` : `Altitude above ${name}`, '—'];
+  return mode === 'radius' ? [`Radius from ${name}’s centre`, km(d)] : [`Altitude above ${name}`, km(d - bodyRadius(body))];
+}
+
 /** A distance from a body's centre (m), shown in the chosen convention with its word. */
 export function fromCentre(d: number, body: string): string {
   if (!Number.isFinite(d)) return '∞';

@@ -7,7 +7,8 @@
  *  - the input takes direct entry (Enter or blur commits; `inputmode` picks
  *    the on-screen keyboard: decimal pad for Δv, full keyboard for times);
  *  - the six step buttons nudge by the small, medium or large step and
- *    repeat while held; each shows its step under the arrows (no hover needed);
+ *    repeat while held; each shows its step under the arrows, number over unit
+ *    (no hover needed);
  *  - the strip (role="slider") is dragged sideways: one medium step per 12 px, so a
  *    long drag is coarse and a short one fine; arrow keys on it nudge too;
  *  - the ± button negates the value (signed values only).
@@ -94,7 +95,10 @@ export class Tuner {
   }
 
   private repeatButton(arrows: string, sub: string, label: string, delta: number): HTMLButtonElement {
-    const b = el('button', { className: `btn tn-step ${delta < 0 ? 'dec' : 'inc'}`, type: 'button' }, el('span', { className: 'tn-arrows', textContent: arrows }), el('span', { className: 'tn-sub', textContent: sub }));
+    // The step on two lines, number over unit ("10" / "m/s"): on one line the captions of a ~250 px dock ran together.
+    const sp = sub.indexOf(' ');
+    const caption = sp > 0 ? [el('span', { textContent: sub.slice(0, sp) }), el('span', { textContent: sub.slice(sp + 1) })] : [el('span', { textContent: sub })];
+    const b = el('button', { className: `btn tn-step ${delta < 0 ? 'dec' : 'inc'}`, type: 'button' }, el('span', { className: 'tn-arrows', textContent: arrows }), el('span', { className: 'tn-sub' }, ...caption));
     b.setAttribute('aria-label', label);
     let timer: ReturnType<typeof setTimeout> | null = null;
     let fired = false;

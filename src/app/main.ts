@@ -1194,6 +1194,7 @@ function readout(title: string, p: ArrayLike<number>, po: number, v: ArrayLike<n
   return {
     title,
     relativeTo: c === null ? 'barycentre' : BODIES[c].name,
+    relativeId: c === null ? null : BODIES[c].id,
     distance: Math.hypot(p[po] - ox[0], p[po + 1] - ox[1], p[po + 2] - ox[2]),
     speed: Math.hypot(v[vo] - ov[0], v[vo + 1] - ov[1], v[vo + 2] - ov[2]),
     extra,
@@ -1434,7 +1435,8 @@ function tick(now: number): void {
 
     // Readouts.
     const ro: Readout[] = [];
-    if (s.focus !== SPACECRAFT) ro.push(readout(BODIES[s.focus].name, pos, 3 * s.focus, vel, 3 * s.focus, frame));
+    // The focused body: its distance from the frame's centre (none when it is the centre: an "altitude" of minus its radius says nothing).
+    if (s.focus !== SPACECRAFT) ro.push(frameCenter(frame) === s.focus ? { title: BODIES[s.focus].name, relativeTo: '—', distance: NaN, speed: NaN, extra: 'Centre of the current frame.' } : readout(BODIES[s.focus].name, pos, 3 * s.focus, vel, 3 * s.focus, frame));
     const r = s.replay;
     if (r && trajectory) {
       if (scVisible) {

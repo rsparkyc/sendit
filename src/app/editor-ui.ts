@@ -63,7 +63,6 @@ export function bodyName(id: string): string {
   return i >= 0 ? BODIES[i].name : id;
 }
 
-const km = (m: number) => `${(m / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 })} km`;
 const fmtDv = (v: number) => (Number.isFinite(v) ? `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m/s` : '—');
 const fmtKg = (v: number) => `${Math.round(v).toLocaleString('en-US')} kg`;
 
@@ -344,6 +343,7 @@ export class StartPanel {
     ctx.store.subscribe((s, p) => {
       if (s.plan !== p.plan) this.render(s.plan);
     });
+    onDistanceMode(() => this.render(ctx.store.get().plan));
     this.render(ctx.store.get().plan);
   }
 
@@ -437,7 +437,7 @@ export class StartPanel {
         setValue(this.epoch, formatCalendar(tdbToCalendar(plan.epoch)));
         const b = BODIES[i];
         const e = elementsFromState(b.gm, b.radius, b.pole, st.state);
-        setText(this.orbitOut, `Two-body osculating: Pe ${km(e.periAlt)}, Ap ${Number.isFinite(e.apoAlt) ? km(e.apoAlt) : 'unbound'}, inc ${e.incDeg.toFixed(2)}° to ${b.name}'s equator`);
+        setText(this.orbitOut, `Two-body osculating: Pe ${fromSurface(e.periAlt, b.id)}, Ap ${Number.isFinite(e.apoAlt) ? fromSurface(e.apoAlt, b.id) : 'unbound'}, inc ${e.incDeg.toFixed(2)}° to ${b.name}'s equator`);
         for (const [k, inp] of Object.entries(this.orbitIn) as [keyof OrbitElements, HTMLInputElement][]) {
           const v = this.orbitEls[k];
           setValue(inp, String(+(k === 'periAlt' || k === 'apoAlt' ? v / 1000 : v).toFixed(4)));

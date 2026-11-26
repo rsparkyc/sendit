@@ -8,7 +8,8 @@
 import { el, fillBodySelect, formatMet, section } from './dom';
 import { frameLabel, frameExplain, type FrameSpec } from './frames';
 import { hasSurfaceFrame } from './orientation';
-import { formatDistance, formatSpeed } from './format';
+import { formatSpeed } from './format';
+import { distanceRow } from './units';
 import type { Status } from './status';
 import type { AppState, Store } from './store';
 import { WARP_RATES } from './store';
@@ -24,6 +25,8 @@ export interface Readout {
   title: string;
   /** Relative to: e.g. "Earth" or "SSB". */
   relativeTo: string;
+  /** Body id the distance is measured from (its centre), or null for a barycentre. */
+  relativeId?: string | null;
   distance: number;
   speed: number;
   extra?: string;
@@ -254,7 +257,7 @@ export class Hud {
         (r) =>
           `<div class="ro"><div class="ro-title">${esc(r.title)}</div>` +
           (Number.isFinite(r.distance)
-            ? `<div class="kv"><span>Distance from ${esc(r.relativeTo)}</span><b>${formatDistance(r.distance)}</b></div>` +
+            ? distanceKv(r) +
               `<div class="kv"><span>Speed rel. ${esc(r.relativeTo)}</span><b>${formatSpeed(r.speed)}</b></div>`
             : '') +
           (r.extra ? `<div class="kv extra">${esc(r.extra)}</div>` : '') +
@@ -272,6 +275,11 @@ export class Hud {
   }
   private lastReadout = '';
   private lastPerf = '';
+}
+
+function distanceKv(r: Readout): string {
+  const [label, value] = distanceRow(r.distance, r.relativeId ?? null, r.relativeTo);
+  return `<div class="kv"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
 }
 
 function esc(s: string): string {

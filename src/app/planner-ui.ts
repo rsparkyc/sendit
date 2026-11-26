@@ -21,7 +21,7 @@ import { geocentricLatitudeDeg, launchSite, type MissionPlan } from './mission-l
 import { launchOf, missionById } from './missions';
 import { dvMagnitude, nodesOf } from './nodes';
 import { BODIES, type Ephemeris } from './physics';
-import { bodyRadius, distanceMode, fromCentre, fromSurface, onDistanceMode } from './units';
+import { bodyRadius, convertText, distanceMode, fromCentre, fromSurface, onDistanceMode } from './units';
 import { Cancelled, PlannerClient } from './planner-client';
 import { argMin, cellAt, colourRange, contour, contourLevels, field, monthTicks, porkchopRequest, QUANTITIES, transferType, viridis, vInfVector, type Grid, type Quantity } from './porkchop-view';
 import type { FromPlanner, StageReport } from './protocol';
@@ -118,14 +118,14 @@ class Progress {
 
 function stageTable(stages: StageReport[]): string {
   if (!stages.length) return '';
-  return `<table class="pl-table"><tr><th>Stage</th><th>Result</th><th>Miss</th><th>Time</th></tr>${stages
+  return `<table class="pl-table"><tr><th>Stage</th><th>Result</th><th>B-plane miss</th><th>Time</th></tr>${stages
     .map((s) => `<tr><td>${esc(s.label)}</td><td>${s.converged ? 'converged' : '<b class="bad">not converged</b>'}</td><td>${Number.isFinite(s.miss) ? `${(s.miss / 1e3).toFixed(2)} km` : '—'}</td><td>${s.ms.toFixed(0)} ms</td></tr>`)
     .join('')}</table>`;
 }
 
 function correctionSummary(r: Extract<FromPlanner, { type: 'correct' }>, body: string, want: number): string {
   const name = BODIES.find((b) => b.id === body)?.name ?? body;
-  if (!r.ok) return `<div class="pl-fail">${esc(r.message)}</div>${stageTable(r.stages)}`;
+  if (!r.ok) return `<div class="pl-fail">${esc(convertText(r.message, body))}</div>${stageTable(r.stages)}`;
   const m = r.measured;
   return (
     `<div class="pl-ok">${m ? `Closest approach to ${esc(name)} in the replay: <b>${esc(fromSurface(m.altitude, body))}</b> (requested ${esc(fromSurface(want, body))}) at ${esc(fmtDate(m.t))}, ${(m.speed / 1e3).toFixed(2)} km/s${m.impact ? ' — enters the atmosphere or impacts' : ''}. Replay outcome: ${esc(m.outcome)}.` : `The replay of the corrected plan shows no approach to ${esc(name)}.`}</div>` +
@@ -739,7 +739,7 @@ export class PlannerOverlay {
       kv('Flight time', `${((g.arrTimes[j] - g.depTimes[i]) / DAY).toFixed(0)} d, Type ${ty}`) +
       kv('C3', `${(g.c3[k] / 1e6).toFixed(2)} km²/s²`) +
       kv('Arrival v∞', `${(g.vInfArr[k] / 1e3).toFixed(2)} km/s`) +
-      kv('Total Δv (from 200 km)', `${(g.dvTotal[k] / 1e3).toFixed(2)} km/s`) +
+      kv('Total Δv (from 200 km alt)', `${(g.dvTotal[k] / 1e3).toFixed(2)} km/s`) +
       kv('Asymptote DLA / RLA', `${(g.dla[k] * DEG).toFixed(1)}° / ${(g.rla[k] * DEG).toFixed(1)}°`);
   }
 
