@@ -111,11 +111,14 @@ test('launch from a site: inclination follows azimuth, range safety is enforced'
   await settled(page);
   expect(parseFloat((await inc.textContent())!)).toBeCloseTo(51.6, 1);
   await page.screenshot({ path: `${SHOTS}/1-launch-inclination.png` });
-  // Outside the corridor: the plan's replay refuses the launch, and the editor says so.
+  // Outside the corridor: plan validation (mission layer) refuses the launch, the editor says so and does not fly it.
   await enter(page, 'input[title^="Inertial launch azimuth"]', '200');
   await expect(page.locator('.launch-box .error')).toContainText('outside');
-  const s = await settled(page);
-  expect(s.outcome).toBe('invalid-plan');
+  const flown = await page.evaluate(() => {
+    const s = (window as any).sendit.store.get();
+    return { replayIsCurrent: s.replay?.plan === s.plan, status: s.replayStatus };
+  });
+  expect(flown).toEqual({ replayIsCurrent: false, status: 'idle' });
   await page.screenshot({ path: `${SHOTS}/1b-range-safety.png` });
 });
 

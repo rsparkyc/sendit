@@ -149,3 +149,49 @@ table.burns td { text-align: right; padding: 1px 3px; }
   .col.right { display: none; }
   .help { display: none; }
 }
+
+/* Planner overlay (planner-ui.ts). Scoped to .planner; responsive from ~360 px; 44 px tap targets. */
+.planner { position: fixed; inset: 0; z-index: 20; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+.planner * { min-width: 0; }
+.planner .pl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+.planner .pl-title { font-weight: 700; letter-spacing: 0.04em; margin-right: 4px; }
+.planner .pl-tabs { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.planner .pl-btn { min-height: 44px; padding: 6px 14px; font-size: 14px; touch-action: manipulation; }
+.planner .pl-btn.primary { border-color: rgba(125, 255, 176, 0.6); color: var(--accent); }
+.planner .pl-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(125, 255, 176, 0.08); }
+.planner .pl-body { padding: 12px; flex: 1 0 auto; }
+.planner .pl-transfer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (min-width: 860px) {
+  .planner .pl-transfer { grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem); align-items: start; }
+  .planner .pl-main { position: sticky; top: 72px; }
+}
+.planner .pl-main { display: grid; gap: 6px; }
+.planner .pl-chart { width: 100%; aspect-ratio: 4 / 3; max-height: 78vh; min-height: 240px; }
+.planner .pl-canvas { display: block; touch-action: none; cursor: crosshair; }
+.planner .pl-side, .planner .pl-form, .planner .pl-use, .planner .pl-target, .planner .pl-chain { display: grid; gap: 8px; align-content: start; }
+.planner .pl-target, .planner .pl-chain { max-width: 60rem; }
+.planner .pl-field { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+.planner .pl-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 8px; }
+.planner .pl-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.planner .pl-input { font: 14px var(--mono); color: var(--fg); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-height: 44px; width: 100%; color-scheme: dark; }
+.planner .pl-readout { display: grid; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+.planner .pl-readout .kv b { text-align: right; }
+.planner .pl-status, .planner .hint { font-size: 12px; color: var(--muted); }
+.planner .pl-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(255, 207, 107, 0.08); border-bottom: 1px solid rgba(255, 207, 107, 0.35); }
+.planner .pl-track { flex: 1 1 8rem; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; }
+.planner .pl-bar { height: 100%; background: var(--warn); transition: width 0.1s; }
+.planner .pl-ptext { font: 12px var(--mono); color: var(--warn); flex: 1 1 12rem; }
+.planner .pl-oplist { display: grid; gap: 4px; }
+.planner .pl-op { text-align: left; font: 12px var(--mono); color: var(--fg); background: rgba(255,255,255,0.04); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-height: 44px; display: flex; flex-wrap: wrap; gap: 4px 10px; cursor: pointer; }
+.planner .pl-op span { color: var(--muted); }
+.planner .pl-op.chosen { border-color: var(--accent); background: rgba(125, 255, 176, 0.1); }
+.planner .pl-op.blocked { opacity: 0.5; cursor: not-allowed; }
+.planner .pl-ok { font-size: 13px; padding: 6px 8px; border-radius: 4px; background: rgba(125, 255, 176, 0.08); border: 1px solid rgba(125, 255, 176, 0.35); }
+.planner .pl-fail { font-size: 13px; padding: 6px 8px; border-radius: 4px; background: rgba(255, 60, 60, 0.12); border: 1px solid rgba(255, 110, 110, 0.5); color: #ffb0b0; }
+.planner .pl-warn { font-size: 12px; padding: 6px 8px; border-radius: 4px; background: rgba(255, 207, 107, 0.1); border: 1px solid rgba(255, 207, 107, 0.45); color: var(--warn); margin: 0; }
+.planner .pl-result { display: grid; gap: 6px; overflow-x: auto; }
+.planner .pl-table { border-collapse: collapse; font: 12px var(--mono); width: 100%; }
+.planner .pl-table th, .planner .pl-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.planner .pl-table th { color: var(--muted); font-weight: 500; }
+.planner .bad { color: #ff8a8a; }
+.planner .warnc { color: var(--warn); }

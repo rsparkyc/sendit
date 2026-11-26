@@ -18,10 +18,10 @@ import type { Editor } from './editor';
 import { eventLabel, listEvents, type ListedEvent } from './events-view';
 import { formatDistance, formatSpeed } from './format';
 import {
-  LAUNCH_SITES, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
+  LAUNCH_SITES, PAR_SCORE, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
   type MissionPlan, type Objective, type PlanFrame,
 } from './mission-layer';
-import { launchOf, missionById, MISSIONS, SPACECRAFT_PRESETS } from './missions';
+import { conformance, craftPerformance, launchOf, missionById, MISSIONS, SPACECRAFT_PRESETS } from './missions';
 import { budget, dvMagnitude, elementsFromState, nodesOf, stateFromElements, type OrbitElements } from './nodes';
 import { BODIES, bodyIndex } from './physics';
 import type { AppState, Store } from './store';
@@ -36,6 +36,8 @@ export interface UiContext {
   focusBody(id: string): void;
   /** Share URL for the current plan, or null if the plan is invalid. */
   shareUrl(): string | null;
+  /** Open the planner overlay on a tab (optionally with a burn preselected). */
+  openPlanner?(tab: 'transfer' | 'target' | 'chain', node?: number): void;
 }
 
 export function bodyName(id: string): string {
@@ -84,9 +86,19 @@ export class MissionPanel {
   private readonly objectives = el('ul', { className: 'objectives' });
   private readonly score = el('div', { className: 'score' });
   private readonly notice = el('div', { className: 'notice' });
+  private readonly rules = el('div', { className: 'error' });
+  private readonly par = el('div', { className: 'hint' });
 
   constructor(private readonly ctx: UiContext) {
-    for (const m of MISSIONS) this.sel.append(el('option', { value: m.id, textContent: m.title }));
+    // Grouped by chapter, in campaign order (a progression).
+    let group: HTMLElement | null = null;
+    for (const m of MISSIONS) {
+      if (!group || group.getAttribute('label') !== m.chapter) {
+        group = el('optgroup', { label: m.chapter });
+        this.sel.append(group);
+      }
+      group.append(el('option', { value: m.id, textContent: m.title }));
+    }
     this.sel.onchange = () => {
       if (ctx.store.get().plan.burns.length > 0 && !confirm('Start this mission with a fresh plan? The current plan stays in its share link only.')) {
         this.sel.value = ctx.store.get().missionId;
@@ -98,7 +110,7 @@ export class MissionPanel {
     reset.onclick = () => {
       if (confirm('Discard the current plan?')) ctx.editor.selectMission(ctx.store.get().missionId);
     };
-    this.root = section('Mission', 'mission', this.notice, el('div', { className: 'row' }, this.sel, reset), this.blurb, this.objectives, this.score);
+    this.root = section('Mission', 'mission', this.notice, el('div', { className: 'row' }, this.sel, reset), this.blurb, this.objectives, this.rules, this.score, this.par);
     ctx.store.subscribe((s, p) => this.render(s, p));
     this.render(ctx.store.get(), null);
   }
@@ -136,10 +148,20 @@ export class MissionPanel {
               el('span', { className: 'mark', textContent: state === 'ok' ? '✓' : state === 'no' ? '✗' : '…' }),
               el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), el('small', { textContent: r?.detail ?? '' }))));
         }
-        if (ev?.success) setText(this.score, `MISSION COMPLETE · score ${ev.score.toLocaleString('en-US')} · Δv ${fmtDv(ev.deltaV)} · time ${(ev.missionTime / DAY).toFixed(2)} d`);
-        else setText(this.score, ev ? 'Objectives not met yet' : '');
+        if (ev?.success) {
+          const k = ev.keys;
+          setText(this.score, `MISSION COMPLETE · score ${(k?.score ?? ev.score).toLocaleString('en-US')} · Δv ${k ? fmtDv(k.deltaV / 10) : fmtDv(ev.deltaV)} · time ${((k?.time ?? ev.missionTime) / DAY).toFixed(2)} d`);
+        } else setText(this.score, ev ? (ev.ruleViolations?.length ? 'Not scored: the plan breaks the mission rules' : 'Objectives not met yet') : '');
         this.score.className = `score${ev?.success ? ' success' : ''}`;
-      } else setText(this.score, 'Sandbox: no objectives.');
+        const sc = m.def.scoring;
+        setText(this.par, `Par (the author's solution): Δv ${fmtDv(sc.deltaVRef)}, ${(sc.timeRef / DAY).toFixed(1)} d. Matching par scores ${PAR_SCORE.toLocaleString('en-US')}; less Δv and less time score higher. Leaderboards also rank by Δv alone and by time alone.`);
+        const issues = conformance(m, s.plan);
+        setText(this.rules, issues.length ? `Mission rules: ${issues.map((i) => i.message).join('; ')}` : '');
+      } else {
+        setText(this.score, 'Sandbox: no objectives.');
+        setText(this.par, '');
+        setText(this.rules, '');
+      }
     }
   }
 }
@@ -374,15 +396,18 @@ export class StartPanel {
 
 export class CraftPanel {
   readonly root: HTMLElement;
-  private readonly preset = el('select', { title: 'Spacecraft preset' });
+  private readonly preset = el('select', { title: 'Start from a preset spacecraft' });
   private readonly wet: HTMLInputElement;
   private readonly dry: HTMLInputElement;
   private readonly engines = el('div', { className: 'engines' });
-  private readonly info = el('div', { className: 'hint' });
+  private readonly editBox = el('div', { className: 'craft-edit' });
+  private readonly fixed = el('div', { className: 'craft-fixed' });
+  private readonly perf = el('div', { className: 'craft-perf' });
+  private readonly errs = el('div', { className: 'error' });
   private lastEngines = '';
 
   constructor(private readonly ctx: UiContext) {
-    this.preset.append(el('option', { value: '', textContent: 'Presets…' }));
+    this.preset.append(el('option', { value: '', textContent: 'Start from a preset…' }));
     for (const p of SPACECRAFT_PRESETS) this.preset.append(el('option', { value: p.id, textContent: p.label }));
     this.preset.onchange = () => {
       const p = SPACECRAFT_PRESETS.find((x) => x.id === this.preset.value);
@@ -394,41 +419,61 @@ export class CraftPanel {
     this.dry = numInput('Dry mass, kg', '100', (v) => ctx.editor.setSpacecraft({ ...sc(), dryMass: v }));
     const add = el('button', { className: 'btn small', textContent: '+ Engine', type: 'button' });
     add.onclick = () => ctx.editor.setSpacecraft({ ...sc(), engines: [...sc().engines, { thrust: 1000, isp: 300 }] });
-    this.root = section('Spacecraft', 'craft', this.preset, row('Wet kg', this.wet), row('Dry kg', this.dry), this.engines, add, this.info);
+    this.editBox.append(this.preset, row('Wet kg', this.wet), row('Dry kg', this.dry), this.engines, add);
+    this.root = section('Spacecraft', 'craft', this.fixed, this.editBox, this.perf, this.errs);
     ctx.store.subscribe((s, p) => {
-      if (s.plan !== p.plan) this.render();
+      if (s.plan !== p.plan || s.missionId !== p.missionId) this.render();
     });
     this.render();
   }
 
   private render(): void {
-    const sc = this.ctx.store.get().plan.spacecraft;
-    setValue(this.wet, String(sc.wetMass));
-    setValue(this.dry, String(sc.dryMass));
-    const key = JSON.stringify(sc.engines);
-    if (key !== this.lastEngines && !this.engines.contains(document.activeElement)) {
-      this.lastEngines = key;
-      this.engines.replaceChildren();
-      sc.engines.forEach((e, i) => {
-        const set = (patch: Partial<{ thrust: number; isp: number }>) => {
-          const cur = this.ctx.store.get().plan.spacecraft;
-          const engines = cur.engines.map((x, j) => (j === i ? { ...x, ...patch } : x));
-          this.ctx.editor.setSpacecraft({ ...cur, engines });
-        };
-        const thrust = numInput('Thrust, kN', '1', (v) => v > 0 && set({ thrust: v * 1000 }));
-        const isp = numInput('Specific impulse, s', '1', (v) => v > 0 && set({ isp: v }));
-        thrust.value = String(e.thrust / 1000);
-        isp.value = String(e.isp);
-        const del = el('button', { className: 'btn small', textContent: '×', title: 'Remove engine', type: 'button', disabled: sc.engines.length < 2 });
-        del.onclick = () => {
-          const cur = this.ctx.store.get().plan.spacecraft;
-          this.ctx.editor.setSpacecraft({ ...cur, engines: cur.engines.filter((_, j) => j !== i) });
-        };
-        this.engines.append(el('div', { className: 'engine' }, el('span', { textContent: `E${i + 1}` }), thrust, el('small', { textContent: 'kN' }), isp, el('small', { textContent: 's' }), del));
-      });
+    const st = this.ctx.store.get();
+    const sc = st.plan.spacecraft;
+    const entry = missionById(st.missionId);
+    const locked = !!entry?.def;
+    this.editBox.style.display = locked ? 'none' : '';
+    this.fixed.style.display = locked ? '' : 'none';
+    if (locked) {
+      this.fixed.innerHTML =
+        `<div class="hint">Fixed by the mission “${esc(entry!.title)}”. Edit the spacecraft in Sandbox.</div>` +
+        `<div class="kv"><span>Wet mass</span><b>${fmtKg(sc.wetMass)}</b></div>` +
+        `<div class="kv"><span>Dry mass</span><b>${fmtKg(sc.dryMass)}</b></div>` +
+        sc.engines.map((e, i) => `<div class="kv"><span>Engine E${i + 1}</span><b>${(e.thrust / 1000).toLocaleString('en-US')} kN · Isp ${e.isp} s</b></div>`).join('');
+    } else {
+      setValue(this.wet, String(sc.wetMass));
+      setValue(this.dry, String(sc.dryMass));
+      const key = JSON.stringify(sc.engines);
+      if (key !== this.lastEngines && !this.engines.contains(document.activeElement)) {
+        this.lastEngines = key;
+        this.engines.replaceChildren();
+        sc.engines.forEach((e, i) => {
+          const set = (patch: Partial<{ thrust: number; isp: number }>) => {
+            const cur = this.ctx.store.get().plan.spacecraft;
+            const engines = cur.engines.map((x, j) => (j === i ? { ...x, ...patch } : x));
+            this.ctx.editor.setSpacecraft({ ...cur, engines });
+          };
+          const thrust = numInput(`Engine E${i + 1} thrust, kN`, '1', (v) => set({ thrust: v * 1000 }));
+          const isp = numInput(`Engine E${i + 1} specific impulse, s`, '1', (v) => set({ isp: v }));
+          thrust.value = String(e.thrust / 1000);
+          isp.value = String(e.isp);
+          const del = el('button', { className: 'btn small', textContent: '×', title: 'Remove engine', type: 'button', disabled: sc.engines.length < 2 });
+          del.onclick = () => {
+            const cur = this.ctx.store.get().plan.spacecraft;
+            this.ctx.editor.setSpacecraft({ ...cur, engines: cur.engines.filter((_, j) => j !== i) });
+          };
+          this.engines.append(el('div', { className: 'engine' }, el('span', { textContent: `E${i + 1}` }), thrust, el('small', { textContent: 'kN' }), isp, el('small', { textContent: 's' }), del));
+        });
+      }
     }
-    const b = budget(this.ctx.store.get().plan);
-    setText(this.info, `Ideal Δv capacity ${fmtDv(b.total)} (E1) · propellant ${fmtKg(sc.wetMass - sc.dryMass)}`);
+    const perf = craftPerformance(sc);
+    this.perf.innerHTML =
+      `<div class="kv"><span>Propellant</span><b>${fmtKg(sc.wetMass - sc.dryMass)}</b></div>` +
+      perf.map((p) => `<div class="kv"><span>E${p.engine + 1} thrust/weight (full, Earth g)</span><b>${Number.isFinite(p.twr) ? p.twr.toFixed(3) : '—'}</b></div>` +
+        `<div class="kv"><span>E${p.engine + 1} total Δv (rocket equation)</span><b>${fmtDv(p.dv)}</b></div>`).join('');
+    // Validation from the plan layer (spacecraft fields only).
+    const errs = planErrors(st.plan).plan.filter((e) => /spacecraft|mass|engine|thrust|isp/i.test(e));
+    setText(this.errs, errs.join('\n'));
   }
 }
 
@@ -508,10 +553,12 @@ export class NodesPanel {
     const actions = el('div', { className: 'row wrap' },
       btn('Go to node', () => { const i = sel(); if (i !== null) this.goTo(i); }),
       btn('Disable', () => { const i = sel(); if (i !== null) ctx.editor.disableNode(i); }),
-      btn('Delete', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }, 'Delete key'));
+      btn('Delete', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }, 'Delete key'),
+      btn('Target flyby…', () => { const i = sel(); if (i !== null) ctx.openPlanner?.('target', i); }, 'Correct this burn toward a closest-approach altitude at a body'));
     this.detail.append(tRow, row('Frame', this.frameSel), row('Engine', this.engineSel), row('Step', this.dvStep), ...dvRows, this.readout, this.nodeErr, actions);
     const addCursor = btn('+ Node at cursor', () => this.addAtCursor(), 'Add a burn at the time cursor (or click the trajectory)');
-    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row' }, addCursor, el('span', { className: 'hint', textContent: 'or click the trajectory' })), this.list, this.detail, this.parked);
+    const planner = btn('Transfer planner…', () => ctx.openPlanner?.('transfer'), 'Porkchop plots, departure burns, flyby targeting and chains');
+    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or click the trajectory' }), planner), this.list, this.detail, this.parked);
     ctx.store.subscribe((s, p) => {
       if (s.plan !== p.plan || s.selectedNode !== p.selectedNode || s.replay !== p.replay || s.parked !== p.parked) this.render();
     });
@@ -684,6 +731,7 @@ const OUTCOME_TEXT: Record<string, string> = {
   'step-limit': 'Step limit reached',
   'event-limit': 'Event limit reached',
   'physics-error': 'Physics error',
+  aborted: 'Stopped',
 };
 
 export class ResultsPanel {
@@ -746,6 +794,7 @@ export class ResultsPanel {
     const ve0 = sc.engines[0].isp * 9.80665;
     const remaining = ve0 * Math.log(Math.max(left, sc.dryMass) / sc.dryMass);
     this.table.innerHTML =
+      (res.launch ? `<div class="kv"><span>Orbit insertion (replay)</span><b>${esc(formatMet(res.launch.t - r.plan.epoch, 0))}${res.launch.inclinationDeg !== undefined ? ` · inclination ${res.launch.inclinationDeg.toFixed(2)}°` : ''}</b></div>` : '') +
       `<div class="kv"><span>Δv used (replay)</span><b>${fmtDv(res.deltaV)}</b></div>` +
       `<div class="kv"><span>Δv requested</span><b>${fmtDv(b.requested)}</b></div>` +
       `<div class="kv"><span>Δv remaining (E1)</span><b>${fmtDv(remaining)}</b></div>` +

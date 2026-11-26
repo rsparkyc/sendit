@@ -1,79 +1,41 @@
 /// <reference lib="webworker" />
 /**
- * Physics worker: builds ephemeris chunks one at a time (yielding to the event
- * loop between chunks so new requests are seen promptly) and ships each to the
- * main thread as a transferred buffer in order outward from the epoch. Flights
- * are replayed by replay-worker.ts, which builds its own span from the
- * checkpoint asset.
+ * Chunk-pool worker: one of a small pool (see chunk-pool.ts). Loads the
+ * checkpoint asset, then builds whichever chunk it is asked for and transfers
+ * it to the main thread. Inside the asset (1950 to 2100) a chunk builds
+ * directly from its own checkpoint, so several workers build in parallel with
+ * bit-identical results; outside it the pool sends every chunk to one worker,
+ * which integrates outward from the nearest checkpoint it knows. Built chunks
+ * are dropped here after sending (checkpoints are kept), so a worker holds
+ * almost no memory.
  */
-import { Ephemeris } from './physics';
+import { ReplayEphemeris } from './physics';
 import type { FromWorker, ToWorker } from './protocol';
-import { nextChunk, type ChunkRange } from './schedule';
-import { calendarToTdb } from './time';
 
 declare const self: DedicatedWorkerGlobalScope;
 
-const eph = new Ephemeris();
-/** Background prefetch limit: 1900 to 2150. */
-const LIMIT: ChunkRange = {
-  lo: eph.chunkIndex(calendarToTdb({ year: 1900, month: 1, day: 1, hour: 0, minute: 0, second: 0 })),
-  hi: eph.chunkIndex(calendarToTdb({ year: 2150, month: 1, day: 1, hour: 0, minute: 0, second: 0 })),
-};
+const eph = new ReplayEphemeris();
+const ready = eph.loadCheckpoints().catch((e) => {
+  self.postMessage({ type: 'error', message: `checkpoint asset unavailable (chunks will integrate from J2000): ${String(e)}` } satisfies FromWorker);
+});
 
-let want: ChunkRange = { lo: 0, hi: -1 };
-let scheduled = false;
-/** Chunks already posted to the main thread. */
-const sent: ChunkRange = { lo: 0, hi: -1 };
-const buildMs = new Map<number, number>();
-
-function post(msg: FromWorker, transfer: Transferable[] = []): void {
-  self.postMessage(msg, transfer);
-}
-
-/** Post every built chunk the main thread does not have yet, in order outward. */
-function flush(): void {
-  const send = (k: number) => {
-    const coeffs = eph.build(k); // already built: returns a copy
-    post({ type: 'chunk', k, coeffs, ms: buildMs.get(k) ?? 0 }, [coeffs.buffer]);
-  };
-  if (eph.lo > eph.hi) return;
-  if (sent.lo > sent.hi) {
-    const first = eph.has(0) ? 0 : -1;
-    send(first);
-    sent.lo = sent.hi = first;
-  }
-  while (sent.hi < eph.hi) send(++sent.hi);
-  while (sent.lo > eph.lo) send(--sent.lo);
-}
-
-function step(): void {
-  scheduled = false;
-  try {
-    const k = nextChunk({ lo: eph.lo, hi: eph.hi }, want, LIMIT);
-    if (k === null) {
-      post({ type: 'idle' });
-      return;
-    }
-    const s = performance.now();
-    eph.build(k);
-    buildMs.set(k, performance.now() - s);
-    flush();
-    schedule();
-  } catch (e) {
-    post({ type: 'error', message: e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e) });
-  }
-}
-
-function schedule(): void {
-  if (scheduled) return;
-  scheduled = true;
-  setTimeout(step, 0);
-}
-
-self.onmessage = (ev: MessageEvent<ToWorker>) => {
+self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   const m = ev.data;
-  if (m.type === 'want') {
-    want = { lo: m.lo, hi: m.hi };
-    schedule();
+  if (m.type !== 'build') return;
+  await ready;
+  try {
+    const s = performance.now();
+    const t = eph.physics.t0 + m.k * eph.physics.layout.chunkSpan;
+    const built = eph.ensure(t, t);
+    const ms = performance.now() - s;
+    const ks = built.includes(m.k) ? built : [...built, m.k];
+    for (const k of ks) {
+      const coeffs = eph.copy(k)!;
+      self.postMessage({ type: 'chunk', k, coeffs, ms: k === m.k ? ms : 0 } satisfies FromWorker, [coeffs.buffer]);
+    }
+    eph.evict(ks);
+    self.postMessage({ type: 'done', k: m.k } satisfies FromWorker);
+  } catch (e) {
+    self.postMessage({ type: 'error', message: e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e), k: m.k } satisfies FromWorker);
   }
 };

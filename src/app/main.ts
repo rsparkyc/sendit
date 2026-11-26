@@ -19,15 +19,15 @@ import { computeFrame, frameCenter, frameKey, newFrameState, parseFrameKey, toFr
 import { Hud, type Readout } from './hud';
 import { Labels, type LabelItem } from './labels';
 import { makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, type EventKind } from './mission-layer';
-import { initialPlan, missionById, MISSIONS } from './missions';
+import { initialPlan, missionById, missionForLoadedPlan, MISSIONS } from './missions';
 import { nodesOf } from './nodes';
 import { anchorSegments, bodyPath, frameAt, trajectoryPath, type FrameContext, type FramePath } from './paths';
 import { BODIES, BODY_DATA, BODY_GM, bodyIndex, Ephemeris } from './physics';
-import type { FromWorker, ToWorker } from './protocol';
+import { ChunkPool } from './chunk-pool';
+import { PlannerOverlay } from './planner-ui';
 import { ReplayClient } from './replay-client';
 import { sandboxSpheres } from './replay-options';
 import { SceneView, UNIT } from './scene';
-import { chunksMissing } from './schedule';
 import { loadSaved, parsePlanHash, planHash, save } from './share';
 import { Store, WARP_RATES, type AppState } from './store';
 import { calendarToTdb, formatCalendar, JULIAN_YEAR, parseCalendar, tdbToCalendar, utcMsToTdb } from './time';
@@ -35,16 +35,14 @@ import { SAMPLE_STRIDE, stateAt, trajectoryFrom, type Trajectory } from './traje
 
 const SPACECRAFT = -1;
 const PATH_SAMPLES = 360;
-const PATH_WINDOW = 400 * 86400; // s either side of now kept loaded
 const n = BODIES.length;
 const meta = deriveMeta(BODIES);
 const sunIndex = meta.findIndex((m) => m.parent < 0);
 
 // ---------------------------------------------------------------------------
-// Ephemeris fed by the background worker (outward from J2000) and by the replay worker (flight spans)
+// Ephemeris fed by the chunk pool (any date, from the checkpoint asset) and by the replay worker (flight spans)
 
 const eph = new Ephemeris();
-const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 const metrics = {
   chunkMs: [] as number[],
   frameCpuMs: 0,
@@ -54,29 +52,21 @@ const metrics = {
   errors: [] as string[],
 };
 let coverageVersion = 0;
-
-worker.onmessage = (ev: MessageEvent<FromWorker>) => {
-  const m = ev.data;
-  if (m.type === 'chunk') {
-    if (eph.install(m.k, m.coeffs)) coverageVersion++;
-    if (m.ms > 0) metrics.chunkMs.push(m.ms);
-  } else if (m.type === 'error') {
-    metrics.errors.push(m.message);
-    console.error('physics worker:', m.message);
-  }
+/** Viewable dates: 1900 to 2150 (outside the 1950-2100 checkpoint asset chunks integrate outward, slowly). */
+const VIEW_LIMIT = {
+  lo: eph.chunkIndex(calendarToTdb({ year: 1900, month: 1, day: 1, hour: 0, minute: 0, second: 0 })),
+  hi: eph.chunkIndex(calendarToTdb({ year: 2150, month: 1, day: 1, hour: 0, minute: 0, second: 0 })),
 };
-worker.onerror = (e) => {
-  metrics.errors.push(e.message);
-  console.error('physics worker failed to load', e.message);
-};
-
-let lastWant = '';
-function want(lo: number, hi: number): void {
-  const key = `${lo}:${hi}`;
-  if (key === lastWant) return;
-  lastWant = key;
-  worker.postMessage({ type: 'want', lo, hi } satisfies ToWorker);
-}
+const pool = new ChunkPool(eph, VIEW_LIMIT, {
+  onInstall() {
+    coverageVersion++;
+  },
+  onError(message) {
+    metrics.errors.push(message);
+    console.error('chunk worker:', message);
+  },
+});
+metrics.chunkMs = pool.stats.buildMs;
 
 const world = makeWorld(eph.physics, BODY_DATA);
 const fingerprint = world.fingerprint;
@@ -93,11 +83,14 @@ function initialEditor(): Pick<AppState, 'missionId' | 'plan' | 'parked' | 'noti
   const link = parsePlanHash(location.hash, fingerprint);
   const saved = loadSaved();
   if (link.plan) {
-    const missionId = missionById(link.missionId ?? '')?.id ?? 'sandbox';
-    return { missionId, plan: link.plan, parked: [], notice: link.mismatch };
+    const m = missionForLoadedPlan(link.missionId ?? undefined, link.plan);
+    return { missionId: m.missionId, plan: link.plan, parked: [], notice: [link.mismatch, m.notice].filter(Boolean).join('\n') || null };
   }
-  const fallback = saved ? { missionId: missionById(saved.missionId)?.id ?? 'sandbox', plan: saved.plan, parked: saved.parked } : { missionId: 'sandbox', plan: initialPlan(MISSIONS[0], fingerprint), parked: [] };
-  return { ...fallback, notice: link.error };
+  if (saved) {
+    const m = missionForLoadedPlan(saved.missionId, saved.plan);
+    return { missionId: m.missionId, plan: saved.plan, parked: saved.parked, notice: [link.error, m.notice].filter(Boolean).join('\n') || null };
+  }
+  return { missionId: 'sandbox', plan: initialPlan(MISSIONS[0], fingerprint), parked: [], notice: link.error };
 }
 
 function defaultSecondary(c: number): number {
@@ -252,6 +245,9 @@ const ui: UiContext = {
     if (i >= 0) store.set({ focus: i });
   },
   shareUrl,
+  openPlanner(tab, node) {
+    planner.open(tab, node ?? null);
+  },
 };
 
 function failureKinds(): readonly EventKind[] {
@@ -260,6 +256,7 @@ function failureKinds(): readonly EventKind[] {
   return reentry ? ['impact'] : ['impact', 'atmosphere-entry'];
 }
 
+const planner = new PlannerOverlay(store, editor, eph, pool);
 slots.left.append(new MissionPanel(ui).root, new StartPanel(ui).root, new CraftPanel(ui).root);
 const nodesPanel = new NodesPanel(ui);
 const eventsPanel = new EventsPanel(ui, () => ({ failureKinds: failureKinds(), dominant: (t: number) => dominantBody(t - store.get().plan.epoch) }));
@@ -284,7 +281,10 @@ const replayClient = new ReplayClient(eph, {
     });
   },
   onChunk(k, coeffs) {
-    if (eph.install(k, coeffs)) coverageVersion++;
+    if (eph.install(k, coeffs)) {
+      coverageVersion++;
+      pool.installed();
+    }
   },
   onStatus(s) {
     store.set({ replayStatus: s });
@@ -625,10 +625,18 @@ function tick(now: number): void {
   s = store.get();
   const tFocus = s.loadingTarget ?? s.t;
   const k = eph.chunkIndex(tFocus);
-  want(Math.min(k - 1, eph.chunkIndex(tFocus - PATH_WINDOW)), Math.max(k + 1, eph.chunkIndex(tFocus + PATH_WINDOW)));
+  const rate = s.paused ? 0 : WARP_RATES[s.warpIndex];
+  const pl = s.plan;
+  pool.want({
+    view: k,
+    direction: rate > 0 ? 1 : 0,
+    // Two seconds of warp ahead (at least the next chunk), capped.
+    ahead: rate > 0 ? Math.min(12, Math.ceil((2 * rate) / eph.chunkSpan) + 1) : 0,
+    flight: Number.isFinite(pl.epoch) && pl.duration > 0 ? { lo: eph.chunkIndex(pl.epoch), hi: eph.chunkIndex(pl.epoch + Math.min(pl.duration, 50 * JULIAN_YEAR)) } : { lo: 0, hi: -1 },
+  });
   if (s.loadingTarget !== null && coverageVersion !== lastCoverageForWant) {
     lastCoverageForWant = coverageVersion;
-    store.set({ loadingChunks: chunksMissing({ lo: eph.lo, hi: eph.hi }, { lo: k, hi: k }) });
+    store.set({ loadingChunks: pool.missing({ lo: k, hi: k }) });
   }
 
   const t = s.t;
@@ -734,6 +742,8 @@ Object.assign(window, {
     camera,
     metrics,
     eph,
+    pool,
+    planner,
     replayStats: replayClient.stats,
     nodesOf: () => nodesOf(store.get().plan),
     shareUrl,

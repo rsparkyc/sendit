@@ -7,7 +7,7 @@
  *
  * Also: spacecraft presets and plan factories. Pure.
  */
-import { DEFAULT_ASCENT_TIME_S, SAMPLE_MISSIONS, launchToParams, makePlan, type MissionDefinition, type MissionPlan, type Spacecraft } from './mission-layer';
+import { CAMPAIGN, checkPlanConformance, DEFAULT_ASCENT_TIME_S, initialMissionPlan, launchToParams, makePlan, type CompleteMission, type ConformanceIssue, type MissionPlan, type Spacecraft } from './mission-layer';
 import { calendarToTdb, DAY } from './time';
 
 export interface SpacecraftPreset {
@@ -36,8 +36,11 @@ export interface MissionEntry {
   id: string;
   title: string;
   /** Null for sandbox (no objectives). */
-  def: MissionDefinition | null;
+  def: CompleteMission | null;
+  /** Briefing shown to the player. */
   blurb: string;
+  /** Campaign chapter, for grouping the picker. */
+  chapter: string;
   launch: LaunchDefaults;
   duration: number;
   craft: Spacecraft;
@@ -45,49 +48,38 @@ export interface MissionEntry {
 
 const JAN_2027 = calendarToTdb({ year: 2027, month: 1, day: 10, hour: 12, minute: 0, second: 0 });
 
-function sample(id: string): MissionDefinition {
-  const m = SAMPLE_MISSIONS.find((x) => x.id === id);
-  if (!m) throw new Error(`sample mission ${id} missing`);
-  return m;
+/** Chapter of a campaign mission, from where it goes. */
+function chapterOf(m: CompleteMission, index: number): string {
+  if (index < 3) return 'Earth orbit';
+  if (/lunar|moon/.test(m.id)) return 'The Moon';
+  return 'Interplanetary';
 }
 
+/** Sandbox, then the campaign in its authored order (a progression). */
 export const MISSIONS: readonly MissionEntry[] = [
   {
     id: 'sandbox',
     title: 'Sandbox',
     def: null,
-    blurb: 'No objectives. Launch or start in any orbit and fly.',
+    blurb: 'No objectives. Launch or start in any orbit and fly, with any spacecraft.',
+    chapter: 'Sandbox',
     launch: { site: 'cape-canaveral', time: JAN_2027, azimuthDeg: 90, altitudeM: 200e3 },
     duration: 10 * DAY,
     craft: SPACECRAFT_PRESETS[0].craft,
   },
-  {
-    id: 'geo-from-leo',
-    title: sample('geo-from-leo').title,
-    def: sample('geo-from-leo'),
-    blurb: 'Reach a circular orbit at 42,164 km radius (±100 km), inclined under 1° to the equator, and hold it for three revolutions. At most 4.5 km/s, within 6 days.',
-    launch: { site: 'kourou', time: JAN_2027, azimuthDeg: 90, altitudeM: 250e3 },
-    duration: 6 * DAY,
-    craft: SPACECRAFT_PRESETS[1].craft,
-  },
-  {
-    id: 'lunar-flyby',
-    title: sample('lunar-flyby').title,
-    def: sample('lunar-flyby'),
-    blurb: 'Pass the Moon between 100 km and 10,000 km altitude and keep flying. At most 3.5 km/s, within 7 days.',
-    launch: { site: 'kourou', time: JAN_2027, azimuthDeg: 90, altitudeM: 200e3 },
-    duration: 7 * DAY,
-    craft: SPACECRAFT_PRESETS[0].craft,
-  },
-  {
-    id: 'lunar-free-return',
-    title: sample('lunar-free-return').title,
-    def: sample('lunar-free-return'),
-    blurb: 'One injection burn: fly past the Moon (100 to 20,000 km) and come back into Earth’s atmosphere below 11.5 km/s. At most 3.3 km/s, within 12 days.',
-    launch: { site: 'kourou', time: JAN_2027, azimuthDeg: 90, altitudeM: 200e3 },
-    duration: 12 * DAY,
-    craft: SPACECRAFT_PRESETS[0].craft,
-  },
+  ...CAMPAIGN.map((m, i): MissionEntry => {
+    const st = m.start;
+    return {
+      id: m.id,
+      title: `${i + 1}. ${m.title}`,
+      def: m,
+      blurb: m.briefing,
+      chapter: chapterOf(m, i),
+      launch: st.kind === 'launch' ? { site: st.site, time: m.epoch, azimuthDeg: st.azimuthDeg, altitudeM: st.altitudeM } : { site: 'cape-canaveral', time: m.epoch, azimuthDeg: 90, altitudeM: 200e3 },
+      duration: m.maxDuration,
+      craft: m.spacecraft,
+    };
+  }),
 ];
 
 export function missionById(id: string): MissionEntry | undefined {
@@ -101,8 +93,9 @@ export function launchParams(l: LaunchDefaults): number[] {
   return launchToParams({ mode: 'parking-orbit', siteId: l.site, launchTime: l.time, azimuthDeg: l.azimuthDeg, altitudeM: l.altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S });
 }
 
-/** A fresh plan for a mission: its default launch and spacecraft, no burns. */
+/** A fresh plan for a mission: its default start, spacecraft and duration, no burns. */
 export function initialPlan(m: MissionEntry, fingerprint: string): MissionPlan {
+  if (m.def) return initialMissionPlan(m.def, fingerprint);
   return makePlan({
     data: fingerprint,
     epoch: m.launch.time,
@@ -135,4 +128,33 @@ export function withLaunch(plan: MissionPlan, l: LaunchDefaults): MissionPlan {
 /** Free start: a state relative to `center` at `epoch`. */
 export function withStateStart(plan: MissionPlan, center: string, epoch: number, state: number[]): MissionPlan {
   return { ...plan, epoch, start: { kind: 'state', center, state } };
+}
+
+/** Conformance issues of a plan for a mission entry (the mission layer's check). Sandbox: none. */
+export function conformance(entry: MissionEntry, plan: MissionPlan): ConformanceIssue[] {
+  return entry.def ? checkPlanConformance(entry.def, plan) : [];
+}
+
+/** Spacecraft conformance messages only. */
+export function spacecraftIssues(entry: MissionEntry, plan: MissionPlan): string[] {
+  return conformance(entry, plan).filter((i) => i.code === 'spacecraft').map((i) => i.message);
+}
+
+/**
+ * Which mission a loaded plan (shared link, saved work) is played as. A plan
+ * that does not conform to the mission (spacecraft, start rules, duration;
+ * checkPlanConformance) is never scored as that mission: it opens in Sandbox
+ * with a notice saying why.
+ */
+export function missionForLoadedPlan(missionId: string | undefined, plan: MissionPlan): { missionId: string; notice: string | null } {
+  const entry = missionById(missionId ?? '') ?? MISSIONS[0];
+  const issues = conformance(entry, plan);
+  if (issues.length === 0) return { missionId: entry.id, notice: null };
+  return { missionId: 'sandbox', notice: `This plan does not follow the rules of "${entry.title}" (${issues[0].message}${issues.length > 1 ? `, and ${issues.length - 1} more` : ''}), so it opened in Sandbox and is not scored as that mission.` };
+}
+
+/** Thrust-to-weight at full tanks (Earth g0) and ideal delta-v of each engine on its own. */
+export function craftPerformance(sc: Spacecraft): { engine: number; twr: number; dv: number }[] {
+  const g0 = 9.80665;
+  return sc.engines.map((e, engine) => ({ engine, twr: e.thrust / (sc.wetMass * g0), dv: e.isp * g0 * Math.log(sc.wetMass / sc.dryMass) }));
 }

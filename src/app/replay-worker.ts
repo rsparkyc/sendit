@@ -108,7 +108,7 @@ async function run(job: { id: number; plan: MissionPlan; missionId: string }): P
     const steps = last.steps * (plan.duration / last.duration);
     const r = replayWithSamples(plan, world, opts, last.steps ? perStepFor(steps) : 12);
     last = { ms: r.ms, steps: r.result.steps, duration: plan.duration };
-    const evaluation = evaluateMission(def, r.result, world, plan.epoch);
+    const evaluation = evaluateMission(def, r.result, world, plan.epoch, plan);
     post({ type: 'result', id: job.id, result: r.result, evaluation, samples: r.samples, ms: r.ms, preview: null }, [r.samples.buffer]);
   } catch (e) {
     post({ type: 'error', id: job.id, message: e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e) });

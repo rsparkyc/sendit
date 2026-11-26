@@ -3,7 +3,7 @@
  * object (the plan is immutable), so "did the plan change" is an identity
  * check and the replay client sees each edit exactly once.
  */
-import { initialPlan, missionById, MISSIONS, withLaunch, withStateStart, type LaunchDefaults } from './missions';
+import { initialPlan, missionById, missionForLoadedPlan, MISSIONS, withLaunch, withStateStart, type LaunchDefaults } from './missions';
 import { PHYSICS_MODEL, type MissionPlan, type PlanFrame, type Spacecraft } from './mission-layer';
 import { addNode, disableNode, enableNode, nodesOf, removeNode, setSpacecraft, updateNode, type ManeuverNode, type Vec3 } from './nodes';
 import type { AppState, Store } from './store';
@@ -30,7 +30,13 @@ export class Editor {
 
   /** Replace the whole plan (shared link, saved state). */
   load(missionId: string, plan: MissionPlan, parked: readonly ManeuverNode[] = []): void {
-    this.store.set({ missionId: missionById(missionId)?.id ?? 'sandbox', plan, parked, selectedNode: null, selectedEvent: null, replay: null });
+    const m = missionForLoadedPlan(missionId, plan);
+    this.store.set({ missionId: m.missionId, plan, parked, selectedNode: null, selectedEvent: null, replay: null, ...(m.notice ? { notice: m.notice } : {}) });
+  }
+
+  /** Replace the plan with one made by a planning aid (same mission; ordinary nodes). */
+  replacePlan(plan: MissionPlan, selectedNode: number | null = null): void {
+    this.commit(plan, { selectedNode });
   }
 
   /** Re-stamp a plan made for another physics build so this build will replay it. */
@@ -43,6 +49,11 @@ export class Editor {
   }
 
   setStateStart(center: string, epoch: number, state: number[]): void {
+    const def = missionById(this.store.get().missionId)?.def;
+    if (def && (def.rules.launchOnly || def.start.kind === 'launch')) {
+      this.store.set({ notice: `“${def.title}” starts with a launch; a free start is available in Sandbox.` });
+      return;
+    }
     this.commit(withStateStart(this.plan, center, epoch, state));
   }
 
@@ -50,7 +61,9 @@ export class Editor {
     this.commit({ ...this.plan, duration: seconds });
   }
 
+  /** Change the spacecraft (sandbox only: a mission's spacecraft is fixed). */
   setSpacecraft(sc: Spacecraft): void {
+    if (this.store.get().missionId !== 'sandbox') return;
     this.commit(setSpacecraft(this.plan, sc));
   }
 

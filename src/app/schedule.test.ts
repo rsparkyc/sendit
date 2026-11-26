@@ -1,60 +1,52 @@
 import { describe, expect, it } from 'vitest';
-import { chunksMissing, nextChunk, union, type ChunkRange } from './schedule';
+import { chunksMissing, chunksToEvict, EMPTY, nextChunks, outsideAsset, poolSizing, type ScheduleInput } from './schedule';
 
-const EMPTY: ChunkRange = { lo: 0, hi: -1 };
-const LIMIT: ChunkRange = { lo: -3, hi: 5 };
+const base = (p: Partial<ScheduleInput> = {}): ScheduleInput => ({
+  have: new Set(), inFlight: new Set(), view: 100, direction: 0, ahead: 0, flight: EMPTY, pinned: [], radius: 3, limit: { lo: -1000, hi: 1000 }, slots: 50, ...p,
+});
 
-/** Run the scheduler to completion, checking every step is adjacent to the covered range. */
-function drain(covered: ChunkRange, want: ChunkRange, limit: ChunkRange): number[] {
-  const order: number[] = [];
-  let c = { ...covered };
-  for (let guard = 0; guard < 1000; guard++) {
-    const k = nextChunk(c, want, limit);
-    if (k === null) return order;
-    const empty = c.lo > c.hi;
-    if (empty) expect([0, -1]).toContain(k);
-    else expect(k === c.hi + 1 || k === c.lo - 1).toBe(true);
-    order.push(k);
-    c = empty ? { lo: k, hi: k } : { lo: Math.min(c.lo, k), hi: Math.max(c.hi, k) };
-  }
-  throw new Error('did not terminate');
-}
-
-describe('chunk scheduling', () => {
-  it('builds the wanted range first, outward from the epoch, then prefetches to the limits', () => {
-    const order = drain(EMPTY, { lo: 3, hi: 4 }, LIMIT);
-    expect(order.slice(0, 5)).toEqual([0, 1, 2, 3, 4]);
-    expect(new Set(order)).toEqual(new Set([-3, -2, -1, 0, 1, 2, 3, 4, 5]));
+describe('chunk scheduling (checkpoint asset: any chunk builds independently)', () => {
+  it('builds the view chunk first, then neighbours, then prefetch, with no path from the epoch', () => {
+    const order = nextChunks(base());
+    expect(order[0]).toBe(100);
+    expect(order.slice(1, 3).sort()).toEqual([101, 99].sort());
+    expect(new Set(order)).toEqual(new Set([97, 98, 99, 100, 101, 102, 103]));
+    expect(order).not.toContain(0);
   });
 
-  it('handles a backward target', () => {
-    const order = drain(EMPTY, { lo: -2, hi: -2 }, LIMIT);
-    expect(order.slice(0, 2)).toEqual([-1, -2]);
+  it('puts pinned requests before neighbours and warp look-ahead before prefetch', () => {
+    const order = nextChunks(base({ pinned: [{ lo: 10, hi: 12 }], direction: 1, ahead: 4 }));
+    expect(order.slice(0, 4)).toEqual([100, 10, 11, 12]);
+    expect(order.slice(4, 8)).toEqual([101, 102, 103, 104]);
   });
 
-  it('honours a want beyond the prefetch limit', () => {
-    const order = drain({ lo: 0, hi: 2 }, { lo: 9, hi: 10 }, LIMIT);
-    expect(order.slice(0, 8)).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
-    expect(order).not.toContain(11);
+  it('skips present and in-flight chunks, respects slots and limits', () => {
+    const order = nextChunks(base({ have: new Set([100, 101]), inFlight: new Set([99]), slots: 2, limit: { lo: 0, hi: 102 } }));
+    expect(order).toEqual([102, 98]);
   });
 
-  it('prefetch alternates to keep both sides balanced', () => {
-    const order = drain({ lo: 0, hi: 0 }, EMPTY, { lo: -2, hi: 2 });
-    expect(order).toEqual([-1, 1, -2, 2]);
+  it('caps the flight span around the view', () => {
+    const order = nextChunks(base({ flight: { lo: 0, hi: 400 }, maxFlight: 10, radius: 0 }));
+    expect(Math.min(...order)).toBeGreaterThanOrEqual(95);
+    expect(Math.max(...order)).toBeLessThanOrEqual(105);
   });
 
-  it('nothing to do when covered', () => {
-    expect(nextChunk({ lo: -3, hi: 5 }, { lo: 0, hi: 1 }, LIMIT)).toBeNull();
+  it('evicts farthest from the view first and never kept ranges', () => {
+    const have = [0, 1, 2, 50, 98, 99, 100, 101, 300];
+    const ev = chunksToEvict({ have, view: 100, keep: [{ lo: 99, hi: 101 }, { lo: 0, hi: 0 }], budget: 5 });
+    expect(ev).toEqual([300, 1, 2, 50]);
+    expect(chunksToEvict({ have, view: 100, keep: [], budget: 20 })).toEqual([]);
   });
 
-  it('counts missing chunks', () => {
-    expect(chunksMissing(EMPTY, { lo: 4, hi: 4 })).toBe(5);
-    expect(chunksMissing({ lo: -1, hi: 2 }, { lo: -4, hi: 3 })).toBe(4);
-    expect(chunksMissing({ lo: -1, hi: 2 }, EMPTY)).toBe(0);
+  it('counts missing chunks and flags chunks outside the asset', () => {
+    expect(chunksMissing(new Set([1, 3]), { lo: 0, hi: 3 })).toBe(2);
+    expect(outsideAsset(-200, { lo: -143, hi: 285 })).toBe(true);
+    expect(outsideAsset(0, { lo: -143, hi: 285 })).toBe(false);
   });
 
-  it('union ignores empties', () => {
-    expect(union(EMPTY, { lo: 2, hi: 3 }, { lo: -1, hi: 0 })).toEqual({ lo: -1, hi: 3 });
-    expect(union(EMPTY)).toEqual(EMPTY);
+  it('sizes the pool for the device', () => {
+    expect(poolSizing(8, 8)).toEqual({ workers: 4, budget: 120 });
+    expect(poolSizing(4, 2)).toEqual({ workers: 3, budget: 48 });
+    expect(poolSizing(undefined, undefined).workers).toBe(1);
   });
 });

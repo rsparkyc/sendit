@@ -2,12 +2,12 @@
  * The canonical replay options for a mission: the ONE definition used by the
  * replay worker (what is drawn) and by scoring (tests, future leaderboard), so
  * the digest two players compare is the digest of what they saw.
- *  - A mission replays with exactly its definition's spheres (as scored).
+ *  - A mission replays with the mission layer's missionReplayOptions (as scored).
  *  - Sandbox adds a sphere of influence around every body that orbits
  *    another (Laplace radius a (m/M)^(2/5)), so SOI crossings are marked.
  */
 import { deriveMeta } from './body-meta';
-import type { MissionDefinition, ReplayOptions } from './mission-layer';
+import { missionReplayOptions, type MissionDefinition, type ReplayOptions } from './mission-layer';
 import { BODIES } from './physics';
 
 let soi: { body: string; radius: number }[] | null = null;
@@ -28,5 +28,5 @@ export function sandboxSpheres(): { body: string; radius: number }[] {
 }
 
 export function replayOptions(def: MissionDefinition | null): ReplayOptions {
-  return def ? { spheres: def.spheres } : { spheres: sandboxSpheres() };
+  return def ? missionReplayOptions(def) : { spheres: sandboxSpheres() };
 }

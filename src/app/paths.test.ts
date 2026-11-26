@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { deriveMeta } from './body-meta';
 import { anchorSegments, bodyPath, trajectoryPath, type FrameContext } from './paths';
-import { BODIES, Ephemeris } from './physics';
+import { BODIES, Ephemeris, ReplayEphemeris } from './physics';
 import { stateAt, trajectoryFrom } from './trajectory';
 
 /** Body 0 fixed at a large offset (like the Sun far from a planet), body 1 circling it with period 2*pi. */
@@ -114,22 +114,20 @@ describe('body metadata from the real data', () => {
 
 describe('physics adapter', () => {
   // Builds real ephemeris chunks (seconds each with 26 bodies); the default 5 s is too tight under load.
-  it('never builds on evaluate, and installs transferred chunks in order', { timeout: 60_000 }, () => {
-    const worker = new Ephemeris();
+  it('never builds on evaluate, installs transferred chunks in any order, and evicts', { timeout: 60_000 }, () => {
+    const worker = new ReplayEphemeris();
     const main = new Ephemeris();
     const pos = new Float64Array(3 * main.count);
     expect(main.evaluate(1e6, pos, null)).toBe(false);
-    expect(main.lo > main.hi).toBe(true);
-    const c0 = worker.build(0);
-    const cm1 = worker.build(-1);
-    expect(() => worker.build(5)).toThrow();
-    main.install(0, c0);
-    main.install(-1, cm1);
-    expect([main.lo, main.hi]).toEqual([-1, 0]);
+    worker.ensure(1e6, 1e6);
+    main.install(0, worker.copy(0)!);
     expect(main.evaluate(1e6, pos, null)).toBe(true);
     const ref = new Float64Array(3 * main.count);
-    worker.evaluate(1e6, ref, null);
+    worker.physics.evaluate(1e6, ref, null);
     expect(Array.from(pos)).toEqual(Array.from(ref));
     expect(main.evaluate(main.chunkSpan + 1, pos, null)).toBe(false);
+    expect(main.coversRange(0, 10)).toBe(true);
+    expect(main.evict([0])).toBe(1);
+    expect(main.covers(1e6)).toBe(false);
   });
 });

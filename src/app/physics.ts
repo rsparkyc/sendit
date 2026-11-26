@@ -7,8 +7,9 @@
  * main thread installs transferred chunks and evaluates them, and never builds.
  */
 import { ChebyshevEphemeris } from '../physics/chebyshev-ephemeris';
-import { CHECKPOINT_ASSET_URL, installCheckpointAsset } from '../physics/checkpoint-asset';
+import { assetBoundaries, CHECKPOINT_ASSET_URL, installCheckpointAsset } from '../physics/checkpoint-asset';
 import { J2000_BODIES, type BodyData } from '../physics/solar-system';
+export type { Burn } from '../physics/spacecraft';
 
 export interface BodyInfo {
   readonly index: number;
@@ -45,11 +46,10 @@ export function bodyIndex(id: string): number {
 }
 
 /**
- * Ephemeris wrapper that knows which chunks it holds. [lo, hi] is the
- * contiguous range around the epoch that the background worker builds outward;
- * the main thread may also install chunks elsewhere (built by the replay
- * worker from the checkpoint asset for a flight's span), so `has`/`covers`
- * look at the chunks actually present.
+ * Main-thread ephemeris: holds whatever chunks have been installed (built by
+ * the chunk pool or the replay worker, in any order, anywhere in time) and
+ * evaluates them. Never builds. Chunks can be evicted to keep memory bounded;
+ * an evicted chunk is simply requested again (rebuilt bit-identically).
  */
 export class Ephemeris {
   private readonly eph = new ChebyshevEphemeris(J2000_BODIES);
@@ -58,8 +58,6 @@ export class Ephemeris {
   readonly t0 = this.eph.t0;
   /** Float64 elements per chunk; must match on both threads. */
   readonly chunkLength = this.eph.layout.chunkLength;
-  lo = 0;
-  hi = -1;
 
   chunkIndex(t: number): number {
     return this.eph.chunkIndex(t);
@@ -79,44 +77,27 @@ export class Ephemeris {
     return this.has(this.chunkIndex(t));
   }
 
-  /** Covered time span [ta, tb). Empty if ta >= tb. */
-  span(): [number, number] {
-    return [this.chunkStart(this.lo), this.chunkStart(this.hi + 1)];
+  /** True if every chunk of [ta, tb] is installed. */
+  coversRange(ta: number, tb: number): boolean {
+    for (let k = this.chunkIndex(ta); k <= this.chunkIndex(tb); k++) if (!this.has(k)) return false;
+    return true;
   }
 
   /** Install a chunk built elsewhere (any order; ignored if already present). Returns true if new. */
   install(k: number, coeffs: Float64Array): boolean {
     if (this.eph.hasChunk(k)) return false;
     this.eph.addChunk(k, coeffs);
-    this.resync();
     return true;
   }
 
-  /** Indices of every installed chunk. */
+  /** Drop chunks (memory budget). Returns how many were dropped. */
+  evict(ks: Iterable<number>): number {
+    return this.eph.evict(ks);
+  }
+
+  /** Indices of every installed chunk, ascending. */
   chunks(): number[] {
     return this.eph.builtChunks();
-  }
-
-  private track(k: number): void {
-    if (this.lo > this.hi) {
-      this.lo = this.hi = k;
-    } else if (k === this.hi + 1) this.hi = k;
-    else if (k === this.lo - 1) this.lo = k;
-  }
-
-  /**
-   * Build chunk k (worker only; synchronous). k must be the next chunk outward.
-   * Returns a copy of the coefficients suitable for transfer.
-   */
-  build(k: number): Float64Array {
-    if (this.eph.hasChunk(k)) return this.eph.getChunk(k)!.slice();
-    if (!(k === this.hi + 1 || k === this.lo - 1 || (this.lo > this.hi && (k === 0 || k === -1)))) {
-      throw new Error(`chunk ${k} is not next to the covered range [${this.lo}, ${this.hi}]`);
-    }
-    const t = this.chunkStart(k);
-    this.eph.ensure(t, t);
-    this.track(k);
-    return this.eph.getChunk(k)!.slice();
   }
 
   /** Coefficients of an installed chunk (shared; do not mutate). */
@@ -134,21 +115,19 @@ export class Ephemeris {
     return true;
   }
 
-  /** The physics Ephemeris for propagation (worker only: may build chunks on demand). */
+  /** The physics Ephemeris (for the mission world; do not propagate on the main thread). */
   get physics(): ChebyshevEphemeris {
     return this.eph;
   }
+}
 
-  /** After propagation may have extended the underlying ephemeris, resync the covered range. */
-  resync(): void {
-    if (this.lo > this.hi) {
-      if (this.eph.hasChunk(0)) this.lo = this.hi = 0;
-      else if (this.eph.hasChunk(-1)) this.lo = this.hi = -1;
-      else return;
-    }
-    while (this.eph.hasChunk(this.hi + 1)) this.hi++;
-    while (this.eph.hasChunk(this.lo - 1)) this.lo--;
-  }
+/**
+ * Chunk indices whose start is covered by the shipped checkpoint asset
+ * (1950 to 2100): each of these builds independently from its own checkpoint.
+ */
+export function assetChunkRange(chunkSpan: number): { lo: number; hi: number } {
+  const b = assetBoundaries(chunkSpan);
+  return { lo: b.first, hi: b.last - 1 };
 }
 
 /** Physics body data, for the mission adapter's world (launch starts need it). Opaque to the rest of the app. */
@@ -195,6 +174,11 @@ export class ReplayEphemeris {
     const before = new Set(this.physics.builtChunks());
     this.physics.ensure(ta, tb);
     return this.physics.builtChunks().filter((k) => !before.has(k));
+  }
+
+  /** Drop built chunks (checkpoints are kept, so they rebuild quickly). */
+  evict(ks: Iterable<number>): number {
+    return this.physics.evict(ks);
   }
 
   /** Copy of chunk k for transfer. */
