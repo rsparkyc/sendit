@@ -281,6 +281,8 @@ table.burns td { text-align: right; padding: 1px 3px; }
 .tn-step { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1px 2px; min-width: 0; line-height: 1.05; }
 .tn-arrows { font-size: 13px; letter-spacing: -1px; }
 .tn-sub { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tn-step .tn-sub > span { display: block; text-align: center; line-height: 1.1; }
+.tn-step { padding-block: 2px; }
 .tn-zero, .tn-neg { flex: none; min-width: 28px; padding: 0 6px; }
 /* Drag strip between the decrease and increase buttons: a grip with a visible "drag" label. */
 .tn-pad { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; min-height: 30px; line-height: 1.05; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; background: color-mix(in srgb, var(--accent) 12%, transparent); }

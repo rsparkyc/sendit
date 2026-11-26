@@ -12,7 +12,7 @@ export type Quantity = 'c3' | 'vInfArr' | 'dvTotal';
 export const QUANTITIES: readonly { id: Quantity; label: string; unit: string; scale: number }[] = [
   { id: 'c3', label: 'Departure C3', unit: 'km²/s²', scale: 1e-6 },
   { id: 'vInfArr', label: 'Arrival v∞', unit: 'km/s', scale: 1e-3 },
-  { id: 'dvTotal', label: 'Total Δv (escape from 200 km)', unit: 'km/s', scale: 1e-3 },
+  { id: 'dvTotal', label: 'Total Δv (escape from 200 km alt)', unit: 'km/s', scale: 1e-3 },
 ];
 
 export interface Grid {

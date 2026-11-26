@@ -261,7 +261,7 @@ async function correctInner(m: Extract<ToPlanner, { type: 'correct' }>): Promise
   burn = best.burn;
   e2 = fly(burn, best.t);
   if (Math.abs(e2.closest - rpWant) > Math.max(10e3, 0.05 * target.altitude)) {
-    return fail(`the corrector reached a ${((e2.closest - R) / 1e3).toFixed(0)} km pass, not the ${(target.altitude / 1e3).toFixed(0)} km requested, and could not trim it closer; the plan was left as it was`);
+    return fail(`the corrector reached a pass at ${((e2.closest - R) / 1e3).toFixed(0)} km altitude, not the ${(target.altitude / 1e3).toFixed(0)} km altitude requested, and could not trim it closer; the plan was left as it was`);
   }
   // Ordinary node; earlier burns untouched (nodes.updateNode keeps the prefix bit-for-bit).
   const node = nodeFromAbsBurn(plan, i, burn);
@@ -274,7 +274,7 @@ async function correctInner(m: Extract<ToPlanner, { type: 'correct' }>): Promise
   const meas = measuredClosest(rr.events, target.body, burnEnd);
   post({
     type: 'correct', id: m.id, ok: true,
-    message: meas ? `Closest approach in the replay: ${(meas.altitude / 1e3).toFixed(1)} km${meas.impact ? ' (enters the atmosphere / impacts)' : ''}` : `The replay shows no approach to ${target.body}`,
+    message: meas ? `Closest approach in the replay: ${(meas.altitude / 1e3).toFixed(1)} km altitude${meas.impact ? ' (enters the atmosphere / impacts)' : ''}` : `The replay shows no approach to ${target.body}`,
     plan: next2, stages, measured: meas ? { ...meas, outcome: rr.outcome } : null, predicted: e2.closest - R, ms: performance.now() - t0w,
   });
 }
