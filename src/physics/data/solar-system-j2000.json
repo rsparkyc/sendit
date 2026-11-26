@@ -1,0 +1,191 @@
+{
+  "description": "Solar-system initial conditions, barycentric ICRF, SI units (m, m/s, m^3/s^2).",
+  "epoch": {
+    "jd": 2451545.0,
+    "scale": "TDB",
+    "iso": "2000-01-01T12:00:00 TDB"
+  },
+  "frame": "ICRF, origin at solar-system barycenter (Horizons CENTER=500@0)",
+  "stateSource": "JPL Horizons API, EPHEM_TYPE=VECTORS (planetary ephemeris DE441)",
+  "gmSource": "DE440 header constants, https://ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de440/header.440 (Park et al. 2021, AJ 161:105); Earth/Moon split from GMB with EMRAT=81.30056822149722",
+  "radiusSource": "JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
+  "generatedBy": "scripts/fetch-horizons.py",
+  "bodies": [
+    {
+      "id": "sun",
+      "name": "Sun",
+      "horizonsId": "10",
+      "gm": 1.3271244004127942e+20,
+      "gmSource": "GMS",
+      "radius": 695700000.0,
+      "state": [
+        -1067706805.380953,
+        -396036184.7959462,
+        -138065184.28688088,
+        9.312571926520471,
+        -11.70150612817771,
+        -5.251266205200356
+      ]
+    },
+    {
+      "id": "mercury",
+      "name": "Mercury",
+      "horizonsId": "199",
+      "gm": 22031868551400.0,
+      "gmSource": "GM1",
+      "radius": 2439400.0,
+      "state": [
+        -20529433161.23468,
+        -60324003958.27633,
+        -30130837864.1183,
+        37004.30442920571,
+        -8541.376789510447,
+        -8398.372409672424
+      ]
+    },
+    {
+      "id": "venus",
+      "name": "Venus",
+      "horizonsId": "299",
+      "gm": 324858592000000.0,
+      "gmSource": "GM2",
+      "radius": 6051800.0,
+      "state": [
+        -108524200857.5715,
+        -7318564959.678599,
+        3548121861.333776,
+        1391.2186011899669,
+        -32029.51993781091,
+        -14497.0867394732
+      ]
+    },
+    {
+      "id": "earth",
+      "name": "Earth",
+      "horizonsId": "399",
+      "gm": 398600435507022.56,
+      "gmSource": "GM_EARTH",
+      "radius": 6371008.399999999,
+      "state": [
+        -27566740482.81145,
+        132361381153.5491,
+        57418653286.253845,
+        -29784.947498510883,
+        -5029.753814928081,
+        -2180.645069035755
+      ]
+    },
+    {
+      "id": "moon",
+      "name": "Moon",
+      "horizonsId": "301",
+      "gm": 4902800118457.549,
+      "gmSource": "GM_MOON",
+      "radius": 1737400.0,
+      "state": [
+        -27858348866.99916,
+        132094664319.69499,
+        57342550798.94725,
+        -29141.41610952193,
+        -5695.841497884601,
+        -2481.970773696848
+      ]
+    },
+    {
+      "id": "mars",
+      "name": "Mars system barycenter",
+      "horizonsId": "4",
+      "gm": 42828375815756.1,
+      "gmSource": "GM4",
+      "radius": 3389500.0,
+      "state": [
+        206980433836.45142,
+        -186417011.4371795,
+        -5667227497.526179,
+        1171.9850085317769,
+        23906.70819417074,
+        10933.92063330765
+      ]
+    },
+    {
+      "id": "jupiter",
+      "name": "Jupiter system barycenter",
+      "horizonsId": "5",
+      "gm": 1.2671276409999997e+17,
+      "gmSource": "GM5",
+      "radius": 69911000.0,
+      "state": [
+        597499876792.548,
+        408990313931.7586,
+        160756281938.7201,
+        -7900.525116640771,
+        10171.79630923791,
+        4552.467787262924
+      ]
+    },
+    {
+      "id": "saturn",
+      "name": "Saturn system barycenter",
+      "horizonsId": "6",
+      "gm": 3.79405848418e+16,
+      "gmSource": "GM6",
+      "radius": 58232000.0,
+      "state": [
+        957317417414.3425,
+        923319621896.9913,
+        340162800388.6153,
+        -7422.709426014511,
+        6097.474815228997,
+        2837.682288255575
+      ]
+    },
+    {
+      "id": "uranus",
+      "name": "Uranus system barycenter",
+      "horizonsId": "7",
+      "gm": 5794556399999998.0,
+      "gmSource": "GM7",
+      "radius": 25362000.0,
+      "state": [
+        2157907312953.845,
+        -1871306838939.559,
+        -850106800031.2823,
+        4646.336807878125,
+        4251.152675974154,
+        1796.17278581112
+      ]
+    },
+    {
+      "id": "neptune",
+      "name": "Neptune system barycenter",
+      "horizonsId": "8",
+      "gm": 6836527100580399.0,
+      "gmSource": "GM8",
+      "radius": 24622000.0,
+      "state": [
+        2513978721723.721,
+        -3438170140316.856,
+        -1469851523010.959,
+        4475.214621751307,
+        2877.104855637858,
+        1066.200548145841
+      ]
+    },
+    {
+      "id": "pluto",
+      "name": "Pluto system barycenter",
+      "horizonsId": "9",
+      "gm": 975499999999.9999,
+      "gmSource": "GM9",
+      "radius": 1188300.0,
+      "state": [
+        -1478399372814.445,
+        -4185975131407.77,
+        -860878050544.811,
+        5253.463931238531,
+        -1964.0805980784498,
+        -2195.768154117838
+      ]
+    }
+  ]
+}
