@@ -143,6 +143,9 @@ test('Jupiter with its moons, Saturn with rings, Uranus on its side', async ({ p
 });
 
 test('phone viewport, download accounting and frame time', async ({ page, browser }) => {
+  // Five page loads and two 10-second frame-time samples: on a 2-core Linux runner with software WebGL this
+  // ran past the default 180 s once (it timed out in a screenshot). Nothing here is a timing assertion.
+  test.slow();
   await page.setViewportSize({ width: 390, height: 844 });
   // First visit, default view: what is downloaded before any interaction.
   await open(page, '');
@@ -190,6 +193,8 @@ test('phone viewport, download accounting and frame time', async ({ page, browse
     }
     const med = (a: number[]) => a.sort((x, y) => x - y)[a.length >> 1];
     const r = { cpu: med(cpu), interval: med(interval) };
+    // Stop time warp first: a screenshot of a page redrawing every frame under software WebGL can take minutes.
+    await p.evaluate(() => (window as any).sendit.store.set({ paused: true }));
     await p.screenshot({ path: `${SHOTS}/frametime-${hash.includes('textures=0') ? 'flat' : 'textured'}.png` });
     await p.close();
     return r;

@@ -85,13 +85,24 @@ async function lunarSetup(page: Page): Promise<void> {
   await settled(page);
 }
 
+/** Wait until the app has drawn `k` more frames (screen positions read after this match the camera). */
+async function frames(page: Page, k = 2): Promise<void> {
+  const n0 = await page.evaluate(() => (window as any).sendit.renders());
+  await page.waitForFunction(([n, kk]) => (window as any).sendit.renders() >= n + kk, [n0, k] as const);
+}
+
 async function addNodeByClick(page: Page, tMission: number): Promise<void> {
   // Look at the parking orbit from above so the click lands on it.
-  await page.evaluate(() => (window as any).sendit.camera.setDistance(4e7, true));
-  await page.waitForTimeout(300);
-  const p = await page.evaluate((t) => (window as any).sendit.screenAt(t), tMission);
+  await page.evaluate(() => { const w = (window as any).sendit; w.camera.setDistance(4e7, true); w.store.set({ paused: true }); });
+  await frames(page);
+  const p = await page.evaluate((t) => (window as any).sendit.screenAt(t, true), tMission);
   expect(p, 'trajectory point on screen').not.toBeNull();
+  const before = await page.evaluate(() => (window as any).sendit.nodesOf().length);
+  // A click picks the point (no node yet); "Add node here" adds it.
   await page.mouse.click(p.x, p.y);
+  await expect(page.locator('.tap-pop')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).sendit.nodesOf().length)).toBe(before);
+  await page.locator('.tap-pop').getByRole('button', { name: 'Add node here' }).click();
   await page.waitForFunction(() => (window as any).sendit.store.get().selectedNode !== null);
 }
 

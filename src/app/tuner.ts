@@ -1,8 +1,8 @@
 /**
  * A value tuner usable with a mouse, a keyboard and a finger:
  *
- *   label | [value input] | 0 | ± | ◂▸ drag strip
- *         | <<< << < | > >> >>>      (large, medium, small steps; each shows its step)
+ *   label | [value input] | 0 | ±            (0 and ± for signed values only)
+ *         | <<< << < [drag] > >> >>>       (large, medium, small steps; each shows its step)
  *
  *  - the input takes direct entry (Enter or blur commits; `inputmode` picks
  *    the on-screen keyboard: decimal pad for Δv, full keyboard for times);
@@ -10,7 +10,11 @@
  *    repeat while held; each shows its step under the arrows (no hover needed);
  *  - the strip (role="slider") is dragged sideways: one medium step per 12 px, so a
  *    long drag is coarse and a short one fine; arrow keys on it nudge too;
- *  - on touch layouts a ± button negates (decimal pads have no minus key).
+ *  - the ± button negates the value (signed values only).
+ *
+ * No native `title` tooltips on the step buttons or the strip: they showed
+ * over the neighbouring buttons. Everything they said is visible text or the
+ * accessible name.
  *
  * The three step sizes come from the caller (`levels`).
  */
@@ -60,19 +64,24 @@ export class Tuner {
     });
     this.labelEl = el('span', { className: 'tn-label', textContent: o.label });
     const arrows = ['<', '<<', '<<<'];
-    const steps = [2, 1, 0].map((k) => this.repeatButton(arrows[k].replace(/</g, '‹'), o.levelText(o.levels[k]), `${o.label}: −${o.levelText(o.levels[k])}`, -o.levels[k]))
-      .concat([0, 1, 2].map((k) => this.repeatButton(arrows[k].replace(/</g, '›'), o.levelText(o.levels[k]), `${o.label}: +${o.levelText(o.levels[k])}`, o.levels[k])));
-    this.pad = el('div', { className: 'tn-pad', tabIndex: 0, role: 'slider', title: `Drag sideways to tune ${o.label}` }, el('span', { ariaHidden: 'true', textContent: '◂ ▸' }));
+    const dec = [2, 1, 0].map((k) => this.repeatButton(arrows[k].replace(/</g, '‹'), o.levelText(o.levels[k]), `${o.label}: −${o.levelText(o.levels[k])}`, -o.levels[k]));
+    const inc = [0, 1, 2].map((k) => this.repeatButton(arrows[k].replace(/</g, '›'), o.levelText(o.levels[k]), `${o.label}: +${o.levelText(o.levels[k])}`, o.levels[k]));
+    this.pad = el('div', { className: 'tn-pad', tabIndex: 0, role: 'slider' },
+      el('span', { className: 'tn-grip', ariaHidden: 'true', textContent: '◂ ⠿ ▸' }),
+      el('span', { className: 'tn-sub', ariaHidden: 'true', textContent: 'drag' }));
     this.pad.setAttribute('aria-label', `${o.label}: drag sideways or use arrow keys`);
     this.wirePad();
-    const neg = o.negate ? el('button', { className: 'btn tn-neg', type: 'button', textContent: '±', title: `Negate ${o.label}` }) : null;
-    if (neg) neg.onclick = () => o.negate!();
-    const zero = o.zero ? el('button', { className: 'btn tn-zero', type: 'button', textContent: '0', title: `Set ${o.label} to zero` }) : null;
+    const neg = o.negate ? el('button', { className: 'btn tn-neg', type: 'button', textContent: '±' }) : null;
+    if (neg) {
+      neg.setAttribute('aria-label', `${o.label}: flip sign`);
+      neg.onclick = () => o.negate!();
+    }
+    const zero = o.zero ? el('button', { className: 'btn tn-zero', type: 'button', textContent: '0' }) : null;
     if (zero) {
       zero.setAttribute('aria-label', `${o.label}: set to zero`);
       zero.onclick = () => o.zero!();
     }
-    this.root = el('div', { className: 'tuner' }, this.labelEl, el('div', { className: 'tn-ctl' }, this.input, zero, neg, this.pad), el('div', { className: 'tn-steps' }, ...steps));
+    this.root = el('div', { className: 'tuner' }, this.labelEl, el('div', { className: 'tn-ctl' }, this.input, zero, neg), el('div', { className: 'tn-steps' }, ...dec, this.pad, ...inc));
   }
 
   setLabel(t: string): void {
@@ -85,7 +94,7 @@ export class Tuner {
   }
 
   private repeatButton(arrows: string, sub: string, label: string, delta: number): HTMLButtonElement {
-    const b = el('button', { className: `btn tn-step ${delta < 0 ? 'dec' : 'inc'}`, type: 'button', title: label }, el('span', { className: 'tn-arrows', textContent: arrows }), el('span', { className: 'tn-sub', textContent: sub }));
+    const b = el('button', { className: `btn tn-step ${delta < 0 ? 'dec' : 'inc'}`, type: 'button' }, el('span', { className: 'tn-arrows', textContent: arrows }), el('span', { className: 'tn-sub', textContent: sub }));
     b.setAttribute('aria-label', label);
     let timer: ReturnType<typeof setTimeout> | null = null;
     let fired = false;

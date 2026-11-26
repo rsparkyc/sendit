@@ -6,13 +6,16 @@
  *  - two-finger pinch zooms; two-finger drag tilts (vertical) and turns
  *    (horizontal) — the camera orbits a focus, so there is nothing to pan;
  *  - wheel and trackpad pinch (wheel + ctrlKey) zoom;
- *  - a tap or click that did not move reports `tap`; two quick taps at the
- *    same spot report `doubleTap` as well.
+ *  - a tap or click that did not move reports `tap`; the second of two quick
+ *    taps at the same spot reports `doubleTap` instead (never a second `tap`).
+ *    A press that moved beyond the slop is a camera drag and reports nothing.
  *
  * The canvas has `touch-action: none`, so the browser neither scrolls nor
  * zooms the page while a finger is on the map; pinch-zoom of the page stays
  * available everywhere else (the viewport is not locked).
  */
+
+import { isDoubleTap } from './pick';
 
 export interface MapInputHandlers {
   rotate(dAz: number, dEl: number): void;
@@ -27,8 +30,6 @@ export interface MapInputHandlers {
 
 const ROT = 0.005; // rad per px
 const TAP_SLOP = { mouse: 4, pen: 8, touch: 12 } as Record<string, number>;
-const DOUBLE_MS = 350;
-const DOUBLE_PX = 36;
 
 interface Pt {
   x: number;
@@ -131,15 +132,17 @@ export class MapInput {
     if (!d.moved) {
       const now = performance.now();
       if (now - d.t0 < 600) {
-        this.h.tap(e.clientX, e.clientY, e.pointerType);
-        const lt = this.lastTap;
-        if (lt && now - lt.t < DOUBLE_MS && Math.hypot(e.clientX - lt.x, e.clientY - lt.y) < DOUBLE_PX) {
+        if (isDoubleTap(this.lastTap, now, e.clientX, e.clientY)) {
           this.lastTap = null;
           this.h.doubleTap(e.clientX, e.clientY, e.pointerType);
-        } else this.lastTap = { t: now, x: e.clientX, y: e.clientY };
+        } else {
+          this.lastTap = { t: now, x: e.clientX, y: e.clientY };
+          this.h.tap(e.clientX, e.clientY, e.pointerType);
+        }
       }
       return;
     }
+    this.lastTap = null; // a drag between two taps breaks a double tap
     // Fling: mean angular velocity over the last 80 ms of the drag.
     const s = this.samples;
     if (s.length >= 2) {

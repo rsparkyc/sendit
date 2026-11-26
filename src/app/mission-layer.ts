@@ -10,7 +10,7 @@
  * once per step; the replay then ends with outcome 'aborted'.
  */
 import { DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, asymptotePlaneNormals, azimuthAllowed, stellarDay, azimuthForInclination, geocentricLatitudeDeg, groundRelativeAzimuthDeg, launchFromParams, launchPlane, launchSite, launchToParams, orbitNormalOf, planeCrossings } from '../mission/launch';
-import { checkPlanConformance, evaluate, initialMissionPlan, missionReplayOptions, PAR_SCORE, type CompleteMission, type ConformanceIssue, type Evaluation, type LeaderboardKeys, type MissionDefinition, type Objective, type ObjectiveResult } from '../mission/objectives';
+import { allowedSites, missionForSite, siteOption, checkPlanConformance, evaluate, initialMissionPlan, missionReplayOptions, PAR_SCORE, type CompleteMission, type ConformanceIssue, type Evaluation, type LeaderboardKeys, type MissionDefinition, type Objective, type ObjectiveResult, type SiteOption } from '../mission/objectives';
 import { LIMITS, PLAN_FORMAT, PlanError, decodePlan, encodePlan, makePlan, simulationStartOffset, validatePlan, validatePlanIssues, type Engine, type MissionPlan, type PlanBurn, type PlanFrame, type PlanStart, type Spacecraft } from '../mission/plan';
 import { replay, type BurnReport, type LaunchInsertion, type Outcome, type ReplayOptions, type ReplayResult } from '../mission/replay';
 import { SAMPLE_MISSIONS } from '../mission/samples';
@@ -27,13 +27,14 @@ export function earthOrientation(t: number, out: Float64Array): number {
 }
 
 export {
+  allowedSites, missionForSite, siteOption,
   CAMPAIGN, DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, LIMITS, PAR_SCORE, initialMissionPlan, missionReplayOptions, validatePlanIssues, PHYSICS_MODEL, PLAN_FORMAT, PlanError, SAMPLE_MISSIONS,
   asymptotePlaneNormals, azimuthAllowed, azimuthForInclination, checkPlanConformance, stellarDay, decodePlan, encodePlan, evaluate, geocentricLatitudeDeg, groundRelativeAzimuthDeg,
   launchFromParams, launchPlane, launchSite, launchToParams, makePlan, orbitNormalOf, planeCrossings, replay, simulationStartOffset, validatePlan,
 };
 export type {
   BurnReport, CompleteMission, ConformanceIssue, LaunchInsertion, LeaderboardKeys, Engine, Evaluation, EventKind, MissionDefinition, MissionPlan, MissionWorld, Objective, ObjectiveResult, Outcome,
-  PlanBurn, PlanFrame, PlanStart, ReplayOptions, ReplayResult, Spacecraft, TrajectoryEvent,
+  PlanBurn, PlanFrame, PlanStart, ReplayOptions, ReplayResult, SiteOption, Spacecraft, TrajectoryEvent,
 };
 export type { LaunchSite } from '../mission/launch';
 

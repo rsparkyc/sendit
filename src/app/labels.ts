@@ -36,7 +36,8 @@ export class Labels {
 
   constructor(
     private readonly root: HTMLElement,
-    private readonly onPick: (key: string) => void,
+    /** A click or tap on a label, with its client position (for double-tap detection). */
+    private readonly onPick: (key: string, x: number, y: number) => void,
     /** Map element that gets gestures started on a label (a drag or a second finger), so labels never block orbiting or pinching. */
     private readonly gestureTarget?: HTMLElement,
   ) {
@@ -107,7 +108,7 @@ export class Labels {
     const text = document.createElement('span');
     text.className = 'text';
     el.append(dot, text);
-    el.addEventListener('click', () => this.onPick(item.key));
+    el.addEventListener('click', (ev) => this.onPick(item.key, ev.clientX, ev.clientY));
     this.root.append(el);
     e = { el, dot, text };
     this.entries.set(item.key, e);

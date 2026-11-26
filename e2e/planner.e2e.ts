@@ -71,6 +71,34 @@ async function chartState(page: Page, padDays = 0) {
   }, padDays);
 }
 
+/**
+ * Scroll the planner so the chart sits just below its sticky header, then return the client point of a
+ * chart cell ('min': the minimum-C3 cell) and check nothing covers it there.
+ */
+async function chartPoint(page: Page, which: 'min'): Promise<{ x: number; y: number; k: number }> {
+  await page.locator('.planner').evaluate((e) => {
+    const head = (e.querySelector('.pl-head') as HTMLElement).getBoundingClientRect().bottom;
+    e.scrollBy(0, (e.querySelector('.pl-canvas') as HTMLElement).getBoundingClientRect().top - head - 8);
+  });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const p = await page.evaluate((w) => {
+    const ch = (window as any).sendit.planner.chart;
+    const g = ch.data;
+    let k = -1;
+    for (let q = 0; q < g.c3.length; q++) if (Number.isFinite(g.c3[q]) && (k < 0 || g.c3[q] < g.c3[k])) k = q;
+    void w;
+    const i = k % g.nDep;
+    const j = (k - i) / g.nDep;
+    const G = ch.geom();
+    const r = ch.canvas.getBoundingClientRect();
+    const x = r.left + G.xOf(g.depTimes[i]);
+    const y = r.top + G.yOf(g.arrTimes[j]);
+    return { x, y, k, onCanvas: document.elementFromPoint(x, y) === ch.canvas, inView: y > 0 && y < innerHeight };
+  }, which);
+  expect(p.onCanvas && p.inView, `chart cell ${p.k} reachable at ${p.x.toFixed(0)}, ${p.y.toFixed(0)}`).toBe(true);
+  return p;
+}
+
 async function computed(page: Page, before: string): Promise<void> {
   await page.waitForFunction((b) => {
     const t = document.querySelector('.planner .pl-status')?.textContent ?? '';
@@ -256,13 +284,19 @@ test.describe('phone', () => {
     const pl = page.locator('.planner');
     await pl.getByRole('button', { name: 'Compute porkchop' }).tap();
     await expect(pl.locator('.pl-status')).toContainText('transfers in', { timeout: 60_000 });
-    const box = (await pl.locator('.pl-canvas').boundingBox())!;
-    // Tap selects a cell.
-    await page.touchscreen.tap(box.x + box.width * 0.45, box.y + box.height * 0.5);
+    // Tap selects a cell. The point is computed from the chart's own geometry (the minimum-C3 cell, always a
+    // solution) after scrolling the chart clear of the sticky header, and checked to be on the canvas: a fixed
+    // fraction of the canvas box depended on font metrics (Linux fonts wrap the header onto more lines, so it
+    // covered the old tap point and the tap never reached the chart).
+    const target = await chartPoint(page, 'min');
+    await page.touchscreen.tap(target.x, target.y);
     await expect(pl.locator('.pl-readout')).toContainText('Selected transfer');
+    expect(await page.evaluate(() => (window as any).sendit.planner.chart.selected)).toBe(target.k);
     // Finger drag across the chart updates the readout (pointer events).
+    const box = (await pl.locator('.pl-canvas').boundingBox())!;
     const cdp = await page.context().newCDPSession(page);
     const pts = [0.3, 0.4, 0.5, 0.6].map((f) => ({ x: box.x + box.width * f, y: box.y + box.height * 0.45 }));
+    expect(await page.evaluate((ps) => ps.every((p) => document.elementFromPoint(p.x, p.y)?.classList.contains('pl-canvas')), pts), 'drag path on the chart').toBe(true);
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [pts[0]] });
     for (const p of pts.slice(1)) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [p] });
     await expect(pl.locator('.pl-readout')).toContainText('Under pointer');

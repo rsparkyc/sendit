@@ -26,7 +26,7 @@ function catalogue(v: Variant): CompleteMission[] {
     if (m.id !== 'lunar-flyby') return m;
     switch (v) {
       case 'mission-updated':
-        return { ...m, version: 2 };
+        return { ...m, version: Number(m.version) + 1 }; // always newer than the page's copy
       case 'stricter-rules':
         return { ...m, rules: { ...m.rules, sites: ['cape-canaveral'] } };
       case 'stricter-objectives':

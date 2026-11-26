@@ -25,7 +25,10 @@ export default defineConfig({
       command: `pnpm build && pnpm exec vite preview --port ${SITE_PORT} --strictPort`,
       cwd: '..',
       url: `http://localhost:${SITE_PORT}/`,
-      reuseExistingServer: !process.env.CI,
+      // Never reuse a server already on the port: a stale preview once made the tests run against an old
+      // build. If the port is taken, Playwright stops with an error instead. Playwright stops the servers it
+      // started when the run ends (also on failure or Ctrl-C).
+      reuseExistingServer: false,
       timeout: 180_000,
     },
     {
@@ -34,7 +37,10 @@ export default defineConfig({
       command: `pnpm exec vite build --config e2e/vite.ephemeris.config.ts && pnpm exec vite build --config e2e/vite.ephemeris.config.ts --ssr ../ephemeris-digest.ts --outDir ../.dist-node && pnpm exec vite preview --config e2e/vite.ephemeris.config.ts --port ${EPH_PORT} --strictPort`,
       cwd: '..',
       url: `http://localhost:${EPH_PORT}/`,
-      reuseExistingServer: !process.env.CI,
+      // Never reuse a server already on the port: a stale preview once made the tests run against an old
+      // build. If the port is taken, Playwright stops with an error instead. Playwright stops the servers it
+      // started when the run ends (also on failure or Ctrl-C).
+      reuseExistingServer: false,
       timeout: 180_000,
     },
   ],

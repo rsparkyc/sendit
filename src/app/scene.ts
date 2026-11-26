@@ -104,38 +104,57 @@ class ThickAnchoredLine {
   }
 }
 
-/** Radial alpha for the plane discs: solid core, smooth fade to zero at the rim, faint rings every quarter radius. */
-function discAlphaTexture(): THREE.Texture {
-  const N = 256;
-  const c = document.createElement('canvas');
-  c.width = c.height = N;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(N, N);
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const r = Math.hypot(x + 0.5 - N / 2, y + 0.5 - N / 2) / (N / 2);
-      let a = r >= 1 ? 0 : r < 0.55 ? 1 : 0.5 + 0.5 * Math.cos((Math.PI * (r - 0.55)) / 0.45);
-      const ring = Math.abs(((r * 4 + 0.5) % 1) - 0.5) < 0.012 ? 0.6 : 0;
-      a = Math.min(1, a * (0.55 + ring));
-      const v = Math.round(a * 255);
-      const o = 4 * (y * N + x);
-      img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
-      img.data[o + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.NoColorSpace;
-  return t;
-}
-
-/** A reference plane disc (equator or an orbital plane): translucent, fading rim, depth-tested but not depth-writing. */
+/**
+ * A reference plane disc (equator or an orbital plane): translucent, fading rim, depth-tested but
+ * not depth-writing. Drawn procedurally in the fragment shader from the distance to the centre (no
+ * texture, so it is smooth at any size or zoom): solid core, raised-cosine fade to zero at the rim,
+ * faint rings every quarter radius anti-aliased with screen-space derivatives (about one device
+ * pixel wide at any zoom), and a little ordered noise so the alpha gradient does not band on a
+ * dark background. Uses the logarithmic depth chunks so it still intersects the globe correctly.
+ */
 class PlaneDisc {
   readonly mesh: THREE.Mesh;
-  readonly material: THREE.MeshBasicMaterial;
-  constructor(color: number, alpha: THREE.Texture) {
-    this.material = new THREE.MeshBasicMaterial({ color, alphaMap: alpha, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide });
-    this.mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 96), this.material);
+  readonly material: THREE.ShaderMaterial;
+  constructor(color: number) {
+    this.material = new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: new THREE.Color(color) }, uOpacity: { value: 0.25 } },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      vertexShader: /* glsl */ `
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        varying vec2 vLocal;
+        void main() {
+          vLocal = position.xy;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader: /* glsl */ `
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        uniform vec3 uColor;
+        uniform float uOpacity;
+        varying vec2 vLocal;
+        void main() {
+          #include <logdepthbuf_fragment>
+          float r = length(vLocal);
+          if (r >= 1.0) discard;
+          float fade = r < 0.55 ? 1.0 : 0.5 + 0.5 * cos(PI * (r - 0.55) / 0.45);
+          // Rings at r = 0.25, 0.5, 0.75: distance to the nearest ring in pixels via fwidth.
+          float q = r * 4.0;
+          float w = max(fwidth(q), 1e-6);
+          float d = abs(q - floor(q + 0.5)) / w;
+          float ring = (q > 0.5 && q < 3.5) ? (1.0 - smoothstep(0.5, 1.5, d)) * 0.5 : 0.0;
+          float a = min(1.0, fade * (0.55 + ring)) * uOpacity;
+          // Interleaved gradient noise, +-0.5/255: breaks up 8-bit banding of the fade.
+          float n = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+          a = clamp(a + (n - 0.5) / 255.0, 0.0, 1.0);
+          gl_FragColor = vec4(uColor, a);
+          #include <colorspace_fragment>
+        }`,
+    });
+    this.mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 192), this.material);
     this.mesh.frustumCulled = false;
     this.mesh.visible = false;
     this.mesh.renderOrder = 1; // after the opaque globe, before the trajectory lines are blended over it
@@ -214,9 +233,8 @@ export class SceneView {
     this.trajectory = new AnchoredLine(this.trajectoryMaterial);
     this.trajectoryPast = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0x3b7a58, transparent: true, opacity: 0.8, depthWrite: false }));
     this.burnArcs = new ThickAnchoredLine(new LineMaterial({ color: 0xff8a3d, linewidth: 4.5, worldUnits: false, transparent: true, opacity: 0.95, depthWrite: false }));
-    const alpha = discAlphaTexture();
-    this.equatorDisc = new PlaneDisc(0x9fc6ff, alpha);
-    this.targetDisc = new PlaneDisc(0xffd36b, alpha);
+    this.equatorDisc = new PlaneDisc(0x9fc6ff);
+    this.targetDisc = new PlaneDisc(0xffd36b);
     this.scene.add(this.equatorDisc.mesh, this.targetDisc.mesh, this.axis.group);
     // Faint revolutions: each pixel is drawn at most once per frame (stencil), so 160 overlapping revolutions of a
     // parking orbit stay one faint trace instead of saturating into an opaque band over the planet.
@@ -302,7 +320,7 @@ export class SceneView {
       d.mesh.visible = !!p;
       if (p) {
         pose(d.mesh, p, k);
-        d.material.opacity = p.opacity ?? 0.25;
+        d.material.uniforms.uOpacity.value = p.opacity ?? 0.25;
       }
     }
     this.axis.group.visible = !!axis;

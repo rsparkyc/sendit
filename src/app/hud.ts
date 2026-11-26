@@ -40,13 +40,15 @@ export interface HudActions {
 export const SHORTCUTS: readonly [string, string][] = [
   ['Space', 'Pause / resume'],
   [', and .', 'Slower / faster time warp'],
-  ['N', 'Add a node at the time cursor'],
+  ['N or Enter', 'Add a node at the picked trajectory point (else N: at the time cursor)'],
+  ['Ctrl / ⌘ Z', 'Undo the last plan edit (a drag or a burst of steps is one edit)'],
+  ['Shift Ctrl / ⌘ Z, Ctrl Y', 'Redo'],
   ['W / S', 'Selected node: prograde + / −'],
   ['D / A', 'Normal + / −'],
   ['E / Q', 'Radial out + / −'],
   ['[ and ]', 'Move the node earlier / later'],
   ['Alt / none / Shift', 'with the above: small / medium / large step (0.1, 1, 10 m/s; 1 s, 1 min, 10 min)'],
-  ['Delete', 'Delete the selected node'],
+  ['Delete / Backspace', 'Delete the selected node (Undo brings it back)'],
   ['Esc', 'Clear the selection'],
   ['?', 'This reference'],
 ];
@@ -66,10 +68,10 @@ export const GESTURES: readonly [string, string][] = [
   ['Drag (one finger / mouse)', 'Orbit the camera'],
   ['Pinch / wheel', 'Zoom'],
   ['Two-finger drag', 'Tilt and turn'],
-  ['Tap near the trajectory', 'Pick a point (time, altitude, speed shown), then “Add node here”; with a mouse the crosshair cursor shows where a click adds a node'],
-  ['Tap a marker', 'Says what it is; a node marker selects it, an AN / DN marker moves the time cursor there'],
-  ['Double-tap a body', 'Focus it (or tap its label)'],
-  ['Drag a value’s ◂▸ strip', 'Tune it by medium steps; ‹ ‹‹ ‹‹‹ › ›› ››› step small / medium / large'],
+  ['Click / tap the trajectory', 'Pick that point: the time cursor moves there and its time, altitude and speed show; then “Add node here” (or N / Enter). A click never adds a node by itself, and a click that ends a drag does nothing'],
+  ['Click / tap a marker', 'Says what it is; a node marker selects it, an AN / DN marker moves the time cursor there'],
+  ['Double-click / double-tap', 'Focus what is under the pointer. If several things are there, the first of: the spacecraft; a maneuver node or burn marker; an event or AN / DN marker; a launch site; a body (the one nearest the camera, so a moon in front of its planet); a point on the trajectory (the time cursor moves there and the spacecraft is focused)'],
+  ['Drag a value’s ◂ ⠿ ▸ strip', 'Tune it by medium steps; ‹‹‹ ‹‹ ‹ and › ›› ››› either side step large / medium / small; 0 zeroes it, ± flips its sign'],
 ];
 
 export class Hud {

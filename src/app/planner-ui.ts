@@ -21,6 +21,7 @@ import { geocentricLatitudeDeg, launchSite, type MissionPlan } from './mission-l
 import { launchOf, missionById } from './missions';
 import { dvMagnitude, nodesOf } from './nodes';
 import { BODIES, type Ephemeris } from './physics';
+import { bodyRadius, distanceMode, fromCentre, fromSurface, onDistanceMode } from './units';
 import { Cancelled, PlannerClient } from './planner-client';
 import { argMin, cellAt, colourRange, contour, contourLevels, field, monthTicks, porkchopRequest, QUANTITIES, transferType, viridis, vInfVector, type Grid, type Quantity } from './porkchop-view';
 import type { FromPlanner, StageReport } from './protocol';
@@ -54,6 +55,42 @@ function field2(label: string, ctl: HTMLElement): HTMLElement {
 
 function dateInput(title: string, v: string): HTMLInputElement {
   return el('input', { type: 'date', className: 'pl-input', title, value: v });
+}
+
+/**
+ * A closest-approach distance field that follows the View setting (units.ts): altitude above the
+ * surface, or radius from the centre. The value shown is converted when the setting changes; `metresAlt`
+ * always returns the altitude the planner works with.
+ */
+class FlybyDistance {
+  readonly input: HTMLInputElement;
+  readonly label = el('span');
+  readonly root: HTMLElement;
+  private mode = distanceMode();
+  constructor(defaultAltKm: string, private readonly body: () => string) {
+    this.input = numIn('Closest-approach altitude, km', defaultAltKm, '10');
+    this.root = el('label', { className: 'pl-field' }, this.label, this.input);
+    this.sync();
+    onDistanceMode(() => {
+      const v = Number(this.input.value);
+      const R = bodyRadius(this.body()) / 1e3;
+      const next = distanceMode();
+      if (next !== this.mode && this.input.value.trim() !== '' && Number.isFinite(v)) this.input.value = String(Math.round(next === 'radius' ? v + R : v - R));
+      this.mode = next;
+      this.sync();
+    });
+  }
+  private sync(): void {
+    const radius = this.mode === 'radius';
+    this.input.title = radius ? 'Closest-approach radius, km' : 'Closest-approach altitude, km';
+    this.input.setAttribute('aria-label', this.input.title);
+    this.label.textContent = radius ? 'Radius, km' : 'Altitude, km';
+  }
+  /** The requested closest approach as an altitude above the surface, m. */
+  metresAlt(): number {
+    const v = Number(this.input.value) * 1e3;
+    return this.mode === 'radius' ? v - bodyRadius(this.body()) : v;
+  }
 }
 
 function numIn(title: string, v: string, step = 'any'): HTMLInputElement {
@@ -91,8 +128,8 @@ function correctionSummary(r: Extract<FromPlanner, { type: 'correct' }>, body: s
   if (!r.ok) return `<div class="pl-fail">${esc(r.message)}</div>${stageTable(r.stages)}`;
   const m = r.measured;
   return (
-    `<div class="pl-ok">${m ? `Closest approach to ${esc(name)} in the replay: <b>${(m.altitude / 1e3).toFixed(1)} km</b> (requested ${(want / 1e3).toFixed(0)} km) at ${esc(fmtDate(m.t))}, ${(m.speed / 1e3).toFixed(2)} km/s${m.impact ? ' — enters the atmosphere or impacts' : ''}. Replay outcome: ${esc(m.outcome)}.` : `The replay of the corrected plan shows no approach to ${esc(name)}.`}</div>` +
-    `<div class="hint">Corrector's own estimate ${r.predicted !== null ? `${(r.predicted / 1e3).toFixed(1)} km` : '—'}; ${(r.ms / 1000).toFixed(2)} s in the worker.</div>` +
+    `<div class="pl-ok">${m ? `Closest approach to ${esc(name)} in the replay: <b>${esc(fromSurface(m.altitude, body))}</b> (requested ${esc(fromSurface(want, body))}) at ${esc(fmtDate(m.t))}, ${(m.speed / 1e3).toFixed(2)} km/s${m.impact ? ' — enters the atmosphere or impacts' : ''}. Replay outcome: ${esc(m.outcome)}.` : `The replay of the corrected plan shows no approach to ${esc(name)}.`}</div>` +
+    `<div class="hint">Corrector's own estimate ${r.predicted !== null ? esc(fromSurface(r.predicted, body)) : '—'}; ${(r.ms / 1000).toFixed(2)} s in the worker.</div>` +
     stageTable(r.stages)
   );
 }
@@ -460,7 +497,7 @@ export class PlannerOverlay {
   private readonly useBox = el('div', { className: 'pl-use' });
   private readonly incIn = numIn('Parking orbit inclination, deg', '', '0.1');
   private readonly opsBox = el('div', { className: 'pl-ops' });
-  private readonly altIn = numIn('Closest-approach altitude, km', '500', '10');
+  private readonly altIn = new FlybyDistance('500', () => this.departure?.body ?? this.arrSel.value);
   private readonly sideSel = el('select', { className: 'pl-input', title: 'Pass side' });
   private readonly result = el('div', { className: 'pl-result' });
   private chosenOp: LaunchOpportunity | null = null;
@@ -475,7 +512,7 @@ export class PlannerOverlay {
   // Target tab.
   private readonly tBurn = el('select', { className: 'pl-input', title: 'Burn to correct' });
   private readonly tBody = el('select', { className: 'pl-input', title: 'Flyby body' });
-  private readonly tAlt = numIn('Closest-approach altitude, km', '300', '10');
+  private readonly tAlt = new FlybyDistance('300', () => this.tBody.value);
   private readonly tSide = el('select', { className: 'pl-input', title: 'Pass side' });
   private readonly tResult = el('div', { className: 'pl-result' });
   // Chain tab.
@@ -585,7 +622,7 @@ export class PlannerOverlay {
       this.opsBox,
       el('div', { className: 'pl-row' }, button('Insert departure burn', () => void this.insertDeparture(), 'primary')),
       el('div', { className: 'sub', textContent: 'Refine to a flyby (corrector, real N-body)' }),
-      el('div', { className: 'pl-pair' }, field2('Altitude, km', this.altIn), field2('Pass', this.sideSel)),
+      el('div', { className: 'pl-pair' }, this.altIn.root, field2('Pass', this.sideSel)),
       el('div', { className: 'pl-row' }, button('Refine', () => void this.refine(), 'primary')),
       this.result);
     this.incIn.addEventListener('change', () => this.proposeLaunch());
@@ -819,7 +856,7 @@ export class PlannerOverlay {
       this.result.innerHTML += '<div class="pl-fail">Insert the departure burn first.</div>';
       return;
     }
-    await this.correct(d.index, d.body, Number(this.altIn.value) * 1e3, this.sideSel.value, d.tArr, this.result);
+    await this.correct(d.index, d.body, this.altIn.metresAlt(), this.sideSel.value, d.tArr, this.result);
   }
 
   private async correct(burn: number, body: string, altitude: number, sideValue: string, tArr: number | null, out: HTMLElement): Promise<void> {
@@ -866,8 +903,8 @@ export class PlannerOverlay {
         el('p', { className: 'blurb', textContent: 'Adjust one burn (direction, duration, start time) so the real N-body trajectory passes a body at the altitude you ask for. Earlier burns are not touched; later burns are ignored while correcting, so target an encounter before the next burn. The result is measured in the scoring replay.' }),
         field2('Burn', this.tBurn),
         field2('Body', this.tBody),
-        el('div', { className: 'pl-pair' }, field2('Altitude, km', this.tAlt), field2('Pass', this.tSide)),
-        el('div', { className: 'pl-row' }, button('Target this flyby', () => void this.correct(Number(this.tBurn.value), this.tBody.value, Number(this.tAlt.value) * 1e3, this.tSide.value, null, this.tResult), 'primary'))),
+        el('div', { className: 'pl-pair' }, this.tAlt.root, field2('Pass', this.tSide)),
+        el('div', { className: 'pl-row' }, button('Target this flyby', () => void this.correct(Number(this.tBurn.value), this.tBody.value, this.tAlt.metresAlt(), this.tSide.value, null, this.tResult), 'primary'))),
       this.tResult);
   }
 
@@ -920,7 +957,7 @@ function chainTable(seq: string[], times: number[], r: import('./planning-layer'
   const km = (m: number) => (Number.isFinite(m) ? `${(m / 1e3).toLocaleString('en-US', { maximumFractionDigits: 0 })} km` : '—');
   const rows = r.flybys.map((f) => {
     const flag = f.poweredBelowSurface ? '<b class="bad">below the surface</b>' : f.poweredBelowMin ? '<b class="warnc">below the minimum altitude</b>' : 'ok';
-    return `<tr><td>${esc(name(f.body))}<br><small>${dayStr(f.t)}</small></td><td>${(f.vInfInMag / 1e3).toFixed(2)} / ${(f.vInfOutMag / 1e3).toFixed(2)} km/s</td><td>${(f.mismatch).toFixed(0)} m/s</td><td>${(f.turnAngle * DEG).toFixed(1)}°</td><td>${km(f.rpPowered - f.radius)} alt<br><small>ballistic ${km(f.rpBallistic - f.radius)}</small></td><td>${flag}</td></tr>`;
+    return `<tr><td>${esc(name(f.body))}<br><small>${dayStr(f.t)}</small></td><td>${(f.vInfInMag / 1e3).toFixed(2)} / ${(f.vInfOutMag / 1e3).toFixed(2)} km/s</td><td>${(f.mismatch).toFixed(0)} m/s</td><td>${(f.turnAngle * DEG).toFixed(1)}°</td><td>${Number.isFinite(f.rpPowered) ? esc(fromCentre(f.rpPowered, f.body)) : '—'}<br><small>ballistic ${Number.isFinite(f.rpBallistic) ? esc(fromCentre(f.rpBallistic, f.body)) : '—'}</small></td><td>${flag}</td></tr>`;
   }).join('');
   return `<div class="${r.ok ? 'pl-ok' : 'pl-fail'}">${seq.map(name).join(' → ')}: departure C3 ${(r.c3 / 1e6).toFixed(2)} km²/s², arrival v∞ ${(r.arrivalVInf / 1e3).toFixed(2)} km/s, Δv estimate ${(r.totalDv / 1e3).toFixed(2)} km/s (departure + |mismatches| + arrival). ${evals > 1 ? `${evals.toLocaleString('en-US')} evaluations, ` : ''}${ms.toFixed(0)} ms.</div>` +
     (rows ? `<table class="pl-table"><tr><th>Flyby</th><th>v∞ in / out</th><th>Mismatch</th><th>Turn</th><th>Required periapsis</th><th>Check</th></tr>${rows}</table>` : '<div class="hint">No intermediate flybys (a direct leg).</div>') +

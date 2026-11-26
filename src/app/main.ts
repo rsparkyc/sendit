@@ -26,7 +26,8 @@ import { Hud, type Readout } from './hud';
 import { bodyOrientation } from './orientation';
 import { Layout } from './layout';
 import { LeaderboardPanel } from './leaderboard-ui';
-import { MapInput, nearestOnScreen } from './map-input';
+import { MapInput } from './map-input';
+import { isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick';
 import { poolSizing } from './schedule';
 import { objectiveBodies, statusOf } from './status';
 import { formatMet, el } from './dom';
@@ -175,7 +176,20 @@ camera.setDistance(Number(params.get('dist') ?? 6e7), true);
 if (params.has('az')) camera.azimuth = Number(params.get('az'));
 if (params.has('el')) camera.elevation = Number(params.get('el'));
 
-const labels = new Labels(overlay, (key) => {
+/** Label clicks: a single click is a pick (labelPick); the second of a double click focuses (focusAt, same precedence as the map). */
+let lastLabelTap: { t: number; x: number; y: number } | null = null;
+const labels = new Labels(overlay, (key, x, y) => {
+  const now = performance.now();
+  if (isDoubleTap(lastLabelTap, now, x, y)) {
+    lastLabelTap = null;
+    focusAt(x, y, true, key);
+    return;
+  }
+  lastLabelTap = { t: now, x, y };
+  labelPick(key);
+}, canvas);
+/** What a single click on a label (or the map near one) does. */
+function labelPick(key: string): void {
   const at = labelPoint(key);
   if (key.startsWith('pn:')) {
     const c = crossings[Number(key.slice(3))];
@@ -200,7 +214,7 @@ const labels = new Labels(overlay, (key) => {
     const x = listed.find((y) => y.index === i);
     if (x && document.documentElement.classList.contains('touch')) showTapPop(null, at.x, at.y, eventExplain(x, bodyName));
   } else store.set({ focus: Number(key) });
-}, canvas);
+}
 /** Screen position of a label's anchor point (for popovers). */
 function labelPoint(key: string): { x: number; y: number } {
   const e = overlay.querySelector(`[data-key="${CSS.escape(key)}"]`) as HTMLElement | null;
@@ -458,16 +472,23 @@ function showTapPop(t: number | null, x: number, y: number, text?: string): void
       if (p) addNodeAt(p.t);
     };
     kids.push(el('span', { className: 'tp-t', textContent: pointReadout(t) }), add);
+    if (!document.documentElement.classList.contains('touch')) kids.push(el('span', { className: 'tp-hint', textContent: 'or N' }));
   }
   const close = el('button', { className: 'btn', type: 'button', textContent: '✕', ariaLabel: 'Dismiss' });
   close.onclick = hideTapPop;
   kids.push(close);
   tapPop.replaceChildren(...kids.filter((k): k is HTMLElement => !!k));
   tapPop.hidden = false;
+  placeTapPop(x, y);
+}
+function placeTapPop(x: number, y: number): void {
   const W = window.innerWidth;
   const pw = Math.min(300, W - 16);
   tapPop.style.left = `${Math.max(8, Math.min(W - pw - 8, x - pw / 2))}px`;
-  tapPop.style.top = `${Math.max(60, y - 74)}px`;
+  // Never over the picked point (a second click there must reach the map): above it, or below if no room.
+  const h = tapPop.offsetHeight || 80;
+  const above = y - h - 20;
+  tapPop.style.top = `${above >= 60 ? above : y + 20}px`;
 }
 
 new MapInput(canvas, {
@@ -478,28 +499,130 @@ new MapInput(canvas, {
   changed: () => {
     viewDirty = true;
   },
+  // A click never adds a node: on the trajectory it picks that point (select, then "Add node here" or N / Enter);
+  // near a marker it goes to the marker, by the same precedence as a double click (pick.ts). Bodies have no single-click action.
   tap(x, y, type) {
-    const touch = type !== 'mouse';
-    const t = pickTrajectory(x, y, touch ? 32 : 14);
-    if (t === null || t < simulationStartOffset(store.get().plan.start)) {
+    const c = pickTarget(candidatesAt(x, y, type !== 'mouse', false));
+    if (!c) {
       hideTapPop();
       return;
     }
-    if (touch) {
-      showTapPop(t, x, y);
-      hoverShowAt(pickScreen.x, pickScreen.y, null); // the same marker the mouse hover shows
-    } else addNodeAt(t);
+    if (c.kind === 'trajectory') selectPoint(Number(c.key), x, y);
+    else {
+      hideTapPop();
+      labelPick(c.key);
+    }
   },
-  doubleTap(x, y) {
-    hideTapPop();
-    const rect = canvas.getBoundingClientRect();
-    const i = nearestOnScreen(n, (k, out) => scene.project(lastFramePos, 3 * k, camera.position, out), x - rect.left, y - rect.top, 44);
-    if (i >= 0) store.set({ focus: i });
+  doubleTap(x, y, type) {
+    focusAt(x, y, type !== 'mouse');
   },
 });
-const lastFramePos = new Float64Array(3 * n);
 
-/** Nearest drawn trajectory sample to a screen point (within 12 px), as mission time. */
+/** Candidates under or near a client point, for pickTarget. Occluded markers and far-side trajectory points are never candidates. */
+function candidatesAt(x: number, y: number, touch: boolean, withBodies: boolean, preferKey?: string): PickCandidate[] {
+  const rect = canvas.getBoundingClientRect();
+  const px = x - rect.left;
+  const py = y - rect.top;
+  const R = touch ? 28 : 14;
+  const out: PickCandidate[] = [];
+  for (const it of lastItems) {
+    const kind = kindOfLabel(it.key);
+    if (!kind || kind === 'body' || !it.onScreen) continue;
+    if (it.key === preferKey) {
+      out.push({ kind, key: it.key, screenDist: 0, depth: 0 });
+      continue;
+    }
+    if (it.occluded) continue;
+    const d = Math.hypot(it.x - px, it.y - py);
+    if (d <= R) out.push({ kind, key: it.key, screenDist: d, depth: 0 });
+  }
+  if (withBodies) {
+    const pr = { x: 0, y: 0 };
+    for (let i = 0; i < n; i++) {
+      if (!scene.project(lastFramePos, 3 * i, camera.position, pr)) continue;
+      const dist = Math.hypot(lastFramePos[3 * i] - camera.position[0], lastFramePos[3 * i + 1] - camera.position[1], lastFramePos[3 * i + 2] - camera.position[2]);
+      const rad = scene.pixelRadius(BODIES[i].radius, dist);
+      const d = Math.hypot(pr.x - px, pr.y - py);
+      const hit = String(i) === preferKey || (d <= Math.max(rad, touch ? 22 : 10) && !behindBody(lastFramePos, 3 * i, i));
+      if (hit) out.push({ kind: 'body', key: String(i), screenDist: d, depth: dist - BODIES[i].radius });
+    }
+  }
+  const t = pickTrajectory(x, y, R);
+  if (t !== null && t >= simulationStartOffset(store.get().plan.start)) out.push({ kind: 'trajectory', key: String(t), screenDist: Math.hypot(pickScreen.x - x, pickScreen.y - y), depth: 0 });
+  return out;
+}
+
+/** Double click / double tap: focus what is under the pointer (precedence in pick.ts). Never adds or removes anything. */
+function focusAt(x: number, y: number, touch: boolean, preferKey?: string): void {
+  hideTapPop();
+  const c = pickTarget(candidatesAt(x, y, touch, true, preferKey));
+  if (!c) return;
+  const s = store.get();
+  if (c.kind === 'spacecraft') focusCraftAt(null);
+  else if (c.kind === 'node' || c.kind === 'event') {
+    const t = markerTime(c.key);
+    if (c.key.startsWith('node:') || c.key.startsWith('burn:')) store.set({ selectedNode: Number(c.key.split(':')[1]) });
+    if (c.key.startsWith('ev:')) store.set({ selectedEvent: Number(c.key.slice(3)) });
+    if (t !== null) focusCraftAt(t);
+  } else if (c.kind === 'site') focusSite(c.key);
+  else if (c.kind === 'body') {
+    const i = Number(c.key);
+    if (s.focus !== i) store.set({ focus: i });
+    // Frame it: the disc fills about two thirds of the view height.
+    const half = (scene.camera.fov * Math.PI) / 360;
+    camera.setDistance((BODIES[i].radius / Math.sin(half)) * 1.5);
+  } else if (c.kind === 'trajectory') focusCraftAt(s.plan.epoch + Number(c.key));
+  lastFocusPick = c;
+}
+let lastFocusPick: PickCandidate | null = null;
+
+/** Absolute time of a node, burn-end, event or AN / DN marker. */
+function markerTime(key: string): number | null {
+  if (key.startsWith('pn:')) return crossings[Number(key.slice(3))]?.t ?? null;
+  const m = markers.find((x) => x.key === key) ?? burnEnds.flatMap((b) => [b.start, b.end]).find((x) => x.key === key);
+  return m ? m.t : null;
+}
+
+/** Focus the spacecraft (at time t: the time cursor moves there), at a distance that shows its neighbourhood. */
+function focusCraftAt(t: number | null): void {
+  const s = store.get();
+  camera.refocus();
+  if (t !== null) store.set({ t, paused: true, loadingTarget: t, focus: SPACECRAFT });
+  else store.set({ focus: SPACECRAFT });
+  const tt = t ?? s.t;
+  let d = 2e6;
+  if (trajectory && stateAt(trajectory, tt, tmpState) && eph.evaluate(tt, tmpPos, null)) {
+    const di = bodyIndex(dominantBody(tt - s.plan.epoch));
+    if (di >= 0) d = 0.5 * Math.hypot(tmpState[0] - tmpPos[3 * di], tmpState[1] - tmpPos[3 * di + 1], tmpState[2] - tmpPos[3 * di + 2]);
+  }
+  camera.setDistance(Math.max(5e4, Math.min(2e10, d)));
+}
+
+/** Focus Earth with the launch site facing the camera, in the centre of the view. */
+function focusSite(key: string): void {
+  const p = siteFrame.get(key);
+  if (earth < 0 || !p) return;
+  if (store.get().focus !== earth) store.set({ focus: earth });
+  const dx = p[0] - lastFramePos[3 * earth], dy = p[1] - lastFramePos[3 * earth + 1], dz = p[2] - lastFramePos[3 * earth + 2];
+  const r = Math.hypot(dx, dy, dz);
+  camera.azimuth = Math.atan2(dy, dx);
+  camera.elevation = Math.max(-1.55, Math.min(1.55, Math.asin(dz / r)));
+  camera.setDistance(BODIES[earth].radius * 2.2);
+  viewDirty = true;
+}
+
+/** Single click on the trajectory: the time cursor moves to that point and a popover offers "Add node here". */
+function selectPoint(tm: number, x: number, y: number): void {
+  const t = store.get().plan.epoch + tm;
+  store.set({ t, paused: true, loadingTarget: t });
+  showTapPop(tm, x, y);
+}
+const lastFramePos = new Float64Array(3 * n);
+/** Label items of the last rendered frame (canvas px), for hit tests; launch sites in frame coordinates. */
+let lastItems: LabelItem[] = [];
+const siteFrame = new Map<string, Float64Array>();
+
+/** Nearest drawn, visible (not behind a body) trajectory sample to a client point (within `radius` px), as mission time. */
 function pickTrajectory(x: number, y: number, radius = 14): number | null {
   const path = trajectoryPathCache;
   if (!path) return null;
@@ -512,7 +635,8 @@ function pickTrajectory(x: number, y: number, radius = 14): number | null {
   for (let i = 0; i < path.times.length; i++) {
     if (!scene.project(path.points, 3 * i, camera.position, pr)) continue;
     const d2 = (pr.x - px) ** 2 + (pr.y - py) ** 2;
-    if (d2 < best) {
+    // Far-side points hidden behind a body are not hit-testable.
+    if (d2 < best && !behindBody(path.points, 3 * i)) {
       best = d2;
       bestT = path.times[i];
       pickScreen.x = pr.x + rect.left;
@@ -537,7 +661,7 @@ function pointReadout(tm: number): string {
   return `${formatMet(tm, 0)} · ${fromSurface(alt, BODIES[di].id)} · ${v.toFixed(0)} m/s (${BODIES[di].name})`;
 }
 
-// Pointer feedback: over a point a click would add a node at, a crosshair cursor, a marker on the curve and a readout.
+// Pointer feedback: over a point a click would pick, a crosshair cursor, a marker on the curve and a readout.
 // Same hit test and radius as the click (pickTrajectory, 14 px).
 const hoverMark = el('div', { className: 'hover-mark' });
 const hoverRead = el('div', { className: 'hover-read' });
@@ -585,7 +709,7 @@ canvas.addEventListener('pointermove', (e) => {
         return;
       }
       canvas.classList.add('add-here');
-      hoverShowAt(pickScreen.x, pickScreen.y, `${pointReadout(t)} · click: add node`);
+      hoverShowAt(pickScreen.x, pickScreen.y, `${pointReadout(t)} · click: pick this point`);
     });
   }
   hoverQueued = { x: e.clientX, y: e.clientY };
@@ -598,7 +722,15 @@ function addNodeAt(t: number): void {
 window.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-  if (e.ctrlKey || e.metaKey || planner.isOpen || (e.target as HTMLElement).closest?.('dialog')) return;
+  if (planner.isOpen || (e.target as HTMLElement).closest?.('dialog')) return;
+  // Undo / redo of plan edits (text fields keep their own undo: handled above by returning early).
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyZ' || e.code === 'KeyY')) {
+    e.preventDefault();
+    if (e.code === 'KeyY' || e.shiftKey) editor.redo();
+    else editor.undo();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey) return;
   const s = store.get();
   const i = s.selectedNode;
   const level = e.shiftKey ? 2 : e.altKey ? 0 : 1;
@@ -629,7 +761,11 @@ window.addEventListener('keydown', (e) => {
     store.set({ paused: !s.paused });
   } else if (e.key === ',') hud.stepWarp(-1);
   else if (e.key === '.') hud.stepWarp(1);
-  else if (e.key === 'n' || e.key === 'N') nodesPanel.addAtCursor();
+  else if ((e.key === 'n' || e.key === 'N' || e.key === 'Enter') && tapPick) {
+    const p = tapPick;
+    hideTapPop();
+    addNodeAt(p.t);
+  } else if (e.key === 'n' || e.key === 'N') nodesPanel.addAtCursor();
 });
 
 // ---------------------------------------------------------------------------
@@ -658,6 +794,8 @@ interface Marker {
   priority: number;
   color: string;
   title?: string;
+  /** Absolute time of the marked point. */
+  t: number;
 }
 let markers: Marker[] = [];
 /** Ignition / cutoff marker pairs; drawn only when they are far enough apart on screen. */
@@ -773,7 +911,9 @@ function updateDrawn(): void {
   r.plan.burns.forEach((b, i) => {
     last = Math.max(last, r.plan.epoch + b.start + (r.result.burns[i]?.burnTime ?? b.duration));
   });
-  drawn = drawnEnd(viewSettings, last, periodAt(Math.min(end, last)), end);
+  const period = periodAt(Math.min(end, last));
+  drawn = drawnEnd(viewSettings, last, period, end);
+  viewOptions.setOrbitContext(period);
 }
 /** Orbital period about the dominant body at absolute time t; NaN if unbound. */
 function periodAt(t: number): number {
@@ -910,6 +1050,7 @@ function rebuildMarkers(frame: FrameSpec): void {
       priority: x.failure ? 900 : s.selectedEvent === x.index ? 800 : x.role === 'closest' ? 20 : 12,
       color: x.failure ? '#ff4d4d' : x.role === 'closest' ? '#ffd36b' : '#9fc6ff',
       title: eventExplain(x, bodyName),
+      t: x.ev.t,
     });
   }
   // Nodes of the replayed plan, at the node (burn centre), and each burn's flown ignition and cutoff.
@@ -919,7 +1060,7 @@ function rebuildMarkers(frame: FrameSpec): void {
       const pos = place(r.plan.epoch + x.node.t);
       if (!pos) return;
       const sel = s.selectedNode === i;
-      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: '#ff8a3d', title: `Maneuver node ${i + 1}: the centre of a planned burn. Tap to edit it.` });
+      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: '#ff8a3d', title: `Maneuver node ${i + 1}: the centre of a planned burn. Tap to edit it, double-tap to focus it.`, t: r.plan.epoch + x.node.t });
       const flown = r.result.burns[i];
       if (!flown || !(flown.burnTime > 0)) return;
       const t0 = r.plan.epoch + r.plan.burns[i].start;
@@ -929,8 +1070,8 @@ function rebuildMarkers(frame: FrameSpec): void {
       const b = place(t1);
       if (!a || !b) return;
       const dur = flown.burnTime >= 120 ? `${(flown.burnTime / 60).toFixed(1)} min` : `${flown.burnTime.toFixed(0)} s`;
-      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1} start${sel ? ` ${formatMet(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: '#ff8a3d' };
-      const end: Marker = { key: `burn:${i}:e`, text: short ? `■ B${i + 1} cut short · ${dur} · out of propellant` : `■ B${i + 1} end · ${dur}`, cls: `marker burn-end end ${short ? 'short' : ''} ${sel ? 'selected' : ''}`, pos: b, priority: short ? 945 : sel ? 940 : 690, color: short ? '#ff4d4d' : '#ff8a3d' };
+      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1} start${sel ? ` ${formatMet(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: '#ff8a3d', t: t0 };
+      const end: Marker = { key: `burn:${i}:e`, text: short ? `■ B${i + 1} cut short · ${dur} · out of propellant` : `■ B${i + 1} end · ${dur}`, cls: `marker burn-end end ${short ? 'short' : ''} ${sel ? 'selected' : ''}`, pos: b, priority: short ? 945 : sel ? 940 : 690, color: short ? '#ff4d4d' : '#ff8a3d', t: t1 };
       burnEnds.push({ node: `node:${i}`, start, end });
     });
   }
@@ -962,12 +1103,13 @@ const sitePos = new Float64Array(3);
  * camera (the segment camera -> point passes inside a body's sphere). A point
  * on the near surface is not occluded (the closest approach is the point itself).
  */
-function behindBody(p: ArrayLike<number>, po: number): boolean {
+function behindBody(p: ArrayLike<number>, po: number, skip = -1): boolean {
   const c = camera.position;
   const dx = p[po] - c[0], dy = p[po + 1] - c[1], dz = p[po + 2] - c[2];
   const L2 = dx * dx + dy * dy + dz * dz;
   if (!(L2 > 0)) return false;
   for (let i = 0; i < n; i++) {
+    if (i === skip) continue;
     const R = BODIES[i].radius * 0.998;
     const wx = framePos[3 * i] - c[0], wy = framePos[3 * i + 1] - c[1], wz = framePos[3 * i + 2] - c[2];
     const u = (wx * dx + wy * dy + wz * dz) / L2;
@@ -1242,8 +1384,10 @@ function tick(now: number): void {
     siteAndAxisTitles.clear();
     if (earth >= 0) {
       const de = Math.hypot(framePos[3 * earth] - camera.position[0], framePos[3 * earth + 1] - camera.position[1], framePos[3 * earth + 2] - camera.position[2]);
-      const big = scene.pixelRadius(BODIES[earth].radius, de) > 200;
-      if ((s.frame.kind === 'surface' && s.frame.center === earth) || big) {
+      // Sites only when Earth is a real disc on screen; their names only when it is large (the selected site always named).
+      const pxE = scene.pixelRadius(BODIES[earth].radius, de);
+      siteFrame.clear();
+      if (pxE > 40) {
         const selSite = launchOf(s.plan)?.site;
         if (Number.isFinite(bodyOrientation(earth, t, ROT_S))) {
           mul3(fs.axes, ROT_S, ROT_F);
@@ -1256,9 +1400,10 @@ function tick(now: number): void {
             const on = scene.project(sitePos, 0, camera.position, proj);
             const sel = site.id === selSite;
             const key = `site:${site.id}`;
+            siteFrame.set(key, Float64Array.from(sitePos));
             const title = `Launch site ${site.name} (${site.latDeg.toFixed(2)}°, ${site.lonDeg.toFixed(2)}°)${sel ? ', the selected site' : ''}.`;
             siteAndAxisTitles.set(key, title);
-            items.push({ key, text: siteShort(site.name), color: '#7dffb0', priority: sel ? 500 : 40, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker site${sel ? ' selected' : ''}`, title, occluded: on && behindBody(sitePos, 0) });
+            items.push({ key, text: sel || pxE > 320 ? siteShort(site.name) : '', color: '#7dffb0', priority: sel ? 500 : 40, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker site${sel ? ' selected' : ''}`, title, occluded: on && behindBody(sitePos, 0) });
           }
         }
       }
@@ -1276,6 +1421,16 @@ function tick(now: number): void {
     }
     labels.update(items);
     lastFramePos.set(framePos);
+    lastItems = items;
+    // A picked trajectory point: the popover follows the spacecraft (which is at that point); it closes when time moves on.
+    if (tapPick && !tapPop.hidden) {
+      const tp = s.plan.epoch + tapPick.t;
+      if (Math.abs((s.loadingTarget ?? s.t) - tp) > 0.5) hideTapPop();
+      else if (scVisible && Math.abs(t - tp) <= 0.5 && scene.project(scFrame, 0, camera.position, proj)) {
+        const rc = canvas.getBoundingClientRect();
+        placeTapPop(proj.x + rc.left, proj.y + rc.top);
+      }
+    }
 
     // Readouts.
     const ro: Readout[] = [];
@@ -1334,11 +1489,34 @@ Object.assign(window, {
     leaderboard,
     /** Frames actually rendered so far (render-on-demand check). */
     renders: () => renderCount,
+    /** Map pick at a client point: the candidates (kinds, keys) and the winner by the precedence in pick.ts. */
+    pickAt(x: number, y: number, touch = false, withBodies = true): { candidates: PickCandidate[]; winner: PickCandidate | null } {
+      const candidates = candidatesAt(x, y, touch, withBodies);
+      return { candidates, winner: pickTarget(candidates) };
+    },
+    /** Last double-click / double-tap focus pick (kind and key), for tests. */
+    lastFocusPick: () => lastFocusPick,
+    /** Screen position (client px) of a map label's anchor, or null if it is not drawn. */
+    labelAt(key: string): { x: number; y: number; occluded: boolean } | null {
+      const it = lastItems.find((i) => i.key === key);
+      if (!it || !it.onScreen) return null;
+      const rc = canvas.getBoundingClientRect();
+      return { x: it.x + rc.left, y: it.y + rc.top, occluded: !!it.occluded };
+    },
+    /** Whether the trajectory point at mission time t is hidden behind a body. */
+    occludedAt(tMission: number): boolean | null {
+      const path = trajectoryPathCache;
+      if (!path) return null;
+      const t = store.get().plan.epoch + tMission;
+      let best = 0;
+      for (let i = 0; i < path.times.length; i++) if (Math.abs(path.times[i] - t) < Math.abs(path.times[best] - t)) best = i;
+      return behindBody(path.points, 3 * best);
+    },
     listedEvents: () => listed,
     bodies: BODIES.map((b) => b.id),
     frameKey: () => frameKey(store.get().frame, (i) => BODIES[i].id),
     /** Screen position of the drawn trajectory at mission time t (for tests clicking on it). */
-    screenAt(tMission: number): { x: number; y: number } | null {
+    screenAt(tMission: number, visibleOnly = false): { x: number; y: number } | null {
       const path = trajectoryPathCache;
       if (!path) return null;
       const t = store.get().plan.epoch + tMission;
@@ -1346,6 +1524,7 @@ Object.assign(window, {
       for (let i = 0; i < path.times.length; i++) if (Math.abs(path.times[i] - t) < Math.abs(path.times[best] - t)) best = i;
       const pr = { x: 0, y: 0 };
       if (!scene.project(path.points, 3 * best, camera.position, pr)) return null;
+      if (visibleOnly && behindBody(path.points, 3 * best)) return null;
       const rect = canvas.getBoundingClientRect();
       return { x: pr.x + rect.left, y: pr.y + rect.top };
     },

@@ -24,7 +24,9 @@ const DAY = 86400;
 function fly(m: MissionEntry, plan: MissionPlan) {
   const shared = decodePlan(encodePlan(plan)); // as a player receiving the link would
   const r = replayWithSamples(shared, world, replayOptions(m.def));
-  const ev = evaluateMission(m.def, r.result, world, shared.epoch)!;
+  // With the plan, as the game and the server do: the launch site's own limits apply.
+  const ev = evaluateMission(m.def, r.result, world, shared.epoch, shared)!;
+  if (shared.start.kind === 'launch') expect(ev.site).toBe(shared.start.site);
   console.log(`${m.id}: ${r.result.outcome} ${r.result.reason} success=${ev.success} score=${ev.score} dv=${ev.deltaV.toFixed(1)} t=${(ev.missionTime / DAY).toFixed(2)}d digest=${r.result.digest} (${r.ms.toFixed(0)} ms)\n  ` +
     ev.objectives.map((o) => `${o.ok ? 'ok' : 'NO'} ${o.objective.kind}: ${o.detail}`).join('\n  '));
   return { r, ev };

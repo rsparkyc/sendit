@@ -229,6 +229,15 @@ html.touch .node-row, html.touch .event-row { min-height: 44px; padding: 8px; al
 .node-row:hover, .event-row:hover { background: rgba(255,255,255,0.06); }
 .node-row.selected, .event-row.selected { border-color: rgba(255, 138, 61, 0.8); background: rgba(255, 138, 61, 0.12); }
 .node-row.selected .nidx::after { content: ' ◀'; }
+.nrow-acts { margin-left: auto; display: inline-flex; gap: 4px; align-self: center; }
+.nact-btn { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.nact-btn.toggle { border-color: rgba(159, 198, 255, 0.6); color: #cfe0ff; }
+.nact-btn.danger { border-color: rgba(255, 110, 110, 0.7); color: #ffb3b3; background: rgba(255, 77, 77, 0.1); }
+.nact-btn.danger:hover { background: rgba(255, 77, 77, 0.25); }
+.parked-row { opacity: 0.85; border-style: dashed; border-color: var(--line); }
+.hist-group { display: inline-flex; gap: 4px; margin-left: auto; }
+.btn:disabled { opacity: 0.4; cursor: default; }
+.tp-hint { color: var(--muted); font-size: 11px; align-self: center; }
 .node-row.invalid { border-color: rgba(255, 110, 110, 0.7); }
 .node-row.invalid .nidx::before { content: '⚠ '; }
 .nidx { color: var(--burn); font-weight: 700; }
@@ -268,20 +277,23 @@ table.burns td { text-align: right; padding: 1px 3px; }
 .tn-ctl { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .tn-ctl input { flex: 1 1 5em; width: 100%; text-align: right; }
 .tn-ctl input.met-input { text-align: left; flex-basis: 9.5em; }
-.tn-steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; }
+.tn-steps { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(48px, 1.25fr) repeat(3, minmax(0, 1fr)); gap: 3px; }
 .tn-step { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1px 2px; min-width: 0; line-height: 1.05; }
 .tn-arrows { font-size: 13px; letter-spacing: -1px; }
 .tn-sub { font-size: 11px; color: var(--muted); white-space: nowrap; }
-.tn-step.dec:nth-child(3) { margin-right: 4px; }
-.tn-zero { flex: none; min-width: 26px; padding: 0 6px; }
-.tn-neg { display: none; }
-.tn-pad { flex: none; width: 30px; min-height: 26px; display: flex; align-items: center; justify-content: center; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; font-size: 11px; background: repeating-linear-gradient(90deg, transparent 0 11px, rgba(255,255,255,0.08) 11px 12px); }
-.tn-pad.dragging { border-color: var(--accent); color: var(--accent); }
+.tn-zero, .tn-neg { flex: none; min-width: 28px; padding: 0 6px; }
+/* Drag strip between the decrease and increase buttons: a grip with a visible "drag" label. */
+.tn-pad { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; min-height: 30px; line-height: 1.05; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tn-pad .tn-sub { color: var(--accent); }
+.tn-grip { font-size: 13px; letter-spacing: 1px; white-space: nowrap; }
+.tn-pad:hover, .tn-pad:focus-visible { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.tn-pad.dragging { background: var(--accent); color: var(--bg, #000); }
+.tn-pad.dragging .tn-sub { color: inherit; }
 html.touch .tuner { grid-template-columns: 1fr; }
 html.touch .tn-steps { grid-column: 1; }
 html.touch .tn-step { min-height: 44px; }
 html.touch .tn-zero, html.touch .tn-neg { display: block; min-width: 44px; min-height: 44px; }
-html.touch .tn-pad { width: 56px; min-height: 44px; font-size: 14px; }
+html.touch .tn-pad { min-height: 44px; }
 
 /* Timeline. */
 .scrubber { display: flex; align-items: center; gap: 8px; padding: 4px 10px; }
@@ -464,3 +476,9 @@ canvas#view.add-here { cursor: crosshair; }
 
 /* A full-height sheet leaves no room for the timeline above it (it would slide under the status bar). */
 #hud[data-mode="sheet"][data-sheet="full"] .bottom { display: none; }
+/* Leaderboard launch-site filter and site column. */
+.lb-site-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.lb-site-row select { flex: 1; min-width: 0; }
+html.touch .lb-site-row select { min-height: 44px; }
+.lb-site-cell { font-size: 11px; color: var(--muted); max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-info { margin: 2px 0 4px; }

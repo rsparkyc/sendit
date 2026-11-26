@@ -89,6 +89,13 @@ async function solvedLunarFlyby(page: Page): Promise<void> {
   expect(await page.evaluate(() => (window as any).sendit.store.get().replay.evaluation.success)).toBe(true);
 }
 
+/** The mission's current version, as the server lists it (never hard-coded: missions get new versions). */
+async function currentVersion(h: Handler, id: string): Promise<string> {
+  const r = await h('GET', 'http://x/api/leaderboard/missions', {}, undefined);
+  expect(r.status, r.body).toBe(200);
+  return String(JSON.parse(r.body).missions.find((m: { id: string }) => m.id === id).version);
+}
+
 const encodedPlan = (page: Page) => page.evaluate(() => new URLSearchParams(new URL((window as any).sendit.shareUrl()).hash.slice(1)).get('p')!);
 
 test.describe('phone', () => {
@@ -199,8 +206,9 @@ test.describe('phone', () => {
 
     // 25 earlier players flew the same plan (so the player's entry is beyond the first page).
     const plan = await encodedPlan(page);
+    const missionVersion = await currentVersion(h, 'lunar-flyby');
     for (let i = 0; i < 25; i++) {
-      const body = JSON.stringify({ missionId: 'lunar-flyby', missionVersion: '1', plan, name: `Pilot ${i + 1}`, secret: `seed${i}`.padEnd(43, 'x') });
+      const body = JSON.stringify({ missionId: 'lunar-flyby', missionVersion, plan, name: `Pilot ${i + 1}`, secret: `seed${i}`.padEnd(43, 'x') });
       const r = await h('POST', 'http://x/api/leaderboard/submit', { 'cloudfront-viewer-address': `203.0.113.${i + 1}:443`, 'content-length': String(body.length) }, body);
       expect(r.status, r.body).toBe(200);
     }
@@ -326,6 +334,49 @@ test.describe('desktop', () => {
     page.on('dialog', (d) => void d.accept());
     await dlg.getByRole('button', { name: 'View flight' }).click();
     await expect(dlg).not.toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('launch sites: a Kourou flight is judged by Kourou\'s limits, ranked on the Kourou and all-sites boards; site filter', async ({ page }) => {
+    const errors = watch(page);
+    const h = harness.makeLeaderboard(checkpoints);
+    await serve(page, h);
+    await solvedLunarFlyby(page); // launched from Kourou, not the mission's default site
+    const def = JSON.parse((await h('GET', 'http://x/api/leaderboard/missions', {}, undefined)).body).missions.find((m: any) => m.id === 'lunar-flyby');
+    const kourou = def.sites.find((x: any) => x.id === 'kourou');
+    const others = def.sites.filter((x: any) => x.offered && x.id !== 'kourou');
+    expect(kourou.offered).toBe(true);
+    const kName = String(kourou.name).split(',')[0];
+    // The objectives shown are Kourou's limits (the ones evaluate applies), not another site's.
+    const fmt = (v: number) => `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m/s`;
+    await expect(page.locator('.objectives')).toContainText(`Use at most ${fmt(kourou.maxDeltaV)}`);
+    for (const o of others.filter((x: any) => x.maxDeltaV !== kourou.maxDeltaV)) await expect(page.locator('.objectives')).not.toContainText(`Use at most ${fmt(o.maxDeltaV)}`);
+    expect(await page.evaluate(() => (window as any).sendit.store.get().replay.evaluation.site)).toBe('kourou');
+    const other = others[0].id;
+    await page.getByRole('button', { name: 'Submit to leaderboard' }).click();
+    const dlg = page.locator('dialog.lb');
+    await dlg.locator('#lb-name').fill('Kira');
+    await dlg.getByRole('button', { name: 'Submit flight' }).click();
+    await expect(dlg.locator('.ok-line')).toBeVisible({ timeout: 60_000 });
+    // Both rank sets: all sites and the site flown.
+    await expect(dlg.locator('.lb-result thead')).toContainText('All sites');
+    await expect(dlg.locator('.lb-result thead')).toContainText(kName);
+    await expect(dlg.locator('.lb-site-rank').first()).toContainText('#1');
+    await page.screenshot({ path: `${SHOTS}/desktop-6-site-ranks.png` });
+    await dlg.getByRole('button', { name: 'View leaderboard' }).click();
+    // Filter defaults to the plan's site; All sites is first.
+    const sel = dlg.locator('select.lb-site');
+    await expect(sel).toHaveValue('kourou');
+    expect(await sel.locator('option').first().textContent()).toBe('All sites');
+    await expect(dlg.locator('tr.me')).toContainText('Kira');
+    await expect(dlg.locator('tr.me .lb-site-cell')).toContainText(kName);
+    await sel.selectOption('all');
+    await expect(dlg.locator('tr.me')).toContainText('Kira');
+    await expect(dlg.locator('tr.me .lb-site-cell')).toContainText(kName);
+    await page.screenshot({ path: `${SHOTS}/desktop-7-all-sites.png` });
+    await sel.selectOption(other);
+    await expect(dlg.locator('tr.me')).toHaveCount(0);
+    await expect(dlg.locator('.lb-mine')).toContainText('no entry from');
     expect(errors).toEqual([]);
   });
 });

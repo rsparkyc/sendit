@@ -34,6 +34,24 @@ export function niceStep(span: number, maxTicks: number): number {
   return STEPS[STEPS.length - 1];
 }
 
+/**
+ * Axis step for a window [w0, w1] (absolute s; labels are mission time from `ep`) drawn `W` px wide:
+ * the finest nice step whose longest label (at ~7 px per character of the 11 px monospace font,
+ * plus a gap) still fits between neighbouring ticks. Long flights get coarse, readable steps.
+ */
+export function axisStep(w0: number, w1: number, ep: number, W: number, charPx = 7, gapPx = 16): number {
+  const span = w1 - w0;
+  for (const st of STEPS) {
+    const count = span / st;
+    if (count > Math.max(2, Math.floor(W / 40))) continue;
+    let longest = 0;
+    const first = Math.ceil((w0 - ep) / st) * st;
+    for (let m = first, k = 0; ep + m <= w1 + 1e-6 && k < 80; m += st, k++) longest = Math.max(longest, axisLabel(m, st).length);
+    if (W / Math.max(1, count) >= longest * charPx + gapPx) return st;
+  }
+  return STEPS[STEPS.length - 1];
+}
+
 /** Axis label for mission time `t` (s) at step `step`: drops units finer than the step. */
 export function axisLabel(t: number, step: number): string {
   const sign = t < 0 ? '−' : '';
@@ -316,7 +334,7 @@ export class Timeline {
     this.ovCursor.style.left = `${((s.t - a) / (b - a)) * 100}%`;
     // Axis.
     const W = this.range.getBoundingClientRect().width || 300;
-    const step = niceStep(w1 - w0, Math.max(2, Math.floor(W / 70)));
+    const step = axisStep(w0, w1, s.plan.epoch, W);
     const ep = s.plan.epoch;
     const first = Math.ceil((w0 - ep) / step) * step;
     const labels: HTMLElement[] = [];

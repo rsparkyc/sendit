@@ -22,9 +22,23 @@ import { eventLabel, listEvents, type ListedEvent } from './events-view';
 import { groupCrossings, type PlaneCrossing } from './plane-nodes';
 import { formatDistance, formatSpeed } from './format';
 import {
-  LAUNCH_SITES, PAR_SCORE, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
-  type MissionPlan, type Objective, type PlanFrame,
+  LAUNCH_SITES, PAR_SCORE, allowedSites, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
+  type MissionDefinition, type MissionPlan, type Objective, type PlanFrame,
 } from './mission-layer';
+
+/** The mission as flown from the plan's launch site (that site's limits); unchanged for a free start. */
+export function defForPlan(def: MissionDefinition, plan: MissionPlan): MissionDefinition {
+  return plan.start.kind === 'launch' ? missionForSite(def, plan.start.site) : def;
+}
+
+/** "Ref 3,167 m/s, 2.9 d · limits 3,500 m/s, 7.0 d" for an offered site, or the reason it is not offered. */
+export function siteSummary(def: MissionDefinition, site: string): string | null {
+  const o = siteOption(def, site);
+  if (!o) return null;
+  if (!o.offered) return `Not offered: ${o.reason}`;
+  const d = (x: number) => (x >= DAY ? `${(x / DAY).toFixed(1)} d` : `${(x / 3600).toFixed(1)} h`);
+  return `Reference ${fmtDv(o.deltaV)}, ${d(o.time)} · limits ${fmtDv(o.maxDeltaV)}, ${d(o.maxTime)}`;
+}
 import { conformance, craftPerformance, launchOf, missionById, MISSIONS, SPACECRAFT_PRESETS } from './missions';
 import { budget, dvMagnitude, elementsFromState, nodesOf, stateFromElements, type OrbitElements } from './nodes';
 import { BODIES, bodyIndex } from './physics';
@@ -138,7 +152,9 @@ export class MissionPanel {
       this.objectives.replaceChildren();
       if (m?.def) {
         const results = ev?.objectives ?? [];
-        for (const o of m.def.objectives) {
+        // Limits as for the plan's launch site: the same ones `evaluate` applies.
+        const def = defForPlan(m.def, s.plan);
+        for (const o of def.objectives) {
           const r = results.find((x) => x.objective === o) ?? results.find((x) => JSON.stringify(x.objective) === JSON.stringify(o));
           const state = !r ? 'pending' : r.ok ? 'ok' : 'no';
           const short = !!r && !!s.replay && tooShort(r, s.replay.result.outcome);
@@ -164,7 +180,8 @@ export class MissionPanel {
         } else setText(this.score, ev ? (ev.ruleViolations?.length ? 'Not scored: the plan breaks the mission rules' : 'Objectives not met yet') : '');
         this.score.className = `score${ev?.success ? ' success' : ''}`;
         const sc = m.def.scoring;
-        setText(this.par, `Par (the author's solution): Δv ${fmtDv(sc.deltaVRef)}, ${(sc.timeRef / DAY).toFixed(1)} d. Matching par scores ${PAR_SCORE.toLocaleString('en-US')}; less Δv and less time score higher. Leaderboards also rank by Δv alone and by time alone.`);
+        const siteNote = m.def.launchSites?.length ? ` Par is the reference site's solution and the same for every site; the Δv and time limits above are for the chosen site${s.plan.start.kind === 'launch' ? ` (${LAUNCH_SITES.find((x) => x.id === (s.plan.start as { site: string }).site)?.name ?? ''})` : ''}.` : '';
+        setText(this.par, `Par (the author's solution): Δv ${fmtDv(sc.deltaVRef)}, ${(sc.timeRef / DAY).toFixed(1)} d.${siteNote} Matching par scores ${PAR_SCORE.toLocaleString('en-US')}; less Δv and less time score higher. Leaderboards also rank by Δv alone and by time alone.`);
         const issues = conformance(m, s.plan);
         setText(this.rules, issues.length ? `Mission rules: ${issues.map((i) => i.message).join('; ')}` : '');
       } else {
@@ -201,6 +218,9 @@ export class StartPanel {
   private readonly orbitBox = el('div', { className: 'orbit-box' });
   // Launch.
   private readonly site = el('select', { title: 'Launch site' });
+  /** What the chosen site costs or buys in this mission: its reference solution and its limits. */
+  private readonly siteInfo = el('div');
+  private siteKey = '';
   private readonly liftoff = el('input', { type: 'text', spellcheck: false, title: 'Liftoff, TDB: YYYY-MM-DD HH:MM[:SS]', className: 'date-input' });
   private readonly az: HTMLInputElement;
   private readonly alt: HTMLInputElement;
@@ -229,6 +249,7 @@ export class StartPanel {
       }
     };
     for (const s of LAUNCH_SITES) this.site.append(el('option', { value: s.id, textContent: `${s.name} (${s.latDeg.toFixed(1)}°)` }));
+    this.siteInfo.className = 'hint site-info';
     const launch = () => this.launch();
     this.site.onchange = () => {
       const l = launch();
@@ -272,6 +293,7 @@ export class StartPanel {
     };
     this.launchBox.append(
       row('Site', this.site),
+      this.siteInfo,
       this.corridor,
       row('Liftoff', this.liftoff),
       el('div', { className: 'row steps' }, b('−1h', () => stepTime(-3600)), b('−10m', () => stepTime(-600)), b('−1m', () => stepTime(-60)), b('+1m', () => stepTime(60)), b('+10m', () => stepTime(600)), b('+1h', () => stepTime(3600)), b('+1d', () => stepTime(DAY))),
@@ -358,6 +380,26 @@ export class StartPanel {
     }
   }
 
+  /** Site options for the current mission: offered ones with their reference and limits, the others disabled with the reason. */
+  private syncSites(current: string): void {
+    const missionId = this.ctx.store.get().missionId;
+    const def = missionById(missionId)?.def;
+    if (this.siteKey !== missionId) {
+      this.siteKey = missionId;
+      const allowed = def ? allowedSites(def) : undefined;
+      for (const opt of [...this.site.options]) {
+        const site = LAUNCH_SITES.find((x) => x.id === opt.value)!;
+        const o = def ? siteOption(def, site.id) : undefined;
+        const off = !!allowed && !allowed.includes(site.id);
+        opt.disabled = off;
+        const extra = o && o.offered ? ` · ref ${Math.round(o.deltaV).toLocaleString('en-US')} m/s, max ${o.maxDeltaV.toLocaleString('en-US')} m/s` : off ? ' · not offered' : '';
+        opt.textContent = `${site.name} (${site.latDeg.toFixed(1)}°)${extra}`;
+        opt.title = def ? (siteSummary(def, site.id) ?? '') : '';
+      }
+    }
+    setText(this.siteInfo, def ? (siteSummary(def, current) ?? '') : '');
+  }
+
   private render(plan: MissionPlan): void {
     const st = plan.start;
     setValue(this.kind, st.kind);
@@ -373,6 +415,7 @@ export class StartPanel {
         this.azWarn.textContent = `Unknown launch site ${l.site}`;
         return;
       }
+      this.syncSites(l.site);
       setValue(this.site, l.site);
       setValue(this.liftoff, formatCalendar(tdbToCalendar(l.time)));
       setValue(this.az, String(+l.azimuthDeg.toFixed(4)));
@@ -511,6 +554,8 @@ export class NodesPanel {
   private readonly engineSel = el('select', { title: 'Engine' });
   private readonly readout = el('div', { className: 'node-readout' });
   private readonly nodeErr = el('div', { className: 'error' });
+  private readonly undoBtn = el('button', { className: 'btn small hist', type: 'button', textContent: '↶ Undo' });
+  private readonly redoBtn = el('button', { className: 'btn small hist', type: 'button', textContent: '↷ Redo' });
 
   constructor(private readonly ctx: UiContext) {
     fillBodySelect(this.frameSel, (i) => BODIES[i].id, [{ value: '@inertial', label: 'Inertial (ICRF x y z)' }]);
@@ -578,13 +623,23 @@ export class NodesPanel {
     }));
     const actions = el('div', { className: 'row wrap' },
       btn('Go to node', () => { const i = sel(); if (i !== null) this.goTo(i); }),
-      btn('Disable', () => { const i = sel(); if (i !== null) ctx.editor.disableNode(i); }),
-      btn('Delete', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }, 'Delete key'),
+      nodeAction('Disable', 'toggle', 'Disable this node (kept below, Enable brings it back)', () => { const i = sel(); if (i !== null) ctx.editor.disableNode(i); }),
+      nodeAction('Delete node', 'danger', 'Delete this node (Delete key; Undo brings it back)', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }),
       btn('Target flyby…', () => { const i = sel(); if (i !== null) ctx.openPlanner?.('target', i); }, 'Correct this burn toward a closest-approach altitude at a body'));
     this.detail.append(this.timeTuner.root, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), this.readout, this.nodeErr, actions);
     const addCursor = btn('+ Node at cursor', () => this.addAtCursor(), 'Add a burn at the time cursor (or click the trajectory)');
     const planner = btn('Transfer planner…', () => ctx.openPlanner?.('transfer'), 'Porkchop plots, departure burns, flyby targeting and chains');
-    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or tap / click the trajectory' }), planner), this.list, this.detail, this.parked);
+    this.undoBtn.setAttribute('aria-label', 'Undo the last plan edit (Ctrl or ⌘ Z)');
+    this.redoBtn.setAttribute('aria-label', 'Redo (Shift Ctrl or ⌘ Z)');
+    this.undoBtn.onclick = () => ctx.editor.undo();
+    this.redoBtn.onclick = () => ctx.editor.redo();
+    const syncHistory = () => {
+      this.undoBtn.disabled = !ctx.editor.history.canUndo;
+      this.redoBtn.disabled = !ctx.editor.history.canRedo;
+    };
+    ctx.editor.onHistory(syncHistory);
+    syncHistory();
+    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or pick a point on the trajectory' }), planner, el('span', { className: 'hist-group' }, this.undoBtn, this.redoBtn)), this.list, this.detail, this.parked);
     ctx.store.subscribe((s, p) => {
       if (s.plan !== p.plan || s.selectedNode !== p.selectedNode || s.replay !== p.replay || s.parked !== p.parked) this.render();
     });
@@ -648,6 +703,9 @@ export class NodesPanel {
         x.short ? el('div', { className: 'nerr', textContent: 'Not enough propellant: this burn will be cut short' }) : null);
       r.onclick = () => this.ctx.store.set({ selectedNode: i });
       activatable(r, `Burn ${i + 1}`);
+      r.append(el('span', { className: 'nrow-acts' },
+        nodeAction('Disable', 'toggle', `Disable burn ${i + 1}`, () => this.ctx.editor.disableNode(i)),
+        nodeAction('Delete', 'danger', `Delete burn ${i + 1}`, () => this.ctx.editor.removeNode(i))));
       this.list.append(r);
     });
     // Detail.
@@ -680,13 +738,15 @@ export class NodesPanel {
     // Parked.
     this.parked.replaceChildren();
     if (s.parked.length) {
-      this.parked.append(el('div', { className: 'sub', textContent: 'Disabled' }));
+      this.parked.append(el('div', { className: 'sub', textContent: 'Disabled (not flown)' }));
       s.parked.forEach((n, k) => {
-        const en = el('button', { className: 'btn small', textContent: 'Enable', type: 'button' });
-        en.onclick = () => this.ctx.editor.enableParked(k);
-        const del = el('button', { className: 'btn small', textContent: '×', type: 'button', title: 'Delete' });
-        del.onclick = () => this.ctx.editor.deleteParked(k);
-        this.parked.append(el('div', { className: 'node-row parked-row' }, el('span', { className: 'nmet', textContent: formatMet(n.t, 0) }), el('span', { className: 'ndv', textContent: fmtDv(dvMagnitude(n.dv)) }), en, del));
+        this.parked.append(el('div', { className: 'node-row parked-row' },
+          el('span', { className: 'nidx', textContent: 'off' }),
+          el('span', { className: 'nmet', textContent: formatMet(n.t, 0) }),
+          el('span', { className: 'ndv', textContent: fmtDv(dvMagnitude(n.dv)) }),
+          el('span', { className: 'nrow-acts' },
+            nodeAction('Enable', 'toggle', `Enable the disabled node at ${formatMet(n.t, 0)}`, () => this.ctx.editor.enableParked(k)),
+            nodeAction('Delete', 'danger', `Delete the disabled node at ${formatMet(n.t, 0)}`, () => this.ctx.editor.deleteParked(k)))));
       });
     }
   }
@@ -948,6 +1008,18 @@ export class ResultsPanel {
 // ---------------------------------------------------------------------------
 
 /** A clickable row reachable and operable from the keyboard. */
+/** A node action button (Disable / Enable look alike; Delete in the danger style). Its click does not select the row. */
+function nodeAction(text: string, kind: 'toggle' | 'danger', label: string, f: () => void): HTMLButtonElement {
+  const b = el('button', { className: `btn small nact-btn ${kind}`, type: 'button', textContent: text });
+  b.setAttribute('aria-label', label);
+  b.onclick = (e) => {
+    e.stopPropagation();
+    f();
+  };
+  b.addEventListener('keydown', (e) => e.stopPropagation());
+  return b;
+}
+
 function activatable(e: HTMLElement, label?: string): void {
   e.tabIndex = 0;
   e.setAttribute('role', 'button');

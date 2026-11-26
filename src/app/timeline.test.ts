@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { axisLabel, clampWindow, cluster, MIN_WINDOW, niceStep, zoomWindow } from './timeline';
+import { axisLabel, axisStep, clampWindow, cluster, MIN_WINDOW, niceStep, zoomWindow } from './timeline';
 import { drawnEnd } from './view-settings';
 
 describe('timeline math', () => {
@@ -19,6 +19,15 @@ describe('timeline math', () => {
     expect(zoomWindow(0, 100, 50, 1e-6, 0, 1000)[1] - zoomWindow(0, 100, 50, 1e-6, 0, 1000)[0]).toBe(MIN_WINDOW);
     expect(zoomWindow(0, 1000, 500, 10, 0, 1000)).toEqual([0, 1000]);
     expect(clampWindow(900, 1100, 0, 1000)).toEqual([800, 1000]);
+  });
+  it('axis labels never crowd: long flights get coarse steps', () => {
+    for (const [span, W] of [[2 * 365.25 * 86400, 360], [30 * 86400, 300], [10 * 86400, 1200], [3 * 3600, 360], [400 * 86400, 800]]) {
+      const st = axisStep(0, span, 0, W);
+      let longest = 0;
+      for (let m = 0; m <= span; m += st) longest = Math.max(longest, axisLabel(m, st).length);
+      expect((W * st) / span).toBeGreaterThanOrEqual(longest * 7 + 16);
+    }
+    expect(axisStep(0, 3 * 86400, 0, 300)).toBeGreaterThanOrEqual(86400 / 2);
   });
   it('clusters close ticks', () => {
     const g = cluster([{ x: 10 }, { x: 12 }, { x: 40 }, { x: 13 }], 5);

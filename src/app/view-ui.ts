@@ -38,6 +38,7 @@ export class ViewOptions {
     const span = el('select', { className: 'span-sel', title: 'How much of the flight after the last burn is drawn (display only; the whole flight is still replayed and scored)' });
     for (const [v, t] of [['auto', 'Auto (escape: all; orbit: 3 revs + faint rest)'], ['rev1', '1 revolution'], ['rev3', '3 revolutions'], ['time', 'A chosen time'], ['all', 'Everything']] as const) span.append(el('option', { value: v, textContent: t }));
     span.value = s.span;
+    this.spanSel = span;
     span.onchange = () => {
       s.span = span.value as DrawSpan;
       commit();
@@ -136,7 +137,7 @@ export class ViewOptions {
     this.root = section('Trajectory & overlays', 'traj-view',
       el('label', { className: 'frow' }, el('span', { textContent: 'Distances' }), dist),
       el('div', { className: 'sub', textContent: 'Drawn after the last burn' }),
-      span, this.daysRow,
+      span, this.daysRow, this.spanNote,
       el('label', { className: 'check' }, bright, ' Bright: every revolution drawn (else only the one at the cursor)'),
       el('div', { className: 'sub', textContent: 'Flight length (replayed and scored)' }),
       durRow, this.durNote,
@@ -162,6 +163,26 @@ export class ViewOptions {
   showRadius(radii: number, km: number): void {
     setValue(this.radiusInput, String(radii));
     setText(this.radiusText, `${radii.toFixed(2)} radii · ${Math.round(km).toLocaleString('en-US')} km from the centre`);
+  }
+
+  private spanSel!: HTMLSelectElement;
+  private readonly spanNote = el('div', { className: 'hint span-note' });
+
+  /**
+   * Tell the span control whether the flight ends on a closed orbit (period in s, NaN if not).
+   * Revolutions of a closed orbit retrace one ellipse, so 1 and 3 revolutions look the same: the
+   * 3-revolution choice is then marked as such and a note says what does differ.
+   */
+  setOrbitContext(period: number): void {
+    const closed = Number.isFinite(period) && period > 0;
+    const rev3 = this.spanSel.querySelector('option[value="rev3"]') as HTMLOptionElement;
+    const rev1 = this.spanSel.querySelector('option[value="rev1"]') as HTMLOptionElement;
+    setText(rev1, closed ? '1 revolution (one ellipse)' : '1 revolution');
+    setText(rev3, closed ? '3 revolutions (same ellipse retraced)' : '3 revolutions');
+    const p = period >= 86400 ? `${(period / 86400).toFixed(2)} d` : `${(period / 3600).toFixed(2)} h`;
+    setText(this.spanNote, closed && ['auto', 'rev1', 'rev3'].includes(this.settings.span)
+      ? `Closed orbit, period ${p}: every revolution retraces the same ellipse, so 1 and 3 revolutions look alike; perturbations show only over longer spans ("Everything").`
+      : '');
   }
 
   setNodeSummary(text: string): void {

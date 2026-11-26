@@ -8,6 +8,14 @@ import { PHYSICS_MODEL, type MissionPlan, type PlanFrame, type Spacecraft } from
 import { addNode, disableNode, enableNode, nodesOf, removeNode, setSpacecraft, updateNode, type ManeuverNode, type Vec3 } from './nodes';
 import type { AppState, Store } from './store';
 import type { FrameSpec } from './frames';
+import { History } from './history';
+
+/** What undo restores: the plan, the disabled nodes and the selection. */
+export interface PlanSnapshot {
+  plan: MissionPlan;
+  parked: readonly ManeuverNode[];
+  selectedNode: number | null;
+}
 import { bodyIndex } from './physics';
 
 /** Missions that read best in a particular frame start in it (the player can change it in View). */
@@ -17,16 +25,69 @@ const SUGGESTED_FRAME: Readonly<Record<string, () => FrameSpec>> = {
 };
 
 export class Editor {
+  /** Undo / redo of plan edits (add, delete, move, values, enable / disable, start, spacecraft, duration). */
+  readonly history = new History<PlanSnapshot>();
+  private readonly historyListeners = new Set<() => void>();
+
   constructor(
     private readonly store: Store<AppState>,
     readonly fingerprint: string,
   ) {}
 
+  /** Called after any change to what undo / redo can do. */
+  onHistory(f: () => void): void {
+    this.historyListeners.add(f);
+  }
+
+  private snapshot(): PlanSnapshot {
+    const s = this.store.get();
+    return { plan: s.plan, parked: s.parked, selectedNode: s.selectedNode };
+  }
+
+  private historyChanged(): void {
+    for (const f of this.historyListeners) f();
+  }
+
+  /** Record the current state before an edit; `key` coalesces a burst of edits of one value. */
+  private record(key: string | null = null): void {
+    this.history.record(this.snapshot(), key, performance.now());
+    this.historyChanged();
+  }
+
+  /** End a coalescing run (e.g. at the end of a drag). */
+  sealHistory(): void {
+    this.history.seal();
+  }
+
+  undo(): boolean {
+    const s = this.history.undo(this.snapshot());
+    if (s) this.store.set({ plan: s.plan, parked: s.parked, selectedNode: s.selectedNode });
+    this.historyChanged();
+    return !!s;
+  }
+
+  redo(): boolean {
+    const s = this.history.redo(this.snapshot());
+    if (s) this.store.set({ plan: s.plan, parked: s.parked, selectedNode: s.selectedNode });
+    this.historyChanged();
+    return !!s;
+  }
+
+  private resetHistory(): void {
+    this.history.clear();
+    this.historyChanged();
+  }
+
   get plan(): MissionPlan {
     return this.store.get().plan;
   }
 
-  private commit(plan: MissionPlan, extra: Partial<AppState> = {}): void {
+  private commit(plan: MissionPlan, extra: Partial<AppState> = {}, key: string | null = null): void {
+    if (plan === this.plan && !('parked' in extra)) {
+      this.store.set(extra);
+      return;
+    }
+    this.record(key);
     this.store.set({ plan, ...extra });
   }
 
@@ -34,12 +95,14 @@ export class Editor {
     const m = missionById(id) ?? MISSIONS[0];
     const plan = initialPlan(m, this.fingerprint);
     const frame = SUGGESTED_FRAME[m.id]?.();
+    this.resetHistory();
     this.store.set({ missionId: m.id, plan, parked: [], selectedNode: null, selectedEvent: null, replay: null, t: plan.epoch + 600, loadingTarget: plan.epoch + 600, ...(frame ? { frame } : {}) });
   }
 
   /** Replace the whole plan (shared link, saved state). */
   load(missionId: string, plan: MissionPlan, parked: readonly ManeuverNode[] = []): void {
     const m = missionForLoadedPlan(missionId, plan);
+    this.resetHistory();
     this.store.set({ missionId: m.missionId, plan, parked, selectedNode: null, selectedEvent: null, replay: null, ...(m.notice ? { notice: m.notice } : {}) });
   }
 
@@ -83,9 +146,10 @@ export class Editor {
     return r.index;
   }
 
-  updateNode(i: number, patch: Partial<ManeuverNode>): void {
+  /** `key` coalesces repeated edits of one value into one undo step (see History). */
+  updateNode(i: number, patch: Partial<ManeuverNode>, key: string | null = null): void {
     const r = updateNode(this.plan, i, patch);
-    this.commit(r.plan, { selectedNode: r.index });
+    this.commit(r.plan, { selectedNode: r.index }, key);
   }
 
   /** Add `delta` to delta-v component `axis` (0 prograde, 1 normal, 2 radial) of node i. */
@@ -94,13 +158,13 @@ export class Editor {
     if (!n) return;
     const dv: Vec3 = [...n.dv];
     dv[axis] = roundTo(dv[axis] + delta, Math.abs(delta));
-    this.updateNode(i, { dv });
+    this.updateNode(i, { dv }, `dv:${i}:${axis}`);
   }
 
   nudgeTime(i: number, delta: number): void {
     const n = nodesOf(this.plan)[i]?.node;
     if (!n) return;
-    this.updateNode(i, { t: roundTo(n.t + delta, Math.abs(delta)) });
+    this.updateNode(i, { t: roundTo(n.t + delta, Math.abs(delta)) }, `t:${i}`);
   }
 
   removeNode(i: number): void {
@@ -123,7 +187,7 @@ export class Editor {
   deleteParked(k: number): void {
     const parked = [...this.store.get().parked];
     parked.splice(k, 1);
-    this.store.set({ parked });
+    this.commit(this.plan, { parked });
   }
 }
 

@@ -10,7 +10,7 @@
 import { el, section } from './dom';
 import type { Editor } from './editor';
 import { explainError, loadClient, type BoardEntry, type BoardId, type ErrorLike, type MeResponse, type MissionsResponse, type RankInfo, type SubmitResponse } from './leaderboard-layer';
-import { decodePlan, encodePlan, validatePlan } from './mission-layer';
+import { LAUNCH_SITES, allowedSites, decodePlan, encodePlan, validatePlan } from './mission-layer';
 import { missionById } from './missions';
 import type { AppState, Store } from './store';
 
@@ -29,6 +29,8 @@ function missionVersion(id: string): string | null {
 
 const fmtValue = (b: BoardId, v: { score: number; deltaV: number; missionTime: number }) =>
   b === 'combined' ? v.score.toLocaleString('en-US') : b === 'deltaV' ? `${v.deltaV.toLocaleString('en-US', { maximumFractionDigits: 1 })} m/s` : `${(v.missionTime / 86400).toFixed(2)} d`;
+/** "Cape Canaveral SFS SLC-40, Florida, USA" -> "Cape Canaveral SFS SLC-40". */
+const siteName = (id: string) => LAUNCH_SITES.find((x) => x.id === id)?.name.split(',')[0] ?? id;
 const fmtDate = (iso: string) => (iso ? iso.slice(0, 10) : '');
 const rankText = (r: RankInfo | null) => (!r ? '—' : r.rank !== null ? `#${r.rank.toLocaleString('en-US')}` : `beyond #${(r.beyond ?? 0).toLocaleString('en-US')}`);
 
@@ -196,13 +198,14 @@ export class LeaderboardPanel {
     const rows = BOARDS.map((b) => el('tr', {},
       el('th', { scope: 'row', textContent: b.label }),
       el('td', { textContent: fmtValue(b.id, r.result) }),
-      el('td', { className: 'lb-rank', textContent: rankText(r.ranks[b.id]) }),
-      el('td', { textContent: r.improved[b.id] ? '▲ new best' : 'best kept' })));
+      el('td', { className: 'lb-rank', textContent: `${rankText(r.ranks[b.id])}${r.improved[b.id] ? ' ▲' : ''}` }),
+      el('td', { className: 'lb-rank lb-site-rank', textContent: `${rankText(r.siteRanks[b.id])}${r.siteImproved[b.id] ? ' ▲' : ''}` })));
     const view = el('button', { className: 'btn primary', type: 'button', textContent: 'View leaderboard' });
     view.onclick = () => void this.openBoards();
     return el('div', { className: 'lb-result' },
       el('p', { className: 'ok-line', textContent: `✓ Accepted as ${r.player.name} #${r.player.tag}` }),
-      el('table', { className: 'lb-table' }, el('thead', {}, el('tr', {}, el('th', { textContent: 'Board' }), el('th', { textContent: 'Server result' }), el('th', { textContent: 'Your rank' }), el('th', { textContent: '' }))), el('tbody', {}, ...rows)),
+      el('table', { className: 'lb-table' }, el('thead', {}, el('tr', {}, el('th', { textContent: 'Board' }), el('th', { textContent: 'Server result' }), el('th', { textContent: 'All sites' }), el('th', { textContent: siteName(r.site) }))), el('tbody', {}, ...rows)),
+      el('p', { className: 'hint', textContent: `Your ranks on the all-sites boards and on the ${siteName(r.site)} boards (flown from there); ▲ new best.` }),
       el('p', { className: 'hint', textContent: same ? `Replay digest ${r.result.digest} matches your flight bit for bit.` : `Server digest ${r.result.digest} (yours ${localDigest || '—'}).` }),
       view);
   }
@@ -225,21 +228,33 @@ export class LeaderboardPanel {
     let cursor: string | null = null;
     let rows: BoardEntry[] = [];
     const exposed = !!this.missions?.exposePlans;
+    // Launch-site filter: All sites first, then the sites the mission offers. Defaults to the site of the current plan.
+    const ALL = c.ALL_SITES;
+    const entry = this.missions?.missions.find((x) => x.id === s.missionId);
+    const offered = entry?.sites ? entry.sites.filter((x) => x.offered).map((x) => x.id) : [...(allowedSites(m.def!) ?? LAUNCH_SITES.map((x) => x.id))];
+    const planSite = s.plan.start.kind === 'launch' ? s.plan.start.site : null;
+    let site = planSite && offered.includes(planSite) ? planSite : ALL;
+    const siteSel = el('select', { className: 'lb-site', title: 'Launch site' });
+    siteSel.setAttribute('aria-label', 'Launch site');
+    siteSel.append(el('option', { value: ALL, textContent: 'All sites' }), ...offered.map((id) => el('option', { value: id, textContent: siteName(id) })));
+    siteSel.value = site;
     const draw = () => {
       const b = this.board;
       const pid = me?.player?.pid;
       list.replaceChildren(rows.length
         ? el('table', { className: 'lb-table' },
-          el('thead', {}, el('tr', {}, el('th', { textContent: 'Rank' }), el('th', { textContent: 'Player' }), el('th', { textContent: BOARDS.find((x) => x.id === b)!.label }), el('th', { textContent: 'Date' }), exposed ? el('th', { textContent: '' }) : null)),
+          el('thead', {}, el('tr', {}, el('th', { textContent: 'Rank' }), el('th', { textContent: 'Player' }), el('th', { textContent: 'Site' }), el('th', { textContent: BOARDS.find((x) => x.id === b)!.label }), el('th', { textContent: 'Date' }), exposed ? el('th', { textContent: '' }) : null)),
           el('tbody', {}, ...rows.map((e) => {
             const tr = el('tr', { className: e.pid === pid ? 'me' : '' },
               el('td', { textContent: `${e.rank}` }),
               el('td', {}, el('span', { textContent: e.name }), ' ', el('small', { className: 'tag', textContent: `#${e.tag}` }), e.pid === pid ? el('b', { className: 'you', textContent: ' (you)' }) : null),
+              el('td', { className: 'lb-site-cell', textContent: siteName(e.site) }),
               el('td', { className: 'num', textContent: fmtValue(b, e) }),
               el('td', { textContent: fmtDate(e.submittedAt) }));
             if (exposed) {
               const v = el('button', { className: 'btn small', type: 'button', textContent: 'View flight' });
-              v.onclick = () => void this.viewFlight(s.missionId, version, b, e.pid);
+              const at = site;
+              v.onclick = () => void this.viewFlight(s.missionId, version, b, e.pid, at);
               tr.append(el('td', {}, v));
             }
             return tr;
@@ -249,12 +264,12 @@ export class LeaderboardPanel {
       const r = me?.ranks[b] ?? null;
       const inList = !!pid && rows.some((e) => e.pid === pid);
       mine.replaceChildren(me?.player && r
-        ? el('p', { className: inList ? 'hint' : 'lb-you' }, `You (${me.player.name} #${me.player.tag}): ${rankText(r)} · ${fmtValue(b, r)}`)
-        : el('p', { className: 'hint', textContent: 'You have no entry on this mission yet.' }));
+        ? el('p', { className: inList ? 'hint' : 'lb-you' }, `You (${me.player.name} #${me.player.tag}): ${rankText(r)} · ${fmtValue(b, r)} · ${siteName(r.site)}`)
+        : el('p', { className: 'hint', textContent: site === ALL ? 'You have no entry on this mission yet.' : `You have no entry from ${siteName(site)} yet.` }));
     };
     const load = async (reset: boolean) => {
       try {
-        const page = await c.getBoard(s.missionId, version, this.board, { limit: 20, cursor: reset ? undefined : cursor ?? undefined });
+        const page = await c.getBoard(s.missionId, version, this.board, { site, limit: 20, cursor: reset ? undefined : cursor ?? undefined });
         rows = reset ? [...page.entries] : [...rows, ...page.entries];
         cursor = page.next;
         draw();
@@ -275,19 +290,29 @@ export class LeaderboardPanel {
       tabs.append(t);
     }
     more.onclick = () => void load(false);
-    this.show(el('p', { className: 'hint', textContent: VERIFY_LINE }), tabs, mine, list, more, this.identityView());
-    try {
-      me = await c.getMyRanks(s.missionId, version);
-    } catch {
-      me = null; // own rank is a nicety; the board still shows
-    }
+    const loadMe = async () => {
+      try {
+        me = await c.getMyRanks(s.missionId, version, { site });
+      } catch {
+        me = null; // own rank is a nicety; the board still shows
+      }
+    };
+    siteSel.onchange = async () => {
+      site = siteSel.value;
+      rows = [];
+      cursor = null;
+      await loadMe();
+      await load(true);
+    };
+    this.show(el('p', { className: 'hint', textContent: VERIFY_LINE }), el('label', { className: 'frow lb-site-row' }, el('span', { textContent: 'Launch site' }), siteSel), tabs, mine, list, more, this.identityView());
+    await loadMe();
     await load(true);
   }
 
-  private async viewFlight(missionId: string, version: string, board: BoardId, pid: string): Promise<void> {
+  private async viewFlight(missionId: string, version: string, board: BoardId, pid: string, site: string): Promise<void> {
     try {
       const c = await loadClient();
-      const r = await c.getPlan(missionId, version, board, pid);
+      const r = await c.getPlan(missionId, version, board, pid, { site });
       const plan = decodePlan(r.plan);
       if (validatePlan(plan).length) throw new Error('the stored plan is not valid in this build');
       if (this.store.get().plan.burns.length > 0 && !confirm('Replace your current plan with this flight? Yours stays in its share link only.')) return;
