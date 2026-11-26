@@ -27,6 +27,29 @@ export type Derivative = (t: number, y: Float64Array, out: Float64Array) => void
 /** Fills `scale` with the error scale for each component (same units as y). */
 export type ScaleFn = (y: Float64Array, yNew: Float64Array, scale: Float64Array) => void;
 
+/**
+ * Sparse form of a coefficient row: the indices and values of its non-zero
+ * entries, in ascending index order. Summing only these terms is bit-identical
+ * to the dense sum for finite stage values: the accumulator starts at +0 and
+ * IEEE-754 addition never produces -0 from +0 (round-to-nearest), so adding the
+ * skipped products (each +0 or -0) never changes it. Non-finite stage values
+ * are the exception (0 * Inf = NaN); step() rejects a non-finite error norm
+ * with an exception instead of relying on NaN propagation.
+ */
+interface Sparse { idx: Int32Array; val: Float64Array }
+function sparse(row: readonly number[]): Sparse {
+  const idx: number[] = [];
+  const val: number[] = [];
+  for (let i = 0; i < row.length; i++) if (row[i] !== 0) { idx.push(i); val.push(row[i]); }
+  return { idx: Int32Array.from(idx), val: Float64Array.from(val) };
+}
+const A_SP = A.map(sparse);
+const B_SP = sparse(B);
+const A_EXTRA_SP = A_EXTRA.map(sparse);
+const D_SP = D.map(sparse);
+// E3 and E5 share their zero pattern; the error norm walks the union.
+const E_IDX = Int32Array.from(E5.map((_, i) => i).filter((i) => E5[i] !== 0 || E3[i] !== 0));
+
 const SAFETY = 0.9;
 const MIN_FACTOR = 0.2;
 const MAX_FACTOR = 10;
@@ -51,7 +74,11 @@ export class Dop853 {
   rejected = 0;
 
   private readonly n: number;
-  private readonly K: Float64Array[];
+  /** All 16 stage vectors in one buffer; logical stage i lives at slot kSlot[i]. */
+  private readonly Kf: Float64Array;
+  /** Per-slot views of Kf, handed to the derivative function. */
+  private readonly Kv: Float64Array[];
+  private readonly kSlot: Int32Array;
   private readonly yNew: Float64Array;
   private readonly yTmp: Float64Array;
   private readonly scale: Float64Array;
@@ -64,8 +91,8 @@ export class Dop853 {
   private readonly yOld: Float64Array;
   /** Interpolant coefficients F[0..6] (SciPy Dop853DenseOutput). */
   private readonly F: Float64Array[];
-  /** Stage derivatives in SciPy order for the last step (K[0]/K[12] are swapped by FSAL). */
-  private readonly S: Float64Array[];
+  /** Slots of the stage derivatives in SciPy order for the last step (K[0]/K[12] are swapped by FSAL). */
+  private readonly sSlot: Int32Array;
   private denseReady = false;
 
   constructor(
@@ -80,9 +107,12 @@ export class Dop853 {
     this.scale = new Float64Array(n);
     this.yOld = new Float64Array(n);
     // K[0..12] are the step stages, K[13..15] the lazily evaluated dense-output stages.
-    this.K = [];
-    for (let i = 0; i < N_STAGES_EXTENDED; i++) this.K.push(new Float64Array(n));
-    this.S = this.K.slice();
+    this.Kf = new Float64Array(N_STAGES_EXTENDED * n);
+    this.Kv = [];
+    for (let i = 0; i < N_STAGES_EXTENDED; i++) this.Kv.push(this.Kf.subarray(i * n, (i + 1) * n));
+    this.kSlot = new Int32Array(N_STAGES_EXTENDED);
+    for (let i = 0; i < N_STAGES_EXTENDED; i++) this.kSlot[i] = i;
+    this.sSlot = this.kSlot.slice();
     this.F = [];
     for (let i = 0; i < INTERPOLATOR_POWER; i++) this.F.push(new Float64Array(n));
   }
@@ -93,7 +123,7 @@ export class Dop853 {
     this.y.set(y);
     this.lastRejected = false;
     this.tPrevious = NaN;
-    this.f(t, this.y, this.K[0]);
+    this.f(t, this.y, this.Kv[this.kSlot[0]]);
     this.h = h !== undefined && h > 0 ? h : this.initialStep();
   }
 
@@ -104,13 +134,13 @@ export class Dop853 {
   refresh(): void {
     // The new right-hand side would corrupt the lazy dense stages of the last step.
     this.tPrevious = NaN;
-    this.f(this.t, this.y, this.K[0]);
+    this.f(this.t, this.y, this.Kv[this.kSlot[0]]);
     this.lastRejected = false;
   }
 
   private initialStep(): number {
     const { n, y, scale } = this;
-    const k0 = this.K[0];
+    const k0 = this.Kv[this.kSlot[0]];
     this.scaleFn(y, y, scale);
     let d0 = 0;
     let d1 = 0;
@@ -127,36 +157,55 @@ export class Dop853 {
 
   /** Compute all stages for a step of size h. Leaves the result in yNew / K[12]. */
   private rkStep(h: number): void {
-    const { n, y, yNew, yTmp, K, t, f } = this;
+    const { n, y, yNew, yTmp, Kf, Kv, kSlot, t, f } = this;
+    // nan stays +-0 unless some stage input is non-finite (0 * Inf and 0 * NaN are NaN).
+    let nan = 0;
     for (let s = 1; s < N_STAGES; s++) {
-      const a = A[s];
+      const { idx, val } = A_SP[s];
+      const m = idx.length;
       for (let j = 0; j < n; j++) {
         let sum = 0;
-        for (let i = 0; i < s; i++) sum += a[i] * K[i][j];
-        yTmp[j] = y[j] + h * sum;
+        for (let q = 0; q < m; q++) sum += val[q] * Kf[kSlot[idx[q]] * n + j];
+        const v = y[j] + h * sum;
+        nan += 0 * v;
+        yTmp[j] = v;
       }
-      f(t + C[s] * h, yTmp, K[s]);
+      f(t + C[s] * h, yTmp, Kv[kSlot[s]]);
     }
-    for (let j = 0; j < n; j++) {
-      let sum = 0;
-      for (let i = 0; i < N_STAGES; i++) sum += B[i] * K[i][j];
-      yNew[j] = y[j] + h * sum;
+    {
+      const { idx, val } = B_SP;
+      const m = idx.length;
+      for (let j = 0; j < n; j++) {
+        let sum = 0;
+        for (let q = 0; q < m; q++) sum += val[q] * Kf[kSlot[idx[q]] * n + j];
+        const v = y[j] + h * sum;
+        nan += 0 * v;
+        yNew[j] = v;
+      }
     }
-    f(t + h, yNew, K[N_STAGES]);
+    // Every stage but the last feeds a later stage input or yNew with a non-zero
+    // weight, so a non-finite stage derivative shows up here; the last stage is
+    // the next step's first and is checked then (or by the error norm).
+    if (nan !== 0) throw new Error(`non-finite state in step at t=${t}, h=${h}: state or derivative is not finite`);
+    f(t + h, yNew, Kv[kSlot[N_STAGES]]);
   }
 
   private errorNorm(h: number): number {
-    const { n, y, yNew, K, scale } = this;
+    const { n, y, yNew, Kf, kSlot, scale } = this;
     this.scaleFn(y, yNew, scale);
     let e5 = 0;
     let e3 = 0;
+    const m = E_IDX.length;
     for (let j = 0; j < n; j++) {
       let s5 = 0;
       let s3 = 0;
-      for (let i = 0; i <= N_STAGES; i++) {
-        const k = K[i][j];
-        s5 += E5[i] * k;
-        s3 += E3[i] * k;
+      for (let q = 0; q < m; q++) {
+        const i = E_IDX[q];
+        const k = Kf[kSlot[i] * n + j];
+        // E5 and E3 have the same zero pattern except where both are non-zero,
+        // so these are the dense sums with exact-zero terms skipped.
+        if (E5[i] !== 0) s5 += E5[i] * k;
+        if (E3[i] !== 0) s3 += E3[i] * k;
       }
       s5 /= scale[j];
       s3 /= scale[j];
@@ -176,9 +225,9 @@ export class Dop853 {
     this.t = tNew;
     this.y.set(this.yNew);
     // FSAL: the last stage is the derivative at the new point.
-    const k0 = this.K[0];
-    this.K[0] = this.K[N_STAGES];
-    this.K[N_STAGES] = k0;
+    const k0 = this.kSlot[0];
+    this.kSlot[0] = this.kSlot[N_STAGES];
+    this.kSlot[N_STAGES] = k0;
     this.accepted++;
   }
 
@@ -198,6 +247,12 @@ export class Dop853 {
 
       this.rkStep(h);
       const err = this.errorNorm(h);
+      // A non-finite state or derivative must fail loudly: the skipped zero
+      // coefficients would otherwise not propagate it, and a NaN error norm
+      // would make the controller retry forever.
+      if (!(err >= 0 && err < Infinity)) {
+        throw new Error(`non-finite error norm at t=${this.t}, h=${h}: state or derivative is not finite`);
+      }
 
       if (err < 1) {
         // err^(-1/8) via nested sqrt -- see determinism note at top of file.
@@ -268,34 +323,36 @@ export class Dop853 {
   }
 
   private prepareDense(): void {
-    const { n, K, S, F, yOld, yTmp, y, f } = this;
+    const { n, Kf, Kv, kSlot, sSlot, F, yOld, yTmp, y, f } = this;
     const h = this.hPrev;
     const t0 = this.tPrevious;
     // Undo the FSAL swap: SciPy order is S[0] = f(t0, yOld), S[12] = f(t1, y).
-    S[0] = K[N_STAGES];
-    S[N_STAGES] = K[0];
-    for (let i = 1; i < N_STAGES; i++) S[i] = K[i];
+    sSlot[0] = kSlot[N_STAGES];
+    sSlot[N_STAGES] = kSlot[0];
+    for (let i = 1; i < N_STAGES; i++) sSlot[i] = kSlot[i];
     for (let s = N_STAGES + 1; s < N_STAGES_EXTENDED; s++) {
-      S[s] = K[s];
-      const a = A_EXTRA[s - N_STAGES - 1];
+      sSlot[s] = kSlot[s];
+      const { idx, val } = A_EXTRA_SP[s - N_STAGES - 1];
+      const m = idx.length;
       for (let j = 0; j < n; j++) {
         let sum = 0;
-        for (let i = 0; i < s; i++) sum += a[i] * S[i][j];
+        for (let q = 0; q < m; q++) sum += val[q] * Kf[sSlot[idx[q]] * n + j];
         yTmp[j] = yOld[j] + h * sum;
       }
-      f(t0 + C_EXTRA[s - N_STAGES - 1] * h, yTmp, S[s]);
+      f(t0 + C_EXTRA[s - N_STAGES - 1] * h, yTmp, Kv[sSlot[s]]);
     }
-    const fOld = S[0];
-    const fNew = S[N_STAGES];
+    const fOld = Kv[sSlot[0]];
+    const fNew = Kv[sSlot[N_STAGES]];
     for (let j = 0; j < n; j++) {
       const dy = y[j] - yOld[j];
       F[0][j] = dy;
       F[1][j] = h * fOld[j] - dy;
       F[2][j] = 2 * dy - h * (fNew[j] + fOld[j]);
       for (let r = 0; r < 4; r++) {
-        const d = D[r];
+        const { idx, val } = D_SP[r];
+        const m = idx.length;
         let sum = 0;
-        for (let i = 0; i < N_STAGES_EXTENDED; i++) sum += d[i] * S[i][j];
+        for (let q = 0; q < m; q++) sum += val[q] * Kf[sSlot[idx[q]] * n + j];
         F[3 + r][j] = h * sum;
       }
     }
