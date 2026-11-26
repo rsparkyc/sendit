@@ -1,7 +1,8 @@
 /** Unit tests: name sanitisation, sort-key encoding, identity helpers, SigV4, config. */
 import { describe, expect, it } from 'vitest';
 import { parseLimits } from './config';
-import { LEADERBOARD_INDEXES } from './fake-dynamo';
+import { FakeDynamo, LEADERBOARD_INDEXES } from './fake-dynamo';
+import { DynamoError } from './dynamo';
 import { readAsset } from './node-io';
 import { marshalItem, signV4, unmarshalItem } from './dynamo';
 import { clientIp, ipHashOf, playerHashOf, tagOf } from './identity';
@@ -141,5 +142,35 @@ describe('infra/leaderboard.yaml', () => {
     expect(y).toMatch(/AttributeName: expiresAt\s+Enabled: true/);
     expect(y).toMatch(/PointInTimeRecoveryEnabled: true/);
     expect(y).toMatch(/BillingMode: PAY_PER_REQUEST/);
+  });
+});
+
+describe('fake DynamoDB enforces the request rules real DynamoDB does', () => {
+  const db = () => new FakeDynamo(LEADERBOARD_INDEXES);
+  const rejects = async (op: string, input: Record<string, unknown>, re: RegExp) => {
+    const e = await db().send(op, { TableName: 't', ...input }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(DynamoError);
+    expect((e as DynamoError).code).toBe('ValidationException');
+    expect((e as DynamoError).message).toMatch(re);
+  };
+
+  it('rejects unused and missing expression names and values (the board query without a cursor)', async () => {
+    // The request the read function sent in production.
+    await rejects('Query', { IndexName: 'combined', KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'cPk', '#sk': 'cSk' }, ExpressionAttributeValues: { ':pk': { S: 'm#1#p' } }, Limit: 5 }, /unused in expressions: keys: \{#sk\}/);
+    await rejects('Query', { KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'pk' }, ExpressionAttributeValues: { ':pk': { S: 'x' }, ':extra': { S: 'y' } } }, /unused.*:extra/);
+    await rejects('Query', { KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'pk' } }, /missing placeholder :pk/);
+    await rejects('PutItem', { Item: { pk: { S: 'a' }, sk: { S: 'b' } }, ConditionExpression: 'attribute_not_exists(#pk)', ExpressionAttributeNames: { '#pk': 'pk' }, ExpressionAttributeValues: {} }, /must not be empty/);
+  });
+
+  it('rejects reserved words used bare, bad start keys, COUNT with projection, empty keys, bad numbers, oversized items', async () => {
+    await rejects('PutItem', { Item: { pk: { S: 'a' }, sk: { S: 'b' } }, ConditionExpression: 'attribute_not_exists(name)' }, /reserved keyword: name/);
+    await rejects('Query', { IndexName: 'time', KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'tPk' }, ExpressionAttributeValues: { ':pk': { S: 'x' } }, ExclusiveStartKey: { tPk: { S: 'x' }, tSk: { S: 'y' } } }, /starting key/);
+    await rejects('Query', { KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'pk' }, ExpressionAttributeValues: { ':pk': { S: 'x' } }, Select: 'COUNT', ProjectionExpression: '#pk' }, /COUNT/);
+    await rejects('Query', { IndexName: 'time', KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'tPk' }, ExpressionAttributeValues: { ':pk': { S: 'x' } }, ConsistentRead: true }, /Consistent/);
+    await rejects('GetItem', { Key: { pk: { S: '' }, sk: { S: 'b' } } }, /empty string/);
+    await rejects('PutItem', { Item: { pk: { S: 'a' }, sk: { S: 'b' }, cPk: { S: '' } } }, /empty string/);
+    await rejects('PutItem', { Item: { pk: { S: 'a' }, sk: { S: 'b' }, n: { N: 'NaN' } } }, /invalid number/);
+    await rejects('PutItem', { Item: { pk: { S: 'a' }, sk: { S: 'b' }, big: { S: 'x'.repeat(410 * 1024) } } }, /size/);
+    await rejects('Query', { KeyConditionExpression: '#pk = :pk', ExpressionAttributeNames: { '#pk': 'pk' }, ExpressionAttributeValues: { ':pk': { S: 'x' } }, Limit: 0 }, /Limit/);
   });
 });

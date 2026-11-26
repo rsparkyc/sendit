@@ -119,7 +119,7 @@ describe('leaderboard client', () => {
         if (d.isDirectory()) walk(new URL(`${d.name}/`, dir));
         else if (/\.ts$/.test(d.name) && !/\.test\.ts$/.test(d.name) && !dir.pathname.endsWith('/leaderboard/')) {
           const src = readFileSync(new URL(d.name, dir), 'utf8');
-          if (/^\s*import\s[^;]*['"][^'"]*leaderboard\/client['"]/m.test(src)) offenders.push(d.name);
+          if (/^\s*import\s(?!type\s)[^;]*['"][^'"]*leaderboard\/client['"]/m.test(src)) offenders.push(d.name);
         }
       }
     };

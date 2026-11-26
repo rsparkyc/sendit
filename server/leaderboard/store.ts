@@ -207,7 +207,8 @@ export class Store {
       TableName: this.table,
       IndexName: INDEX[board],
       KeyConditionExpression: afterKey ? '#pk = :pk AND #sk > :after' : '#pk = :pk',
-      ExpressionAttributeNames: { '#pk': `${s}Pk`, '#sk': `${s}Sk` },
+      // DynamoDB rejects unused names / values: #sk only with a cursor.
+      ExpressionAttributeNames: { '#pk': `${s}Pk`, ...(afterKey ? { '#sk': `${s}Sk` } : {}) },
       ExpressionAttributeValues: { ':pk': { S: pk }, ...(afterKey ? { ':after': { S: afterKey } } : {}) },
       ScanIndexForward: true,
       Limit: limit,

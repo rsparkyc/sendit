@@ -78,8 +78,11 @@ function fields<K extends string>(body: unknown, keys: readonly K[]): Record<K, 
   for (const k of Object.keys(o)) {
     if (!(keys as readonly string[]).includes(k)) return fail('unexpected-field', `unexpected field "${k.slice(0, 40)}": the server computes every result itself`);
   }
-  for (const k of keys) if (typeof o[k] !== 'string') return fail('bad-request', `field "${k}" must be a string`);
-  return o as Record<K, string>;
+  // Mission versions are strings on the wire ("1", as /missions returns them); a non-negative integer is accepted too.
+  const v = o.missionVersion;
+  const norm = typeof v === 'number' && Number.isInteger(v) && v >= 0 ? { ...o, missionVersion: String(v) } : o;
+  for (const k of keys) if (typeof norm[k] !== 'string') return fail('bad-request', `field "${k}" must be a string`);
+  return norm as Record<K, string>;
 }
 
 const isReply = (x: unknown): x is Reply => typeof x === 'object' && x !== null && 'status' in x && 'body' in x;

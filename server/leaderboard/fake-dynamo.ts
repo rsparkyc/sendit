@@ -17,6 +17,15 @@
  * Sparse GSIs (an item is indexed only if it has both index key attributes)
  * and INCLUDE projections are modelled.
  *
+ * REQUEST VALIDATION, as real DynamoDB does it (validateRequest / validateItem):
+ * every ExpressionAttributeNames / Values entry must be used by an expression
+ * and every placeholder used must be defined; the maps must not be empty;
+ * reserved words may not appear bare in expressions; Select COUNT cannot be
+ * combined with a projection; an index query's ExclusiveStartKey must carry
+ * the index keys and the table keys; key attributes (table and index) must be
+ * non-empty strings; numbers must be well-formed and at most 38 digits; items
+ * at most 400 KB; Limit a positive integer; unknown request fields refused.
+ *
  * NOT modelled: capacity, throttling and its retries, item size limits (400
  * KB) and the byte-based 1 MB page limit (a fixed item count is used), GSI
  * replication lag (the fake's indexes are always consistent; the real ones
@@ -52,6 +61,7 @@ export class FakeDynamo implements DynamoApi {
     this.calls.push({ op, index: input.IndexName as string | undefined });
     const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
     const values = (input.ExpressionAttributeValues ?? {}) as Record<string, AttributeValue>;
+    validateRequest(op, input, this.indexes);
     switch (op) {
       case 'GetItem': {
         const it = this.items.get(FakeDynamo.id(input.Key as Item));
@@ -59,6 +69,7 @@ export class FakeDynamo implements DynamoApi {
       }
       case 'PutItem': {
         const item = input.Item as Item;
+        validateItem(item, this.indexes);
         const id = FakeDynamo.id(item);
         if (input.ConditionExpression) check(input.ConditionExpression as string, this.items.get(id), names, values);
         this.items.set(id, clone(item));
@@ -71,6 +82,7 @@ export class FakeDynamo implements DynamoApi {
         if (input.ConditionExpression) check(input.ConditionExpression as string, cur, names, values);
         const next: Item = cur ? clone(cur) : clone(key);
         applyUpdate(input.UpdateExpression as string, next, names, values);
+        validateItem(next, this.indexes);
         this.items.set(id, next);
         return {};
       }
@@ -190,3 +202,88 @@ export const LEADERBOARD_INDEXES: Readonly<Record<string, FakeIndex>> = {
   deltaV: { pk: 'dPk', sk: 'dSk', include: ['pid', 'name', 'tag', 'dV'] },
   time: { pk: 'tPk', sk: 'tSk', include: ['pid', 'name', 'tag', 'tV'] },
 };
+
+// ------------------------------------------------------------ validation
+
+/** Part of DynamoDB's reserved-word list (all words the store could plausibly use bare). */
+export const RESERVED = new Set(
+  'ABORT ACTION ADD ALL AND ANY AS ASC AT ATTRIBUTE BETWEEN BY CASE COUNT CREATE DATA DATE DAY DELETE DESC EXISTS FROM GET HASH HIDDEN IN INDEX IS KEY KEYS LIMIT NAME NOT NULL NUMBER OF ON OR ORDER PLAN RANGE RANK REV SCORE SELECT SET SIZE STATUS STRING TABLE TAG TIME TIMESTAMP TTL TYPE UPDATE USER VALUE VALUES VERSION'.split(' '),
+);
+
+const ALLOWED: Record<string, readonly string[]> = {
+  GetItem: ['TableName', 'Key', 'ConsistentRead', 'ProjectionExpression', 'ExpressionAttributeNames'],
+  PutItem: ['TableName', 'Item', 'ConditionExpression', 'ExpressionAttributeNames', 'ExpressionAttributeValues'],
+  UpdateItem: ['TableName', 'Key', 'UpdateExpression', 'ConditionExpression', 'ExpressionAttributeNames', 'ExpressionAttributeValues'],
+  Query: ['TableName', 'IndexName', 'KeyConditionExpression', 'FilterExpression', 'ProjectionExpression', 'ExpressionAttributeNames', 'ExpressionAttributeValues', 'ScanIndexForward', 'Limit', 'Select', 'ExclusiveStartKey', 'ConsistentRead'],
+};
+const KEYWORDS = new Set(['AND', 'OR', 'NOT', 'ADD', 'SET', 'REMOVE', 'DELETE', 'attribute_not_exists', 'attribute_exists', 'if_not_exists', 'begins_with', 'contains', 'size', 'list_append']);
+
+function invalid(msg: string): never {
+  throw new DynamoError('ValidationException', msg, 400);
+}
+
+export function validateRequest(op: string, input: Record<string, unknown>, indexes: Readonly<Record<string, FakeIndex>>): void {
+  const allowed = ALLOWED[op];
+  if (!allowed) return;
+  for (const k of Object.keys(input)) if (!allowed.includes(k)) invalid(`unexpected request field ${k}`);
+  const exprs = ['KeyConditionExpression', 'ConditionExpression', 'UpdateExpression', 'FilterExpression', 'ProjectionExpression'].map((k) => input[k]).filter((x): x is string => typeof x === 'string');
+  const text = exprs.join(' ');
+  for (const [field, prefix] of [['ExpressionAttributeNames', '#'], ['ExpressionAttributeValues', ':']] as const) {
+    const map = input[field] as Record<string, unknown> | undefined;
+    const used = new Set(text.match(prefix === '#' ? /#\w+/g : /:\w+/g) ?? []);
+    if (map !== undefined) {
+      if (Object.keys(map).length === 0) invalid(`${field} must not be empty`);
+      const unused = Object.keys(map).filter((k) => !used.has(k));
+      if (unused.length > 0) invalid(`Value provided in ${field} unused in expressions: keys: {${unused.join(', ')}}`);
+      if (prefix === ':') for (const v of Object.values(map)) validateValue(v as AttributeValue);
+    }
+    for (const u of used) if (!map || !(u in map)) invalid(`${field} missing placeholder ${u}`);
+  }
+  // Bare words in expressions: functions and keywords only; attribute names must be placeholders if reserved.
+  for (const w of text.replace(/[#:]\w+/g, ' ').match(/[A-Za-z_]\w*/g) ?? []) {
+    if (KEYWORDS.has(w) || KEYWORDS.has(w.toUpperCase())) continue;
+    if (RESERVED.has(w.toUpperCase())) invalid(`Attribute name is a reserved keyword; reserved keyword: ${w}`);
+  }
+  if (input.Limit !== undefined && !(Number.isInteger(input.Limit) && (input.Limit as number) > 0)) invalid('Limit must be a positive integer');
+  if (op === 'Query') {
+    if (input.Select === 'COUNT' && input.ProjectionExpression !== undefined) invalid('Cannot specify Select COUNT with a ProjectionExpression');
+    const idx = input.IndexName as string | undefined;
+    if (idx !== undefined && !indexes[idx]) invalid(`The table does not have the specified index: ${idx}`);
+    if (idx !== undefined && input.ConsistentRead === true) invalid('Consistent reads are not supported on global secondary indexes');
+    const start = input.ExclusiveStartKey as Item | undefined;
+    if (start) {
+      const need = idx ? ['pk', 'sk', indexes[idx].pk, indexes[idx].sk] : ['pk', 'sk'];
+      const have = Object.keys(start).sort().join();
+      if (have !== [...new Set(need)].sort().join()) invalid(`The provided starting key is invalid: needs exactly ${need.join(', ')}`);
+    }
+  }
+  if (op === 'GetItem' || op === 'UpdateItem') {
+    const key = input.Key as Item;
+    if (Object.keys(key).sort().join() !== 'pk,sk') invalid('The provided key element does not match the schema');
+    for (const k of ['pk', 'sk']) keyString(key[k], k);
+  }
+}
+
+function keyString(a: AttributeValue | undefined, name: string): void {
+  if (!a || !('S' in a)) invalid(`key attribute ${name} must be a string`);
+  if (a.S.length === 0) invalid(`One or more parameter values are not valid. The AttributeValue for a key attribute cannot contain an empty string value. Key: ${name}`);
+}
+
+function validateValue(a: AttributeValue): void {
+  if ('N' in a) {
+    if (!/^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(a.N)) invalid(`invalid number ${a.N}`);
+    const digits = a.N.replace(/[eE].*$/, '').replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '');
+    if (digits.length > 38) invalid(`number ${a.N} has more than 38 significant digits`);
+  } else if ('M' in a) Object.values(a.M).forEach(validateValue);
+  else if ('L' in a) a.L.forEach(validateValue);
+}
+
+export function validateItem(item: Item, indexes: Readonly<Record<string, FakeIndex>>): void {
+  keyString(item.pk, 'pk');
+  keyString(item.sk, 'sk');
+  for (const ix of Object.values(indexes)) for (const k of [ix.pk, ix.sk]) if (item[k] !== undefined) keyString(item[k], k);
+  Object.values(item).forEach(validateValue);
+  // Item size: attribute names plus values (UTF-8 length of the JSON is a close upper bound).
+  const size = Object.entries(item).reduce((n, [k, v]) => n + new TextEncoder().encode(k).length + new TextEncoder().encode(JSON.stringify(v)).length, 0);
+  if (size > 400 * 1024) invalid('Item size has exceeded the maximum allowed size');
+}

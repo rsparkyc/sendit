@@ -24,6 +24,10 @@
  * times with backoff. Submitting is idempotent on the server (same plan,
  * same result, one entry per player), so a retried submission is safe.
  *
+ * VERSIONS. Mission versions travel as strings ("1", as getMissions returns
+ * them); the functions also take a number (a definition's `version`) and send
+ * it as a string.
+ *
  * SAME ORIGIN. Requests go to /api/leaderboard on the page's own origin
  * (CloudFront routes /api/* to the functions). POST bodies carry their
  * SHA-256 in x-amz-content-sha256, which CloudFront's origin access control
@@ -255,39 +259,39 @@ export function getMissions(o: { signal?: AbortSignal; fresh?: boolean } = {}): 
  * Why a plan / mission would be refused as out of date, or null if it matches
  * the server (a cheap check before submitting; the server checks again).
  */
-export async function checkCompatible(missionId: string, missionVersion: string, plan: { model: number; data: string }, o: { signal?: AbortSignal } = {}): Promise<string | null> {
+export async function checkCompatible(missionId: string, missionVersion: string | number, plan: { model: number; data: string }, o: { signal?: AbortSignal } = {}): Promise<string | null> {
   const m = await getMissions(o);
   if (plan.model !== m.physics.model || plan.data !== m.physics.data) return 'This game version is out of date with the leaderboard. Reload the page and fly the plan again.';
   const cur = m.missions.find((x) => x.id === missionId);
   if (!cur) return 'This mission has no leaderboard.';
-  if (cur.version !== missionVersion) return 'This mission has been updated. Reload the page to get the new version.';
+  if (cur.version !== String(missionVersion)) return 'This mission has been updated. Reload the page to get the new version.';
   return null;
 }
 
 /** Submit a flight. The server re-flies the plan and computes the result itself. */
-export function submitFlight(s: Omit<SubmitRequest, 'secret'>, o: { signal?: AbortSignal } = {}): Promise<SubmitResponse> {
-  const body: SubmitRequest = { missionId: s.missionId, missionVersion: s.missionVersion, plan: s.plan, name: s.name, secret: playerSecret() };
+export function submitFlight(s: Omit<SubmitRequest, 'secret' | 'missionVersion'> & { readonly missionVersion: string | number }, o: { signal?: AbortSignal } = {}): Promise<SubmitResponse> {
+  const body: SubmitRequest = { missionId: s.missionId, missionVersion: String(s.missionVersion), plan: s.plan, name: s.name, secret: playerSecret() };
   return request<SubmitResponse>({ method: 'POST', path: '/submit', body, signal: o.signal, timeoutMs: opts.submitTimeoutMs ?? 60_000 });
 }
 
 /** One page of a board, best first. */
-export function getBoard(missionId: string, missionVersion: string, board: BoardId, o: { limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<BoardResponse> {
+export function getBoard(missionId: string, missionVersion: string | number, board: BoardId, o: { limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<BoardResponse> {
   return request<BoardResponse>({
     method: 'GET',
     path: '/board',
-    query: { mission: missionId, version: missionVersion, board, limit: o.limit, cursor: o.cursor },
+    query: { mission: missionId, version: String(missionVersion), board, limit: o.limit, cursor: o.cursor },
     signal: o.signal,
     timeoutMs: opts.readTimeoutMs ?? 10_000,
   });
 }
 
 /** This player's entry and rank on each board of a mission version (works far outside the top N). */
-export function getMyRanks(missionId: string, missionVersion: string, o: { signal?: AbortSignal } = {}): Promise<MeResponse> {
-  const body: MeRequest = { missionId, missionVersion, secret: playerSecret() };
+export function getMyRanks(missionId: string, missionVersion: string | number, o: { signal?: AbortSignal } = {}): Promise<MeResponse> {
+  const body: MeRequest = { missionId, missionVersion: String(missionVersion), secret: playerSecret() };
   return request<MeResponse>({ method: 'POST', path: '/me', body, signal: o.signal, timeoutMs: opts.readTimeoutMs ?? 10_000 });
 }
 
 /** A stored plan, only if the deployment publishes plans (else LeaderboardError 'plans-not-public'). */
-export function getPlan(missionId: string, missionVersion: string, board: BoardId, pid: string, o: { signal?: AbortSignal } = {}): Promise<PlanResponse> {
-  return request<PlanResponse>({ method: 'GET', path: '/plan', query: { mission: missionId, version: missionVersion, board, pid }, signal: o.signal, timeoutMs: opts.readTimeoutMs ?? 10_000 });
+export function getPlan(missionId: string, missionVersion: string | number, board: BoardId, pid: string, o: { signal?: AbortSignal } = {}): Promise<PlanResponse> {
+  return request<PlanResponse>({ method: 'GET', path: '/plan', query: { mission: missionId, version: String(missionVersion), board, pid }, signal: o.signal, timeoutMs: opts.readTimeoutMs ?? 10_000 });
 }

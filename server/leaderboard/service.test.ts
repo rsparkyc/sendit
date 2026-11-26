@@ -104,6 +104,17 @@ describe('submit: validation and rejection', () => {
     expect(h.flights).toBe(0);
   });
 
+  it('accepts the mission version as the string /missions returns, or as an integer', async () => {
+    const h = new Harness();
+    const r = await h.call('POST', '/api/leaderboard/submit', { body: { missionId: TEST_MISSION.id, missionVersion: TEST_MISSION.version, plan: encode(plan(h.engine)), name: 'a', secret: secret(1) } });
+    expect(r.status).toBe(200);
+    expect(r.body.version).toBe(V);
+    const me = await h.call('POST', '/api/leaderboard/me', { body: { missionId: TEST_MISSION.id, missionVersion: TEST_MISSION.version, secret: secret(1) } });
+    expect(me.body.player.name).toBe('a');
+    expect((await h.call('POST', '/api/leaderboard/me', { body: { missionId: TEST_MISSION.id, missionVersion: 3.5, secret: secret(1) } })).body.error).toBe('bad-request');
+    expect((await h.call('GET', '/api/leaderboard/missions')).body.missions[0].version).toBe(V);
+  });
+
   it('rejects bad secrets and bad names', async () => {
     const h = new Harness();
     let r = await h.submit(1, plan(h.engine), { secret: 'short' });
