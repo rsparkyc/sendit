@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
   build: {
@@ -16,5 +16,6 @@ export default defineConfig({
   },
   worker: { format: 'es' },
   // Several tests build real ephemeris chunks; the 5 s default is too tight on a loaded CI runner.
-  test: { testTimeout: 30_000 },
+  // Other agents' git worktrees under .claude/ are not this checkout's tests.
+  test: { testTimeout: 30_000, exclude: [...configDefaults.exclude, '**/.claude/**'] },
 });

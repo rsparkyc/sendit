@@ -15,8 +15,19 @@
  * mass), which is how planners expect a node chain to behave.
  *
  * Disabled nodes are parked burns kept outside the plan (editor-only state).
+ *
+ * STAGES (format-2 plans: a launch vehicle's lower stages under the
+ * spacecraft). A node is fired by the stage active at its time: the first
+ * stage of the flight (after a vehicle ascent, the upper stage, with the
+ * propellant the ascent left it: planAscent) plus one per separation before
+ * it. The mass chain is the whole stack's. When the requested burns have
+ * emptied the active stage, the next new node is given to the next stage
+ * with a separation one second after the empty stage's last burn ("separate
+ * when empty"); separations already in the plan are kept as they are.
+ * Format-1 plans (spacecraft only) are unchanged, bit for bit.
  */
-import type { MissionPlan, PlanBurn, PlanFrame, Spacecraft } from './mission-layer';
+import { planAscent, vehicleStages, isVehicleLaunch, type MissionPlan, type PlanBurn, type PlanFrame, type PlanSeparation, type Spacecraft } from './mission-layer';
+import { BODY_DATA } from './physics';
 
 /** Standard gravity, m/s^2 (defines Isp; same constant as the physics). */
 export const G0 = 9.80665;
@@ -29,7 +40,7 @@ export interface ManeuverNode {
   /** Requested delta-v, m/s: (prograde, normal, radial-out) for an orbital frame, ICRF x y z for inertial. */
   dv: Vec3;
   frame: PlanFrame;
-  /** Index into spacecraft.engines. */
+  /** Index into the firing stage's engines (spacecraft.engines for a spacecraft-only plan). */
   engine: number;
 }
 
@@ -41,6 +52,63 @@ export interface NodeInfo {
   m1: number;
   /** True if the requested delta-v needs more propellant than is left (the burn will be cut short). */
   short: boolean;
+  /** Stage that fires it (index into lower stages, then the spacecraft). */
+  stage: number;
+}
+
+/** The stack of a plan: its stages, the first one flying, and its propellant then. */
+interface Stack {
+  readonly stages: readonly Spacecraft[];
+  readonly first: number;
+  readonly staged: boolean;
+  readonly prop: number[];
+}
+
+function stackOf(plan: MissionPlan): Stack {
+  const stages = vehicleStages(plan);
+  const staged = plan.format >= 2 && (plan.lowerStages !== undefined || isVehicleLaunch(plan.start));
+  const prop = stages.map((x) => x.wetMass - x.dryMass);
+  let first = 0;
+  if (isVehicleLaunch(plan.start)) {
+    const a = planAscent(plan, BODY_DATA);
+    first = a?.ok ? a.upperStage : Math.max(0, stages.length - 2);
+    if (a?.ok) prop[first] = a.upperPropellant;
+    for (let k = 0; k < first; k++) prop[k] = 0;
+  }
+  return { stages, first, staged, prop };
+}
+
+/** Stack mass with stage k active and `prop` propellant in it. */
+function stackMass(st: Stack, k: number, prop: number): number {
+  return prop + emptyMass(st, k);
+}
+
+/** Stack mass with stage k active and empty (spacecraft-only: its dry mass, exactly). */
+function emptyMass(st: Stack, k: number): number {
+  let m = st.stages[k].dryMass;
+  for (let j = k + 1; j < st.stages.length; j++) m += st.stages[j].wetMass;
+  return m;
+}
+
+/**
+ * Stack mass per active stage along the burns (format 1: the spacecraft's
+ * mass from its wet mass, the same arithmetic as before stages existed).
+ */
+function massChain(st: Stack): number[] {
+  return st.stages.map((x, k) => (st.staged ? stackMass(st, k, st.prop[k]) : x.wetMass));
+}
+
+/** Stage active at mission time t (s after the epoch) given the separations. */
+function activeAt(st: Stack, seps: readonly PlanSeparation[], t: number): number {
+  let k = st.first;
+  for (const s of seps) if (s.time <= t) k++;
+  return Math.min(k, st.stages.length - 1);
+}
+
+/** Stage a burn of the plan fires (lower stages, then the spacecraft). */
+export function stageOfBurn(plan: MissionPlan, b: PlanBurn): Spacecraft {
+  const stages = vehicleStages(plan);
+  return stages[b.stage ?? (plan.lowerStages?.length ?? 0)] ?? plan.spacecraft;
 }
 
 export function dvMagnitude(dv: readonly number[]): number {
@@ -76,24 +144,27 @@ export function burnToNode(burn: PlanBurn, sc: Spacecraft, m0: number): Maneuver
   return { t: burn.start + burn.duration / 2, dv: [d[0] * k, d[1] * k, d[2] * k], frame: burn.frame, engine: burn.engine };
 }
 
-/** Propellant a burn requests, kg (thrust / ve * duration), capped by what is left. */
-function propellant(burn: PlanBurn, sc: Spacecraft, m: number): number {
+/** Propellant a burn requests, kg (thrust / ve * duration), capped by what is left above `empty` (the stack with the stage dry). */
+function propellant(burn: PlanBurn, sc: Spacecraft, m: number, empty: number): number {
   const e = sc.engines[burn.engine] ?? sc.engines[0];
-  return Math.min((e.thrust / (e.isp * G0)) * burn.duration, Math.max(0, m - sc.dryMass));
+  return Math.min((e.thrust / (e.isp * G0)) * burn.duration, Math.max(0, m - empty));
 }
 
 /** Every burn of the plan as a node, with its mass chain. */
 export function nodesOf(plan: MissionPlan): NodeInfo[] {
-  const sc = plan.spacecraft;
-  let m = sc.wetMass;
+  const st = stackOf(plan);
+  const mass = massChain(st);
+  const L = plan.lowerStages?.length ?? 0;
   return plan.burns.map((burn) => {
+    const k = Math.min(burn.stage ?? L, st.stages.length - 1);
+    const sc = st.stages[k];
+    const m = mass[k];
     const node = burnToNode(burn, sc, m);
     const e = sc.engines[burn.engine] ?? sc.engines[0];
     const want = (e.thrust / (e.isp * G0)) * burn.duration;
-    const used = propellant(burn, sc, m);
-    const info = { node, burn, m0: m, m1: m - used, short: want > used * (1 + 1e-12) };
-    m -= used;
-    return info;
+    const used = propellant(burn, sc, m, emptyMass(st, k));
+    mass[k] = m - used;
+    return { node, burn, m0: m, m1: m - used, short: want > used * (1 + 1e-12), stage: k };
   });
 }
 
@@ -106,16 +177,34 @@ function sortNodes(nodes: ManeuverNode[]): ManeuverNode[] {
  * `nodes` (all of them, sorted by time) with the mass chain continuing.
  */
 function rebuild(plan: MissionPlan, keep: number, nodes: ManeuverNode[]): MissionPlan {
-  const sc = plan.spacecraft;
+  const st = stackOf(plan);
+  const mass = massChain(st);
+  const L = plan.lowerStages?.length ?? 0;
   const burns: PlanBurn[] = plan.burns.slice(0, keep);
-  let m = sc.wetMass;
-  for (const b of burns) m -= propellant(b, sc, m);
-  for (const n of nodes) {
-    const b = nodeToBurn(n, sc, m);
-    burns.push(b);
-    m -= propellant(b, sc, m);
+  const seps: PlanSeparation[] = [...(plan.separations ?? [])];
+  const lastEnd: number[] = st.stages.map(() => -Infinity);
+  for (const b of burns) {
+    const k = Math.min(b.stage ?? L, st.stages.length - 1);
+    mass[k] -= propellant(b, st.stages[k], mass[k], emptyMass(st, k));
+    lastEnd[k] = Math.max(lastEnd[k], b.start + b.duration);
   }
-  return { ...plan, burns };
+  for (const n of nodes) {
+    let k = st.staged ? activeAt(st, seps, n.t) : 0;
+    // Separate when empty: the active stage has nothing left and a stage above it does.
+    if (st.staged && mass[k] - emptyMass(st, k) < 1e-6 * st.stages[k].wetMass && k < st.stages.length - 1 && Number.isFinite(lastEnd[k]) && lastEnd[k] + 1 < n.t) {
+      seps.push({ time: lastEnd[k] + 1 });
+      seps.sort((a, b) => a.time - b.time);
+      k++;
+    }
+    const sc = st.stages[k];
+    const b0 = nodeToBurn(n, sc, mass[k]);
+    const b = st.staged ? { ...b0, stage: k } : b0;
+    burns.push(b);
+    mass[k] -= propellant(b, sc, mass[k], emptyMass(st, k));
+    lastEnd[k] = Math.max(lastEnd[k], b.start + b.duration);
+  }
+  const out: MissionPlan = { ...plan, burns };
+  return seps.length !== (plan.separations?.length ?? 0) ? { ...out, separations: seps } : out;
 }
 
 /** Index of `node` (by identity) after sorting, for selection tracking. */
@@ -181,17 +270,20 @@ export function setSpacecraft(plan: MissionPlan, sc: Spacecraft): MissionPlan {
 
 /** Delta-v budget: total ideal delta-v of the spacecraft and what the nodes request. */
 export function budget(plan: MissionPlan): { total: number; requested: number; remaining: number; propellant: number; nodes: NodeInfo[] } {
+  // The spacecraft's own budget (in a staged plan, the lower stages' burns are not counted here).
   const sc = plan.spacecraft;
-  const nodes = nodesOf(plan);
+  const all = nodesOf(plan);
+  const S = plan.lowerStages?.length ?? 0;
+  const own = all.filter((n) => n.stage === S);
   // Ideal total with the engine of the first node (or engine 0).
-  const e = sc.engines[nodes[0]?.burn.engine ?? 0] ?? sc.engines[0];
+  const e = sc.engines[own[0]?.burn.engine ?? 0] ?? sc.engines[0];
   const total = e.isp * G0 * Math.log(sc.wetMass / sc.dryMass);
   let requested = 0;
-  for (const n of nodes) requested += Number.isFinite(dvMagnitude(n.node.dv)) ? dvMagnitude(n.node.dv) : 0;
-  const mEnd = nodes.length ? nodes[nodes.length - 1].m1 : sc.wetMass;
+  for (const n of own) requested += Number.isFinite(dvMagnitude(n.node.dv)) ? dvMagnitude(n.node.dv) : 0;
+  const mEnd = own.length ? own[own.length - 1].m1 : sc.wetMass;
   // Remaining with engine 0 from the mass left after all requested burns.
   const remaining = sc.engines[0].isp * G0 * Math.log(Math.max(mEnd, sc.dryMass) / sc.dryMass);
-  return { total, requested, remaining, propellant: sc.wetMass - mEnd, nodes };
+  return { total, requested, remaining, propellant: sc.wetMass - mEnd, nodes: all };
 }
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,9 @@
  */
 import { DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, asymptotePlaneNormals, azimuthAllowed, stellarDay, azimuthForInclination, geocentricLatitudeDeg, groundRelativeAzimuthDeg, launchFromParams, launchPlane, launchSite, launchToParams, orbitNormalOf, planeCrossings } from '../mission/launch';
 import { allowedSites, briefingText, missionForSite, siteOption, checkPlanConformance, evaluate, initialMissionPlan, missionReplayOptions, PAR_SCORE, type BriefingDistance, type CompleteMission, type ConformanceIssue, type Evaluation, type LeaderboardKeys, type MissionDefinition, type Objective, type ObjectiveResult, type SiteOption } from '../mission/objectives';
-import { LIMITS, PLAN_FORMAT, PlanError, decodePlan, encodePlan, makePlan, simulationStartOffset, validatePlan, validatePlanIssues, type Engine, type MissionPlan, type PlanBurn, type PlanFrame, type PlanStart, type Spacecraft } from '../mission/plan';
+import { LIMITS, PLAN_FORMAT, PlanError, decodePlan, isVehicleLaunch, vehicleStages, type PlanSeparation, encodePlan, makePlan, simulationStartOffset, validatePlan, validatePlanIssues, type Engine, type MissionPlan, type PlanBurn, type PlanFrame, type PlanStart, type Spacecraft } from '../mission/plan';
+import { ASCENT_BODIES, computeAscent, type AscentResult } from '../mission/ascent';
+import { launchGeometry } from '../mission/launch';
 import { replay, type BurnReport, type LaunchInsertion, type Outcome, type ReplayOptions, type ReplayResult } from '../mission/replay';
 import { SAMPLE_MISSIONS } from '../mission/samples';
 import { CAMPAIGN } from '../mission/campaign';
@@ -30,13 +32,33 @@ export {
   allowedSites, briefingText, missionForSite, siteOption,
   CAMPAIGN, DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, LIMITS, PAR_SCORE, initialMissionPlan, missionReplayOptions, validatePlanIssues, PHYSICS_MODEL, PLAN_FORMAT, PlanError, SAMPLE_MISSIONS,
   asymptotePlaneNormals, azimuthAllowed, azimuthForInclination, checkPlanConformance, stellarDay, decodePlan, encodePlan, evaluate, geocentricLatitudeDeg, groundRelativeAzimuthDeg,
-  launchFromParams, launchPlane, launchSite, launchToParams, makePlan, orbitNormalOf, planeCrossings, replay, simulationStartOffset, validatePlan,
+  launchFromParams, launchPlane, launchSite, launchToParams, makePlan, orbitNormalOf, planeCrossings, replay, simulationStartOffset, validatePlan, isVehicleLaunch, vehicleStages,
 };
 export type {
   BriefingDistance, BurnReport, CompleteMission, ConformanceIssue, LaunchInsertion, LeaderboardKeys, Engine, Evaluation, EventKind, MissionDefinition, MissionPlan, MissionWorld, Objective, ObjectiveResult, Outcome,
-  PlanBurn, PlanFrame, PlanStart, ReplayOptions, ReplayResult, SiteOption, Spacecraft, TrajectoryEvent,
+  AscentResult, PlanBurn, PlanFrame, PlanSeparation, PlanStart, ReplayOptions, ReplayResult, SiteOption, Spacecraft, TrajectoryEvent,
 };
 export type { LaunchSite } from '../mission/launch';
+
+const ascentCache = new Map<string, AscentResult | null>();
+/**
+ * The ascent a vehicle-launch plan flies (the replay's own model and inputs),
+ * or null for any other start; memoised on its inputs (about 1 ms each).
+ */
+export function planAscent(plan: MissionPlan, data: readonly BodyData[]): AscentResult | null {
+  const st = plan.start;
+  if (!isVehicleLaunch(st)) return null;
+  const stages = vehicleStages(plan);
+  const key = JSON.stringify([st.site, st.params[0], st.params[1], st.params[2], stages]);
+  let a = ascentCache.get(key);
+  if (a === undefined) {
+    const earth = data.find((b) => b.id === 'earth');
+    a = earth ? computeAscent(stages, { gm: earth.gm, radius: earth.referenceRadius, altitudeM: st.params[2] }, launchGeometry(launchSite(st.site), st.params[0], st.params[1]), ASCENT_BODIES.earth) : null;
+    if (ascentCache.size > 64) ascentCache.clear();
+    ascentCache.set(key, a);
+  }
+  return a;
+}
 
 /** Mission world over a physics ephemeris built from `data`. */
 export function makeWorld(ephemeris: Parameters<typeof worldFromBodyData>[0], data: readonly BodyData[]): MissionWorld {

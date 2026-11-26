@@ -83,7 +83,7 @@ async function solvedLunarFlyby(page: Page): Promise<void> {
     w.editor.selectMission('lunar-flyby');
     const t = Date.UTC(2027, 0, 10, 20, 23, 4) / 1000 - Date.UTC(2000, 0, 1, 12) / 1000;
     w.editor.setLaunch({ site: 'kourou', time: t, azimuthDeg: 62.7669, altitudeM: 200e3 });
-    w.editor.addNode(3019.5, { kind: 'orbital', body: 'earth' }, [3167.2, 0, 0]);
+    w.editor.addNode(3019.5, { kind: 'orbital', body: 'earth' }, [3155.2, 0, 0]);
   });
   await settled(page);
   expect(await page.evaluate(() => (window as any).sendit.store.get().replay.evaluation.success)).toBe(true);
@@ -130,6 +130,10 @@ test.describe('phone', () => {
       await page.keyboard.type(text);
       await page.keyboard.press('Enter');
     };
+    // The mission opens at its par site; this plan launches from Kourou (the native picker's choice).
+    await page.locator('select[title="Launch site"]').tap();
+    await page.locator('select[title="Launch site"]').selectOption('kourou');
+    await settled(page);
     await typeInto('input[title^="Liftoff"]', '2027-01-10 20:23:04');
     await settled(page);
     await typeInto('input[title^="Inertial launch azimuth"]', '62.7669');
@@ -174,7 +178,7 @@ test.describe('phone', () => {
     await page.locator('.sheet-grip').tap(); // half -> full
     await typeInto('input.met-input', '3019.5');
     await settled(page);
-    await typeInto('input[title="Prograde delta-v, m/s"]', '3100');
+    await typeInto('input[title="Prograde delta-v, m/s"]', '3088');
     await settled(page);
     const prograde = page.locator('.tuner', { has: page.locator('input[title="Prograde delta-v, m/s"]') });
     const pad = prograde.locator('.tn-pad');
@@ -186,14 +190,14 @@ test.describe('phone', () => {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await settled(page);
     const dv = () => page.evaluate(() => (window as any).sendit.nodesOf()[0].node.dv[0]);
-    expect(await dv()).toBeCloseTo(3106, 6); // 75 px = 6 medium steps of 1 m/s
+    expect(await dv()).toBeCloseTo(3094, 6); // 75 px = 6 medium steps of 1 m/s
     const bump = (n: string) => prograde.getByRole('button', { name: `Prograde: +${n} m/s`, exact: true });
     for (let k = 0; k < 6; k++) await bump('10').tap();
     await bump('1').tap();
     await bump('0.1').tap();
     await bump('0.1').tap();
     await settled(page);
-    expect(await dv()).toBeCloseTo(3167.2, 6);
+    expect(await dv()).toBeCloseTo(3155.2, 6);
     mark('node tuned');
     await page.screenshot({ path: `${SHOTS}/phone-4-tuned.png` });
 

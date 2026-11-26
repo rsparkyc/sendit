@@ -13,10 +13,10 @@
       }
       body { margin: 0 auto; max-width: 60rem; padding: 1rem; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
       code, td, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-      #m2-verdict { font-size: 1.5rem; font-weight: 700; }
+      #m2-verdict, #st-verdict { font-size: 1.5rem; font-weight: 700; }
       #verdict { font-size: 2.5rem; font-weight: 700; margin: 0.5rem 0; }
-      #verdict.pass, #m2-verdict.pass { color: var(--pass); }
-      #verdict.fail, #m2-verdict.fail { color: var(--fail); }
+      #verdict.pass, #m2-verdict.pass, #st-verdict.pass { color: var(--pass); }
+      #verdict.fail, #m2-verdict.fail, #st-verdict.fail { color: var(--fail); }
       .scroll { overflow-x: auto; }
       table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
       th, td { border-bottom: 1px solid var(--line); padding: 0.3rem 0.5rem; text-align: left; white-space: nowrap; }
@@ -42,6 +42,13 @@
     <dl>
       <dt>Digest</dt><dd id="m2-digest" class="mono">–</dd>
       <dt>Time (in worker)</dt><dd id="m2-time">–</dd>
+    </dl>
+    <h2>Staged replay with a launch-vehicle ascent</h2>
+    <p>Flies a format-2 plan in a third worker: a Falcon 9 ascent from Kourou (the ascent model's own exponential and logarithm), the upper stage's injection, a separation and a burn by the probe. Compares the digest and the ascent's results, bit for bit, with the V8 values.</p>
+    <div id="st-verdict">Running…</div>
+    <dl>
+      <dt>Digest and ascent bits</dt><dd id="st-digest" class="mono">–</dd>
+      <dt>Time (in worker)</dt><dd id="st-time">–</dd>
     </dl>
     <dl>
       <dt>Run time (in worker)</dt><dd id="time">–</dd>

@@ -102,6 +102,9 @@ test.describe('desktop', () => {
 
   test('AN / DN on an inclined parking orbit: equator and the Moon\'s plane; overlays', async ({ page }) => {
     await fresh(page, 'geo-from-leo');
+    // The mission now opens at its par site (the equator, no inclination to show): launch from Kourou, as before.
+    await page.selectOption('select[title="Launch site"]', 'kourou');
+    await settled(page);
     const launchInc = await page.evaluate(() => (window as any).sendit.store.get().replay.result.launch.inclinationDeg);
     const eq = await page.evaluate(() => (window as any).sendit.crossings().map((c: any) => ({ t: c.t, a: c.ascending, i: c.inclinationDeg })));
     expect(eq.length).toBeGreaterThan(4);

@@ -122,21 +122,48 @@ export function withLaunch(plan: MissionPlan, l: LaunchDefaults): MissionPlan {
   const old = plan.start.kind === 'launch' ? plan.start.params : [];
   const params = launchParams(l);
   for (let i = 3; i < old.length; i++) params[i] = old[i];
-  return { ...plan, epoch: l.time, start: { kind: 'launch', site: l.site, params } };
+  // A vehicle launch stays one (start.ascent).
+  const ascent = plan.start.kind === 'launch' && plan.start.ascent ? { ascent: plan.start.ascent } : {};
+  return { ...plan, epoch: l.time, start: { kind: 'launch', site: l.site, params, ...ascent } };
 }
 
 /**
- * The plan with the mission's fixed launch parameters (rules.launch: parking
- * altitude, ascent time, downrange angle, circularisation) applied; unchanged
- * for sandbox, free starts and missions without the rule. The editor locks
- * those fields, so an older plan is brought into line this way.
+ * The plan brought into line with the mission's launch rule; unchanged for
+ * sandbox, free starts and missions without one. The editor locks those
+ * fields, so an older plan is brought into line this way.
+ *  - rules.launch (a fixed free delivery): parking altitude, ascent time,
+ *    downrange angle and circularisation set to the rule's.
+ *  - rules.vehicle: a vehicle launch on the mission's lower stages, the
+ *    parking altitude clamped into the rule's band, the ascent time,
+ *    downrange and circularisation set to the rule's. Burns and separations
+ *    are kept (a burn without a stage is the spacecraft's).
  */
 export function withLaunchRule(entry: MissionEntry | undefined, plan: MissionPlan): MissionPlan {
-  const L = entry?.def?.rules.launch;
-  if (!L || plan.start.kind !== 'launch') return plan;
+  const R = entry?.def?.rules;
+  if (!R || plan.start.kind !== 'launch') return plan;
   const p = plan.start.params;
-  const params = launchToParams({ mode: 'parking-orbit', siteId: plan.start.site, launchTime: p[0], azimuthDeg: p[1], altitudeM: L.altitudeM, ascentTimeS: L.ascentTimeS, downrangeDeg: L.downrangeDeg, circularization: L.circularization });
-  return params.every((v, i) => Object.is(v, p[i])) && p.length === params.length ? plan : { ...plan, start: { ...plan.start, params } };
+  const L = R.launch;
+  if (L) {
+    const params = launchToParams({ mode: 'parking-orbit', siteId: plan.start.site, launchTime: p[0], azimuthDeg: p[1], altitudeM: L.altitudeM, ascentTimeS: L.ascentTimeS, downrangeDeg: L.downrangeDeg, circularization: L.circularization });
+    return params.every((v, i) => Object.is(v, p[i])) && p.length === params.length ? plan : { ...plan, start: { ...plan.start, params } };
+  }
+  const V = R.vehicle;
+  if (!V) return plan;
+  const altitudeM = Math.min(V.altitude[1], Math.max(V.altitude[0], p[2]));
+  const params = launchToParams({ mode: 'parking-orbit', siteId: plan.start.site, launchTime: p[0], azimuthDeg: p[1], altitudeM, ascentTimeS: V.ascentTimeS, downrangeDeg: V.downrangeDeg, circularization: V.circularization });
+  const sameParams = params.every((v, i) => Object.is(v, p[i])) && p.length === params.length;
+  const sameStages = JSON.stringify(plan.lowerStages ?? []) === JSON.stringify(V.lowerStages);
+  if (sameParams && sameStages && plan.start.ascent === 'vehicle') return plan;
+  const { format: _f, model, ...rest } = plan;
+  void _f;
+  return {
+    ...makePlan({
+      ...rest,
+      start: { kind: 'launch', site: plan.start.site, params, ascent: 'vehicle' },
+      lowerStages: V.lowerStages.map((x) => ({ ...x, engines: x.engines.map((e) => ({ ...e })) })),
+    }),
+    model,
+  };
 }
 
 /** Free start: a state relative to `center` at `epoch`. */

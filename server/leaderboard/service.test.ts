@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { createEngine, type Engine } from './engine';
 import { withHidden } from './group';
 import { reverify } from './reverify';
-import { fixedLaunch } from '../../src/mission/objectives';
+import { fixedLaunch, OLD_VERSION_MESSAGE, vehicleLaunch } from '../../src/mission/objectives';
+import { catalogueStages, PARKING_BAND } from '../../src/mission/vehicles';
 import { CONFIG, CRAFT, encode, fakeFly, Harness, plan, secret, SITES_MISSION, TEST_MISSION } from './test-kit';
 
 const DAY = 86400;
@@ -396,6 +397,34 @@ describe('re-verification', () => {
     expect(r.body.entries.map((x: { name: string }) => x.name)).toEqual(['Player 1']);
     // The old version's board is gone from the API (version 3 is no longer current).
     expect((await h.board('deltaV')).body.error).toBe('mission-version');
+  });
+});
+
+describe('a mission version that adds a launch vehicle', () => {
+  const v4 = { ...TEST_MISSION, version: 4, rules: { ...TEST_MISSION.rules, vehicle: vehicleLaunch(catalogueStages('falcon-9'), PARKING_BAND) } };
+
+  it('refuses plans made for the previous version with the editor’s reason, and re-verification does not carry them over', async () => {
+    const h = new Harness();
+    const old = plan(h.engine, { burns: [100] });
+    expect((await h.submit(1, old)).status).toBe(200);
+    const e4 = createEngine({ catalogue: [v4], fly: fakeFly });
+    const lines: string[] = [];
+    const s = await reverify({ engine: e4, store: h.store, mission: e4.mission(TEST_MISSION.id)!, from: V, log: (l) => lines.push(l) });
+    expect(s).toMatchObject({ entries: 1, plansFlown: 1, written: 0 });
+    expect(s.slotsInvalid).toBeGreaterThan(0);
+    expect(lines.some((l) => l.includes(OLD_VERSION_MESSAGE))).toBe(true);
+    h.setEngine(e4);
+    const r = await h.call('GET', '/api/leaderboard/board', { query: { mission: TEST_MISSION.id, version: '4', board: 'deltaV' } });
+    expect(r.body.entries).toEqual([]);
+    // Submitted again under the new version: refused, with the same wording as the editor's check.
+    const again = await h.call('POST', '/api/leaderboard/submit', { body: { missionId: TEST_MISSION.id, missionVersion: '4', plan: encode(old), name: 'Ada', secret: secret(1) } });
+    expect(again.status).toBe(422);
+    expect(again.body.error).toBe('rule-violation');
+    expect(again.body.message).toBe(OLD_VERSION_MESSAGE);
+    // Under its own (old) version number it is told the mission moved on.
+    const stale = await h.call('POST', '/api/leaderboard/submit', { body: { missionId: TEST_MISSION.id, missionVersion: V, plan: encode(old), name: 'Ada', secret: secret(1) } });
+    expect(stale.status).toBe(409);
+    expect(stale.body.error).toBe('mission-version');
   });
 });
 

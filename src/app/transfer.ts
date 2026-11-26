@@ -7,7 +7,7 @@
  * except through ordinary nodes.
  */
 import { asymptotePlaneNormals, azimuthAllowed, launchSite, planeCrossings, simulationStartOffset, type MissionPlan, type PlanBurn, type TrajectoryEvent } from './mission-layer';
-import { burnToNode, nodesOf, type ManeuverNode } from './nodes';
+import { burnToNode, nodesOf, stageOfBurn, type ManeuverNode } from './nodes';
 
 /** Physics burn shape (absolute times, body index), mirrored here to keep this module pure. */
 export interface AbsBurn {
@@ -63,7 +63,7 @@ export function stagingOffsets(soi: number, vinf: number): { first: number; seco
 /** Physics form of plan burn i (absolute times). */
 export function toAbsBurn(plan: MissionPlan, i: number, bodyIndex: (id: string) => number): AbsBurn {
   const b = plan.burns[i];
-  const e = plan.spacecraft.engines[b.engine];
+  const e = stageOfBurn(plan, b).engines[b.engine];
   return {
     tStart: plan.epoch + b.start,
     duration: b.duration,
@@ -78,8 +78,8 @@ export function toAbsBurn(plan: MissionPlan, i: number, bodyIndex: (id: string) 
 export function nodeFromAbsBurn(plan: MissionPlan, i: number, b: AbsBurn): ManeuverNode {
   const old = plan.burns[i];
   const n = Math.hypot(b.direction[0], b.direction[1], b.direction[2]);
-  const pb: PlanBurn = { start: b.tStart - plan.epoch, duration: b.duration, engine: old.engine, direction: [b.direction[0] / n, b.direction[1] / n, b.direction[2] / n], frame: old.frame };
-  return burnToNode(pb, plan.spacecraft, nodesOf(plan)[i].m0);
+  const pb: PlanBurn = { start: b.tStart - plan.epoch, duration: b.duration, engine: old.engine, direction: [b.direction[0] / n, b.direction[1] / n, b.direction[2] / n], frame: old.frame, ...(old.stage !== undefined ? { stage: old.stage } : {}) };
+  return burnToNode(pb, stageOfBurn(plan, old), nodesOf(plan)[i].m0);
 }
 
 /**

@@ -74,3 +74,25 @@ test('a model-2 mission replay (real ephemeris, Earth and Moon fields) gives the
   expect(ok, summary).toBe(true);
   expect({ model: got.model, data: got.data, digest: got.digest, outcome: got.outcome }, summary).toEqual({ model: MODEL, data: DATA, digest: DIGEST, outcome: 'completed' });
 });
+
+test('a staged replay with a launch-vehicle ascent gives the V8 digest and ascent bits', async ({ page, browser }, info) => {
+  const { ASCENT_HEX, DATA, DIGEST, MODEL } = await import('../src/fixtures/staged-replay');
+  const seen = watch(page);
+  const t0 = Date.now();
+  await page.goto(`${BASE}/check.html`);
+  // data-staged is set on success and on every failure path, like data-model2.
+  const ok = await page
+    .waitForFunction(() => document.body.dataset.staged !== undefined, null, { timeout: MODEL2_TIMEOUT_MS })
+    .then(() => true, () => false);
+  const { raw, shown } = await page.evaluate(() => ({ raw: document.body.dataset.staged ?? null, shown: document.getElementById('st-verdict')?.textContent ?? '' }));
+  const got = raw ? (JSON.parse(raw) as Record<string, unknown>) : { verdict: 'FAIL', error: `no result after ${MODEL2_TIMEOUT_MS} ms (page shows: ${shown})` };
+  const ms = (k: string) => (typeof got[k] === 'number' ? `${(got[k] as number).toFixed(0)} ms` : '?');
+  const summary = `[${info.project.name} ${browser.version()}] staged replay ${got.verdict}: ` +
+    ('error' in got ? `error ${got.error}` : `model ${got.model} data ${got.data} digest ${got.digest} ${got.outcome} ascent ${JSON.stringify(got.ascent)}`) +
+    ` (V8: model ${MODEL} data ${DATA} digest ${DIGEST} ascent ${JSON.stringify(ASCENT_HEX)})\n  worker ${ms('totalMs')} (replay ${ms('replayMs')}), page ${Date.now() - t0} ms` +
+    `${seen.length ? `\n  page said:\n    ${seen.join('\n    ')}` : ''}`;
+  console.log(summary);
+  await info.attach('staged-replay', { body: summary, contentType: 'text/plain' });
+  expect(ok, summary).toBe(true);
+  expect({ model: got.model, data: got.data, digest: got.digest, outcome: got.outcome, ascent: got.ascent }, summary).toEqual({ model: MODEL, data: DATA, digest: DIGEST, outcome: 'completed', ascent: ASCENT_HEX });
+});

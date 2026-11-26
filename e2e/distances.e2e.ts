@@ -200,7 +200,7 @@ const SCENARIOS: { name: string; setup: (page: Page) => Promise<number | null> }
         (window as any).sendit.editor.setLaunch({ site: 'kourou', time: t, azimuthDeg: 62.7669, altitudeM: 200e3 });
       });
       await settled(page);
-      await node(page, 3019.5, 3167.2);
+      await node(page, 3019.5, 3155.2);
       const moon = await page.evaluate(() => (window as any).sendit.store.get().replay.result.events.some((e: any) => e.body === 'moon' && e.kind === 'periapsis'));
       expect(moon, 'a lunar flyby').toBe(true);
       // Near the Moon: the readout's reference is the Moon in a Moon-centred frame.

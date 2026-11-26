@@ -185,7 +185,8 @@ Use `withSpacecraft(vehicle, spacecraft)` to put a spacecraft on top. Direct inj
   altitudeM }, launchGeometry(launchSite(id), t, azimuthDeg), ASCENT_BODIES.earth)`
   returns `AscentResult`, which includes `upperStage`, `upperPropellant`, `deltaV`, the
   `losses` breakdown and `stages[]`. Call it as the player drags altitude or azimuth to
-  show upper-stage propellant at insertion. It takes about 1 ms.
+  show upper-stage propellant at insertion. It takes 5-9 ms for the catalogue vehicles
+  (measured by `bench.mjs ascent`), so debounce it or run it in a worker.
 - *Burns and separations.*
   - A burn needs `stage`.
   - A separation is `{ time }` in `plan.separations`.
@@ -197,19 +198,18 @@ Use `withSpacecraft(vehicle, spacecraft)` to put a spacecraft on top. Direct inj
   - Check with `isVehicleLaunch(start)`.
 - *Sandbox vehicle editor.* Edit `lowerStages` (start from `VEHICLES`) and `spacecraft`
   freely, subject to `LIMITS.maxStages`, `maxEngines` and `maxSeparations`.
-- *Missions.* Set `rules.vehicle` (`vehicleLaunch`). Then make `initialMissionPlan` and
-  the editor's launch fields use its altitude band and `lowerStages`; today they read
-  only `rules.launch`.
+- *Missions.* Done in part three: every campaign mission sets `rules.vehicle`, and
+  `initialMissionPlan`, `launchFields` and the editor's `withLaunchRule` use its altitude
+  band and `lowerStages`.
 
 **Leaderboard server**
 
 - *Start kind.* `engine.ts` `checkRules` requires `start.kind === 'launch'`. Vehicle
   launches pass, because they are `launch` starts.
-- *Delta-v used for scoring.* Change what is scored and stored to `totalDeltaV` once
-  missions move to it (`evaluate` / `leaderboardKeys`).
-- *New mission versions.* The change re-scores everything, so bump mission versions and
-  re-verify. Format-2 plans are longer: the 16 384-character `maxEncodedLength` holds
-  them, but check any storage-size limits.
+- *Delta-v used for scoring.* Done in part three: `evaluate` scores and keys
+  `totalDeltaV`, and the server stores it.
+- *New mission versions.* Done in part three. See "Release: launch vehicles" below for
+  the versions, the measured sizes and the costs.
 - *Integrator tolerance.* `SERVER_RULES` limits apply unchanged.
 - *Physics model.* The ascent constants are part of the physics model: a change needs a
   `PHYSICS_MODEL` bump.
@@ -446,3 +446,57 @@ player, no per-site items): their plans are re-flown and filed under the site th
 from. Missions whose version did not change with the launch-site release (plane-change) need
 `reverify --mission plane-change` once after that deploy, because board partitions now
 include the site.
+
+#### Release: launch vehicles (mission versions 4; plane-change 3)
+
+Every campaign mission now launches on a catalogue vehicle (`rules.vehicle`), charges the
+ascent, and scores and limits the total delta-v (ascent plus flight). The physics model
+does not change (no `PHYSICS_MODEL` bump: replay results of existing plans are
+unchanged), but every mission version does: plane-change 2 -> 3, every other mission
+3 -> 4. Plans made for the old versions were free deliveries to the parking orbit
+(format 1, no lower stages); the new versions refuse them. In the editor and from the
+server, they are refused with the same reason: *"this plan was made for an earlier version of
+the mission, whose launch delivered the spacecraft to its parking orbit free of charge;
+this version launches on its vehicle and charges the ascent, so the plan must be
+rebuilt"*. The server returns it as `rule-violation` when the plan is submitted under the
+new version, and as `mission-version` (409) when it is submitted under the old version
+number. So no stored result carries over, and the new boards start empty.
+
+Cost of a submission. Every vehicle launch runs the ascent model before the replay:
+5-9 ms per call for the campaign's vehicles (`bench.mjs ascent`). Only the
+mission's own vehicle can reach it, because the rule check comes first, and it is bit for
+bit. A warm lunar free return, ascent included, re-flies in about 25 ms (395 ms cold, with
+one chunk built). Decoding the largest staged plan the format allows takes about 0.3 ms,
+and checking its rules about 0.01 ms (`bench.mjs checks`). That plan has 6 stages of 8
+engines, 5 separations and 200 burns, encodes to 14 676 characters (under
+`maxEncodedLength` 16 384) and makes a 14.8 kB request (under `MAX_BODY_BYTES` 20 000).
+Each stored entry holds at most three plans, about 45 kB, well under DynamoDB's 400 KB
+item limit. The replay budget (`REPLAY_BUDGET_MS`, `MAX_STEPS`) is unchanged.
+
+Build the site and the leaderboard bundle from the same commit, then:
+
+```sh
+# 1. Leaderboard first: from now on old-version plans are refused with the reason above,
+#    and pages still on the old build get "mission is now version N".
+AWS_PROFILE=<profile> SITE_STACK=<site-stack> ARTIFACT_BUCKET=<artifact-bucket> \
+  scripts/deploy-leaderboard.sh <leaderboard-stack>
+# 2. The site, right after (same commit).
+AWS_PROFILE=<profile> scripts/deploy.sh <site-stack>
+# 3. Check what the server runs: the same physics version as before, mission versions
+#    plane-change 3 and 4 for every other mission.
+pnpm build:leaderboard
+eval "$(aws configure export-credentials --profile <profile> --format env)"
+export TABLE_NAME=<table>
+node dist-server/leaderboard/admin.mjs missions
+# 4. Optional: confirm that nothing carries over. Every old plan is logged as refused
+#    with the reason above, and the run reports written: 0.
+for m in plane-change:2 geo-from-leo:3 earth-escape:3 lunar-flyby:3 lunar-free-return:3 \
+         lunar-orbit:3 venus-flyby:3 mars-flyby:3 mars-orbit:3 venus-to-mercury:3 \
+         solar-escape:3 jupiter-saturn:3; do
+  node dist-server/leaderboard/admin.mjs reverify --mission "${m%%:*}" --from "${m##*:}" --dry-run
+done
+```
+
+The old versions' boards stay in the table but are no longer served. Rolling back means
+redeploying the previous commit's two bundles. The old boards are served again from that
+moment, and nothing has to be re-verified, because nothing was written to them.

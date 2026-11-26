@@ -17,7 +17,10 @@
  *    entries (group.ts allFromSites);
  *  - with a source version different from the current one, results are
  *    merged into the player's group for the current version (an existing
- *    better result there wins); the source entries are left untouched.
+ *    better result there wins); the source entries are left untouched. A
+ *    player none of whose plans succeeds under the current version (e.g. a
+ *    plan from before the mission had its launch vehicle, refused with the
+ *    conformance reason) is not written there; each refusal is logged.
  * The whole group is written in one conditional transaction. */
 import { SCORE_HIGHER_IS_BETTER, siteOfPlan, type Engine, type MissionInfo } from './engine';
 import { allFromSites, isHidden, live, slotOf } from './group';
@@ -97,6 +100,12 @@ export async function reverify(o: ReverifyOptions): Promise<ReverifySummary> {
       }
     }
     const ok = [...cands.values()].filter((c) => c.ok);
+    for (const c of cands.values()) if (!c.ok) log(`${items[0].pid} ${items[0].name}#${items[0].tag}: plan ${c.planHash.slice(0, 12)} ${c.site ? `@${c.site} ` : ''}refused: ${c.reason}`);
+    if (!current && ok.length === 0) {
+      // Carrying into a new version: nothing still succeeds there, so there is nothing to write (the source stays as it is).
+      sum.slotsInvalid += cands.size;
+      continue;
+    }
 
     const target = current ? src : await store.getGroup(mission.id, mission.version, src.playerHash);
     const first = items[0];

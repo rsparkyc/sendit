@@ -1,16 +1,20 @@
 /**
  * Cross-engine determinism check page. Two independent checks, each in its own worker:
  *  1. the canonical integrator scenario (src/fixtures/determinism.ts), compared component by component;
- *  2. the model-2 mission replay (src/fixtures/model2-replay.ts) on the real ephemeris, compared by digest.
+ *  2. the model-2 mission replay (src/fixtures/model2-replay.ts) on the real ephemeris, compared by digest;
+ *  3. the staged replay with a vehicle ascent (src/fixtures/staged-replay.ts), compared by digest and the ascent's bits.
  *
  * Machine-readable results for e2e/determinism.e2e.ts, always set, failure included, so a test
  * fails at once with the reason instead of waiting for a result that never comes:
  *  - body[data-result] "PASS" | "FAIL", body[data-error] (why, on a failure), body[data-ms] (worker time)
  *  - body[data-model2] JSON: Model2Result plus { verdict: "PASS" | "FAIL" }, or { verdict: "FAIL", error }
+ *  - body[data-staged] JSON: StagedResult plus { verdict }, or { verdict: "FAIL", error }
  */
 import { EXPECTED_HEX, toHex } from '../fixtures/determinism';
 import { DATA, DIGEST, MODEL } from '../fixtures/model2-replay';
 import type { Model2Result } from './model2-worker';
+import * as STAGED from '../fixtures/staged-replay';
+import type { StagedResult } from './staged-worker';
 import type { CheckResult } from './worker';
 
 const NAMES = ['x', 'y', 'z', 'vx', 'vy', 'vz', 'mass'];
@@ -34,11 +38,13 @@ function cell(text: string, cls?: string): HTMLTableCellElement {
 
 let scenarioDone = false;
 let model2Done = false;
+let stagedDone = false;
 
 function updateTitle(): void {
   const r = document.body.dataset.result;
   const m = model2Done ? (JSON.parse(document.body.dataset.model2!) as { verdict: string }).verdict : undefined;
-  const all = r && m ? (r === 'PASS' && m === 'PASS' ? 'PASS' : 'FAIL') : 'Running…';
+  const st = stagedDone ? (JSON.parse(document.body.dataset.staged!) as { verdict: string }).verdict : undefined;
+  const all = r && m && st ? (r === 'PASS' && m === 'PASS' && st === 'PASS' ? 'PASS' : 'FAIL') : 'Running…';
   document.title = `${all}: sendit determinism check`;
 }
 
@@ -71,10 +77,30 @@ function model2(r: (Model2Result & { verdict: 'PASS' | 'FAIL' }) | { verdict: 'F
   updateTitle();
 }
 
+function staged(r: (StagedResult & { verdict: 'PASS' | 'FAIL' }) | { verdict: 'FAIL'; error: string }): void {
+  if (stagedDone) return;
+  stagedDone = true;
+  const v = $('st-verdict');
+  if ('error' in r) {
+    v.textContent = `FAIL: ${r.error}`;
+    $('st-time').textContent = `${(performance.now() - pageStart).toFixed(0)} ms since page start`;
+  } else {
+    v.textContent = r.verdict;
+    const a = r.ascent;
+    const w = STAGED.ASCENT_HEX;
+    $('st-digest').textContent = `digest ${r.digest}, ${r.outcome}; ascent upper-stage propellant ${a.upperPropellant}, ascent delta-v ${a.deltaV}, total delta-v ${a.totalDeltaV} (V8: digest ${STAGED.DIGEST}; ${w.upperPropellant}, ${w.deltaV}, ${w.totalDeltaV})`;
+    $('st-time').textContent = `${r.totalMs.toFixed(0)} ms: checkpoint asset ${r.fetchMs.toFixed(0)} ms, chunks ${r.chunkMs.toFixed(0)} ms, ascent and replay ${r.replayMs.toFixed(0)} ms`;
+  }
+  v.className = r.verdict === 'PASS' ? 'pass' : 'fail';
+  document.body.dataset.staged = JSON.stringify(r);
+  updateTitle();
+}
+
 // Anything that escapes a handler fails what is still pending, with the reason.
 const failAll = (message: string) => {
   fail(message);
   model2({ verdict: 'FAIL', error: message });
+  staged({ verdict: 'FAIL', error: message });
 };
 addEventListener('error', (e) => failAll(`page error: ${e.message}`));
 addEventListener('unhandledrejection', (e) => failAll(`unhandled rejection: ${String(e.reason)}`));
@@ -129,3 +155,17 @@ m2.onmessage = (ev: MessageEvent<Model2Result | { error: string }>) => {
   model2({ ...r, verdict: ok ? 'PASS' : 'FAIL' });
 };
 m2.postMessage(null);
+
+const st = new Worker(new URL('./staged-worker.ts', import.meta.url), { type: 'module' });
+const stfail = (error: string) => staged({ verdict: 'FAIL', error });
+st.onerror = (e) => stfail(`worker error: ${e.message || 'could not load worker'}`);
+st.onmessageerror = () => stfail('worker message could not be read');
+st.onmessage = (ev: MessageEvent<StagedResult | { error: string }>) => {
+  if ('error' in ev.data) return stfail(ev.data.error);
+  const r = ev.data;
+  const w = STAGED.ASCENT_HEX;
+  const ok = r.model === STAGED.MODEL && r.data === STAGED.DATA && r.digest === STAGED.DIGEST && r.outcome === 'completed' &&
+    r.ascent.upperPropellant === w.upperPropellant && r.ascent.deltaV === w.deltaV && r.ascent.totalDeltaV === w.totalDeltaV;
+  staged({ ...r, verdict: ok ? 'PASS' : 'FAIL' });
+};
+st.postMessage(null);

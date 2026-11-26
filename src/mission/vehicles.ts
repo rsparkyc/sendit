@@ -90,3 +90,16 @@ export function vehicleSpec(id: string): VehicleSpec {
 export function withSpacecraft(v: VehicleSpec, spacecraft: Stage): Stage[] {
   return [...v.stages, spacecraft];
 }
+
+/** A catalogue vehicle's lower stages as fresh plain data (mission rules keep their own copy). */
+export function catalogueStages(id: string): Stage[] {
+  return vehicleSpec(id).stages.map((s) => ({ wetMass: s.wetMass, dryMass: s.dryMass, engines: s.engines.map((e) => ({ thrust: e.thrust, isp: e.isp })) }));
+}
+
+/**
+ * Parking-orbit altitudes the campaign allows (rules.vehicle), m: from 180 km
+ * (the lowest orbit that stays clear of the 122 km atmosphere top through the
+ * J2 wobble and the oblate surface) to 1 000 km. Lower is cheaper to reach;
+ * the ascent model charges every kilometre above.
+ */
+export const PARKING_BAND: readonly [number, number] = [180e3, 1000e3];

@@ -92,8 +92,10 @@ export type SiteOption =
   | {
       readonly site: string;
       readonly offered: true;
-      /** Reference solution from this site: delta-v, m/s, and mission time, s. */
+      /** Reference solution from this site: delta-v (total: ascent + flight), m/s, and mission time, s. */
       readonly deltaV: number;
+      /** Of the reference's delta-v, the ascent's (vehicle launch), m/s, to 0.1. */
+      readonly ascentDeltaV?: number;
       readonly time: number;
       /** This site's limits (the mission's max-delta-v / max-time objectives when flown from here). */
       readonly maxDeltaV: number;
@@ -130,8 +132,8 @@ export function fixedLaunch(altitudeM: number): FixedLaunchRule {
  * spacecraft) and the ascent time, downrange angle and circularisation; the
  * player chooses the parking altitude inside `altitude`, the site, liftoff
  * time and azimuth, and pays for them in the upper stage's propellant
- * (ascent.ts). Part three moves the campaign to this rule; `rules.launch`
- * (FixedLaunchRule, a free delivery) keeps working until then.
+ * (ascent.ts). Every campaign mission uses this rule; `rules.launch`
+ * (FixedLaunchRule, a free delivery) is kept for definitions that want one.
  */
 export interface VehicleLaunchRule {
   readonly kind: 'vehicle';
@@ -270,7 +272,16 @@ export interface LeaderboardKeys {
 export interface Evaluation {
   readonly success: boolean;
   readonly objectives: readonly ObjectiveResult[];
+  /**
+   * The scored delta-v, m/s: ReplayResult.totalDeltaV, i.e. the ascent's
+   * delta-v (vehicle launch) plus everything flown after insertion. Equal to
+   * the flown delta-v for every plan without a vehicle launch.
+   */
   readonly deltaV: number;
+  /** Of which the ascent (vehicle launch; 0 otherwise), m/s. */
+  readonly ascentDeltaV: number;
+  /** Of which flown after orbit insertion (ReplayResult.deltaV), m/s. */
+  readonly flightDeltaV: number;
   /** Time the last goal was met, s after epoch (replay elapsed if none). */
   readonly missionTime: number;
   readonly score: number;
@@ -485,8 +496,11 @@ export function evaluate(mission0: MissionDefinition, result: ReplayResult, worl
   }
   const goalsOk = out.every((r) => r.ok);
   const missionTime = last === -Infinity ? result.elapsed : last - epoch;
+  // The scored delta-v includes the ascent (vehicle launch): totalDeltaV.
+  const dv = result.totalDeltaV;
+  const ascentDv = result.ascent ? result.ascent.deltaV : 0;
   for (const o of mission.objectives) {
-    if (o.kind === 'max-delta-v') out.push({ objective: o, ok: result.deltaV <= o.max, detail: `used ${result.deltaV.toFixed(1)} of ${o.max} m/s` });
+    if (o.kind === 'max-delta-v') out.push({ objective: o, ok: dv <= o.max, detail: ascentDv > 0 ? `used ${dv.toFixed(1)} of ${o.max} m/s (ascent ${ascentDv.toFixed(1)} + flight ${result.deltaV.toFixed(1)})` : `used ${dv.toFixed(1)} of ${o.max} m/s` });
     else if (o.kind === 'max-time') out.push({ objective: o, ok: goalsOk && missionTime <= o.max, detail: `took ${missionTime.toFixed(0)} of ${o.max} s` });
   }
   // Impact always fails; atmospheric entry only counts if a reentry objective accepted it
@@ -495,8 +509,8 @@ export function evaluate(mission0: MissionDefinition, result: ReplayResult, worl
   const ended = result.outcome === 'completed' || (result.outcome === 'atmosphere' && atmOk);
   const ruleViolations = plan ? missionRuleViolations(mission, plan) : undefined;
   const success = ended && out.every((r) => r.ok) && (ruleViolations === undefined || ruleViolations.length === 0);
-  const keys = leaderboardKeys(success, result.deltaV, missionTime, mission.scoring);
-  const ev: Evaluation = { success, objectives: out, deltaV: result.deltaV, missionTime, score: keys?.score ?? 0 };
+  const keys = leaderboardKeys(success, dv, missionTime, mission.scoring);
+  const ev: Evaluation = { success, objectives: out, deltaV: dv, ascentDeltaV: ascentDv, flightDeltaV: result.deltaV, missionTime, score: keys?.score ?? 0 };
   return { ...ev, ...(keys ? { keys } : {}), ...(ruleViolations ? { ruleViolations } : {}), ...(site !== null ? { site } : {}) };
 }
 
@@ -564,9 +578,20 @@ const sameBits = (a: number, b: number): boolean => Object.is(a, b);
  * window, the parking altitude band and the fixed launch parameters
  * (rules.launch). Sandbox has no mission, so no check.
  */
+/** Conformance message for a plan made before its mission launched on a vehicle (shown by the editor and returned by the leaderboard). */
+export const OLD_VERSION_MESSAGE = 'this plan was made for an earlier version of the mission, whose launch delivered the spacecraft to its parking orbit free of charge; this version launches on its vehicle and charges the ascent, so the plan must be rebuilt';
+
 export function checkPlanConformance(mission: MissionDefinition, plan: MissionPlan): ConformanceIssue[] {
   const out: ConformanceIssue[] = [];
   const add = (code: ConformanceCode, path: string, message: string) => out.push({ code, path, message });
+  const V = mission.rules?.vehicle;
+  const pl = plan.lowerStages ?? [];
+  // A plan from before the mission had its vehicle (a free delivery, no stages) gets one reason, the real one,
+  // not also every spacecraft or limit that changed with the new version.
+  if (V && plan.start.kind === 'launch' && !isVehicleLaunch(plan.start) && pl.length === 0) {
+    add('start-kind', 'start.ascent', OLD_VERSION_MESSAGE);
+    return out;
+  }
   const sc = mission.spacecraft;
   if (sc) {
     const p = plan.spacecraft;
@@ -578,13 +603,13 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
       if (!sameBits(p.engines[i].isp, e.isp)) add('spacecraft', `spacecraft.engines[${i}].isp`, `engine ${i} Isp must be ${e.isp} s, got ${p.engines[i].isp}`);
     });
   }
-  const V = mission.rules?.vehicle;
-  const pl = plan.lowerStages ?? [];
   if (V) {
     const stageSame = (a: Stage, b: Stage) => sameBits(a.wetMass, b.wetMass) && sameBits(a.dryMass, b.dryMass) && a.engines.length === b.engines.length && a.engines.every((e, i) => sameBits(e.thrust, b.engines[i].thrust) && sameBits(e.isp, b.engines[i].isp));
     if (pl.length !== V.lowerStages.length) add('vehicle', 'lowerStages', `the mission vehicle has ${V.lowerStages.length} stage(s) below the spacecraft, the plan has ${pl.length}`);
     else V.lowerStages.forEach((st, k) => { if (!stageSame(pl[k], st)) add('vehicle', `lowerStages[${k}]`, `stage ${k} must be the mission vehicle's (wet ${st.wetMass} kg, dry ${st.dryMass} kg, ${st.engines.length} engine(s)), bit for bit`); });
-    if (!isVehicleLaunch(plan.start)) add('start-kind', 'start.ascent', 'this mission launches on its vehicle (a vehicle launch)');
+    if (plan.start.kind === 'launch' && !isVehicleLaunch(plan.start)) {
+      add('start-kind', 'start.ascent', 'this mission launches on its vehicle (a vehicle launch)');
+    }
   } else if (sc && pl.length > 0) add('vehicle', 'lowerStages', 'this mission has no launch vehicle: the plan may not add stages');
   if (!V && isVehicleLaunch(plan.start) && (mission.rules?.launch || mission.start?.kind === 'launch')) add('start-kind', 'start.ascent', 'this mission delivers the spacecraft to its parking orbit (not a vehicle launch)');
   if (mission.maxDuration !== undefined && !(plan.duration <= mission.maxDuration)) add('duration', 'duration', `duration ${plan.duration} s exceeds the mission limit ${mission.maxDuration} s`);
@@ -647,19 +672,31 @@ export function missionReplayOptions(mission: MissionDefinition): ReplayOptions 
 /** Default integrator tolerance of a fresh mission plan. */
 export const DEFAULT_MISSION_RTOL = 1e-10;
 
-/** Altitude and ascent fields of a mission's launch: the fixed rule's, else the given altitude with the defaults. */
+/**
+ * Altitude and ascent fields of a mission's launch: the fixed rule's
+ * altitude, or the given altitude clamped into the vehicle rule's band, with
+ * the rule's (else the default) ascent time, downrange and circularisation.
+ */
 export function launchFields(mission: MissionDefinition, altitudeM: number): { altitudeM: number; ascentTimeS: number; downrangeDeg: number; circularization: 'j2-mean' | 'two-body' } {
   const L = mission.rules?.launch;
-  return L ? { altitudeM: L.altitudeM, ascentTimeS: L.ascentTimeS, downrangeDeg: L.downrangeDeg, circularization: L.circularization } : { altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S, downrangeDeg: DEFAULT_DOWNRANGE_DEG, circularization: 'j2-mean' };
+  if (L) return { altitudeM: L.altitudeM, ascentTimeS: L.ascentTimeS, downrangeDeg: L.downrangeDeg, circularization: L.circularization };
+  const V = mission.rules?.vehicle;
+  if (V) return { altitudeM: Math.min(V.altitude[1], Math.max(V.altitude[0], altitudeM)), ascentTimeS: V.ascentTimeS, downrangeDeg: V.downrangeDeg, circularization: V.circularization };
+  return { altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S, downrangeDeg: DEFAULT_DOWNRANGE_DEG, circularization: 'j2-mean' };
 }
 
-/** A fresh plan for a complete mission: its default start, spacecraft and duration, no burns. */
+/**
+ * A fresh plan for a complete mission: its default start, vehicle
+ * (rules.vehicle: the lower stages and a vehicle launch), spacecraft and
+ * duration, no burns.
+ */
 export function initialMissionPlan(mission: CompleteMission, fingerprint: string): MissionPlan {
   const st = mission.start;
+  const V = mission.rules.vehicle;
   const start: MissionPlan['start'] = st.kind === 'launch'
-    ? { kind: 'launch', site: st.site, params: launchToParams({ mode: 'parking-orbit', siteId: st.site, launchTime: mission.epoch, azimuthDeg: st.azimuthDeg, ...launchFields(mission, st.altitudeM) }) }
+    ? { kind: 'launch', site: st.site, params: launchToParams({ mode: 'parking-orbit', siteId: st.site, launchTime: mission.epoch, azimuthDeg: st.azimuthDeg, ...launchFields(mission, st.altitudeM) }), ...(V ? { ascent: 'vehicle' as const } : {}) }
     : { kind: 'state', center: st.center, state: st.state.slice() };
-  return makePlan({ data: fingerprint, epoch: mission.epoch, duration: mission.maxDuration, rtol: DEFAULT_MISSION_RTOL, start, spacecraft: mission.spacecraft, burns: [] });
+  return makePlan({ data: fingerprint, epoch: mission.epoch, duration: mission.maxDuration, rtol: DEFAULT_MISSION_RTOL, start, spacecraft: mission.spacecraft, burns: [], ...(V ? { lowerStages: V.lowerStages.map((x) => ({ ...x, engines: x.engines.map((e) => ({ ...e })) })) } : {}) });
 }
 
 function usesReentry(o: Objective): boolean {
