@@ -1,2 +1,6 @@
 node_modules
 dist
+e2e/.dist-ephemeris
+e2e/.dist-node
+playwright-report
+test-results

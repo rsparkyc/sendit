@@ -8,11 +8,17 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts"
+    "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts",
+    "test:browsers": "playwright test --config e2e/playwright.config.ts"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/three": "^0.170.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.2"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
   }
 }
