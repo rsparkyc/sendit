@@ -195,8 +195,8 @@ test('solve the geostationary mission by numeric entry; objectives turn complete
   await enter(page, 'input[title^="Flight duration"]', '4.6');
   await settled(page);
   const nodes: [number, [number, number, number]][] = [
-    [1658.6759623576477, [2449.4774271734054, 0, 0]],
-    [20655.345230579376, [1467.5909644685012, -210.26166258925892, -1.6152341157708214]],
+    [1678.9791939258575, [2449.478316355737, 0, 0]],
+    [20675.642688512802, [1467.715665002644, -205.3391377520207, -1.621673268307772]],
   ];
   for (const [t, dv] of nodes) {
     await page.getByRole('button', { name: '+ Node at cursor' }).click();

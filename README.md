@@ -114,7 +114,11 @@ The main page is the game's core loop: an editable mission plan, replayed live.
   descending nodes (`plane-nodes.ts`, pure: sign changes of the out-of-plane coordinate on the replayed
   trajectory, refined on a cubic Hermite) against the reference body's equator or a body's orbital plane,
   the rotation-axis and plane-disc overlays, and one distance convention for the whole UI (`units.ts`:
-  altitude above the surface by default, or radius from the centre; the Sun always from its centre).
+  altitude by default, or radius from the centre; the Sun always from its centre). Altitude means one
+  thing in every layer (launch, replay events, impact and atmosphere thresholds, objectives, planner,
+  UI): distance from the body's centre minus its reference radius (`referenceRadius` in the body data,
+  the equatorial radius its gravity field is referred to, e.g. 6,378.1366 km for Earth; the mean
+  radius for bodies without a field). The mean radius is used only for drawing.
 - **Timeline** (`timeline.ts`): zoomable about the cursor (wheel, pinch, buttons, fit presets), adaptive
   MET axis, clustered ticks, overview strip when zoomed; it controls only what the scrubber shows.
 - Viewer pieces: `frames.ts`, `paths.ts`, `scene.ts`, `labels.ts`, `hud.ts`, `camera.ts`, `time.ts`.
@@ -244,6 +248,49 @@ fingerprint changes) or a mission's `version` is bumped:
    submission times; the others are kept but marked invalid, with the reason.
 3. Run it again until it reports `written: 0` (an entry that changed while it was being
    re-verified is retried on the next run).
+
+#### Release: physics model 2
+
+Physics model 2 changes replay results (force model, the altitude reference radius, the
+time-dependent pole for inclination objectives) and every campaign mission's rules (fixed
+parking orbit, re-derived par and limits), so all boards move to new partitions: physics
+`2.<fingerprint>` and new mission versions (plane-change 1 -> 2, every other mission 2 -> 3).
+Build the site and the leaderboard bundle from the same commit, then:
+
+```sh
+# 1. Leaderboard first: from now on model-1 plans are refused ("made for an older version
+#    of the game", version-mismatch) and model-1 pages get "mission is now version N".
+AWS_PROFILE=<profile> SITE_STACK=<site-stack> ARTIFACT_BUCKET=<artifact-bucket> \
+  scripts/deploy-leaderboard.sh <leaderboard-stack>
+# 2. The site, right after (same commit), so players get the model-2 game.
+AWS_PROFILE=<profile> scripts/deploy.sh <site-stack>
+# 3. Check what the server runs: physics 2.<fingerprint>, the mission versions below.
+pnpm build:leaderboard
+eval "$(aws configure export-credentials --profile <profile> --format env)"
+export TABLE_NAME=<table>
+node dist-server/leaderboard/admin.mjs missions
+# 4. Re-fly every stored plan under model 2 and file it under the new mission version.
+#    Each command covers all of the mission's launch sites (a player's group holds one
+#    entry per site plus the all-sites entry). Dry run first, then for real; repeat each
+#    until it reports written: 0.
+for m in plane-change:1 geo-from-leo:2 earth-escape:2 lunar-flyby:2 lunar-free-return:2 \
+         lunar-orbit:2 venus-flyby:2 mars-flyby:2 mars-orbit:2 venus-to-mercury:2 \
+         solar-escape:2 jupiter-saturn:2; do
+  node dist-server/leaderboard/admin.mjs reverify --mission "${m%%:*}" --from "${m##*:}" --dry-run
+done
+for m in plane-change:1 geo-from-leo:2 earth-escape:2 lunar-flyby:2 lunar-free-return:2 \
+         lunar-orbit:2 venus-flyby:2 mars-flyby:2 mars-orbit:2 venus-to-mercury:2 \
+         solar-escape:2 jupiter-saturn:2; do
+  node dist-server/leaderboard/admin.mjs reverify --mission "${m%%:*}" --from "${m##*:}"
+done
+```
+
+Re-verification checks each stored plan against the new rules before re-flying it: a plan
+whose parking orbit is not the mission's fixed altitude (or that changed the ascent time,
+downrange angle or circularisation) is marked invalid with that reason, as is any plan
+whose flight no longer meets the objectives or the new limits under model 2. Valid
+entries keep their original submission times. The old version's boards stay in the table
+but are no longer served.
 
 Re-verification also migrates entries stored before launch sites existed (one item per
 player, no per-site items): their plans are re-flown and filed under the site they launched

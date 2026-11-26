@@ -147,7 +147,7 @@ export class Service {
     if (plan.model !== engine.model || plan.data !== engine.fingerprint) {
       return fail(
         'version-mismatch',
-        `this plan was made with physics model ${plan.model} / data ${plan.data}; the leaderboard runs model ${engine.model} / data ${engine.fingerprint}. Reload the game and fly it again.`,
+        `this plan was made for ${plan.model < engine.model ? 'an older' : plan.model > engine.model ? 'a newer' : 'a different'} version of the game (physics model ${plan.model} / data ${plan.data}); the leaderboard runs model ${engine.model} / data ${engine.fingerprint}. Reload the game and fly it again.`,
         { expected: { model: engine.model, data: engine.fingerprint }, got: { model: plan.model, data: plan.data } },
       );
     }

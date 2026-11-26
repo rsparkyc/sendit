@@ -21,9 +21,11 @@
  *    different ground-relative azimuth because the pad moves east at up to
  *    465 m/s; the planning UI can show both.
  *  - Insertion happens ascentTimeS after liftoff, downrangeDeg along the plane
- *    from r, on a circular orbit of radius WGS84 a + altitude (altitude is
- *    over the equatorial radius, as orbit altitudes are usually quoted;
- *    geodetic height above the oblate surface differs by up to 21 km).
+ *    from r, on a circular orbit of radius R + altitude, R = Earth's
+ *    reference radius (BodyData.referenceRadius: the equatorial radius its
+ *    gravity field is referred to, 6378.1366 km), the one radius every
+ *    altitude in the game is measured from (geodetic height above the oblate
+ *    surface differs by up to 21 km).
  *  - Earth's barycentric state at the insertion time comes from the caller's
  *    ephemeris; Earth is found by id, never by index.
  *
@@ -94,7 +96,7 @@ export interface ParkingOrbitLaunch {
   readonly launchTime: number;
   /** Inertial launch azimuth, deg clockwise from north. */
   readonly azimuthDeg: number;
-  /** Circular parking-orbit altitude above the equatorial radius, m. */
+  /** Circular parking-orbit altitude above Earth's reference radius (BodyData.referenceRadius), m. */
   readonly altitudeM: number;
   readonly ascentTimeS?: number;
   readonly downrangeDeg?: number;
@@ -177,7 +179,7 @@ export function launchState(spec: LaunchSpec, ephem: Ephemeris, bodies: readonly
   const d = plane.downrange;
   const rHat: V3 = [ct * u[0] + st * d[0], ct * u[1] + st * d[1], ct * u[2] + st * d[2]];
   const vHat: V3 = [ct * d[0] - st * u[0], ct * d[1] - st * u[1], ct * d[2] - st * u[2]];
-  const r0 = WGS84.a + spec.altitudeM;
+  const r0 = earth.referenceRadius + spec.altitudeM;
   const cosI = dot(plane.normal, plane.pole);
   let geo: [number, number, number, number, number, number];
   if (mode === 'two-body') {
@@ -190,7 +192,7 @@ export function launchState(spec: LaunchSpec, ephem: Ephemeris, bodies: readonly
     // u = argument of latitude. With N = pole x h (|N| = sin i):
     //   sin^2 i cos 2u = (r.N)^2 - (r.(h x N))^2,  sin^2 i sin 2u = 2 (r.N)(r.(h x N)).
     const j2 = earth.j2 ?? 0;
-    const re = earth.j2Radius ?? WGS84.a;
+    const re = earth.j2Radius ?? earth.referenceRadius;
     const eps = 1.5 * j2 * (re / r0) * (re / r0);
     const sin2i = 1 - cosI * cosI;
     const n = Math.sqrt((earth.gm / (r0 * r0 * r0)) * (1 + eps * (1 - 1.5 * sin2i)));

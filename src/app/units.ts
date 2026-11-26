@@ -5,9 +5,10 @@
  * ("alt" or "radius") so it cannot be misread. The Sun is always a distance
  * from its centre (km, or AU when large): its "surface" is no useful reference.
  *
- * Body radii are the body data's (physics.ts BODIES), the same values the
- * mission layer uses for altitude and impact events, so a converted value
- * agrees exactly with the events. Mission limits stay radii in the mission
+ * Altitudes are above each body's reference radius (physics.ts BODIES
+ * refRadius = BodyData.referenceRadius, the equatorial radius of its gravity
+ * field), the one radius the mission layer, launch, events and objectives
+ * use, so a converted value agrees exactly with the events. Mission limits stay radii in the mission
  * definitions; this is display only.
  */
 import { BODIES, bodyIndex } from './physics';
@@ -33,7 +34,7 @@ export function onDistanceMode(l: () => void): () => void {
 
 export function bodyRadius(id: string): number {
   const i = bodyIndex(id);
-  return i >= 0 ? BODIES[i].radius : 0;
+  return i >= 0 ? BODIES[i].refRadius : 0;
 }
 
 const AU = 149_597_870_700;

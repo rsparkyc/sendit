@@ -42,7 +42,7 @@ import { PlannerOverlay } from './planner-ui';
 import { ReplayClient } from './replay-client';
 import { sandboxSpheres } from './replay-options';
 import { SceneView, UNIT } from './scene';
-import { loadSaved, parsePlanHash, planHash, save } from './share';
+import { loadSaved, parsePlanHash, planHash, save, versionNotice } from './share';
 import { Store, WARP_RATES, type AppState } from './store';
 import { calendarToTdb, formatCalendar, JULIAN_YEAR, parseCalendar, tdbToCalendar, utcMsToTdb } from './time';
 import { SAMPLE_STRIDE, stateAt, trajectoryFrom, type Trajectory } from './trajectory';
@@ -106,7 +106,7 @@ function initialEditor(): Pick<AppState, 'missionId' | 'plan' | 'parked' | 'noti
   }
   if (saved) {
     const m = missionForLoadedPlan(saved.missionId, saved.plan);
-    return { missionId: m.missionId, plan: saved.plan, parked: saved.parked, notice: [link.error, m.notice].filter(Boolean).join('\n') || null };
+    return { missionId: m.missionId, plan: saved.plan, parked: saved.parked, notice: [link.error, versionNotice(saved.plan, fingerprint, 'saved'), m.notice].filter(Boolean).join('\n') || null };
   }
   return { missionId: 'sandbox', plan: initialPlan(MISSIONS[0], fingerprint), parked: [], notice: link.error };
 }
@@ -656,7 +656,7 @@ function pointReadout(tm: number): string {
   const bv = new Float64Array(3 * n);
   if (!trajectory || !stateAt(trajectory, t, st) || !eph.evaluate(t, bp, bv)) return formatMet(tm, 0);
   const di = bodyIndex(dominantBody(tm));
-  const alt = Math.hypot(st[0] - bp[3 * di], st[1] - bp[3 * di + 1], st[2] - bp[3 * di + 2]) - BODIES[di].radius;
+  const alt = Math.hypot(st[0] - bp[3 * di], st[1] - bp[3 * di + 1], st[2] - bp[3 * di + 2]) - BODIES[di].refRadius;
   const v = Math.hypot(st[3] - bv[3 * di], st[4] - bv[3 * di + 1], st[5] - bv[3 * di + 2]);
   return `${formatMet(tm, 0)} · ${fromSurface(alt, BODIES[di].id)} · ${v.toFixed(0)} m/s (${BODIES[di].name})`;
 }
@@ -1442,7 +1442,7 @@ function tick(now: number): void {
       if (scVisible) {
         const dom = dominantBody(t - r.plan.epoch);
         const di = bodyIndex(dom);
-        const alt = Math.hypot(scState[0] - pos[3 * di], scState[1] - pos[3 * di + 1], scState[2] - pos[3 * di + 2]) - BODIES[di].radius;
+        const alt = Math.hypot(scState[0] - pos[3 * di], scState[1] - pos[3 * di + 1], scState[2] - pos[3 * di + 2]) - BODIES[di].refRadius;
         const vr = Math.hypot(scState[3] - vel[3 * di], scState[4] - vel[3 * di + 1], scState[5] - vel[3 * di + 2]);
         ro.push(readout('Spacecraft', scState, 0, scState, 3, frame, `${phaseAt(t)} · ${BODIES[di].name} ${fromSurface(alt, BODIES[di].id)}, ${vr.toFixed(0)} m/s`));
       } else {

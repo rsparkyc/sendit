@@ -100,7 +100,8 @@ export interface BodyOblateness {
  * nodes for each of the many short propagations a corrector or planner runs.
  */
 const POLE_TABLES = new WeakMap<IauRotation, PoleTable>();
-function sharedPoleTable(m: IauRotation): PoleTable {
+/** Exported so the mission layer measures inclinations against exactly the pole the physics uses. */
+export function sharedPoleTable(m: IauRotation): PoleTable {
   let t = POLE_TABLES.get(m);
   if (t === undefined) {
     t = new PoleTable(m);

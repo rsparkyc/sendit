@@ -3,7 +3,7 @@ import { formatMet, parseDuration } from './dom';
 import { listEvents } from './events-view';
 import { encodePlan, makePlan, PHYSICS_MODEL, type MissionPlan, type TrajectoryEvent } from './mission-layer';
 import { addNode } from './nodes';
-import { parsePlanHash, parseSavedEditor, planHash, serializeEditor } from './share';
+import { parsePlanHash, parseSavedEditor, planHash, serializeEditor, versionNotice } from './share';
 
 const FP = 'abcdef01';
 const plan: MissionPlan = addNode(
@@ -47,6 +47,19 @@ describe('share link', () => {
     bytes[1] = 99;
     const future = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     expect(parsePlanHash(`#p=${future}`, FP).error).toMatch(/unsupported plan format 99/);
+  });
+
+  it('says a plan made under an older physics model (a link or saved work) was made for an older version', () => {
+    const old = { ...plan, model: PHYSICS_MODEL - 1, data: '2cb83544' };
+    const link = parsePlanHash(planHash('lunar-flyby', old)!, FP);
+    expect(link.plan).not.toBeNull();
+    expect(link.mismatch).toMatch(/^This link was made for an older version of the game \(physics model 1, data 2cb83544\)/);
+    expect(link.mismatch).toMatch(/refused \(outcome: version mismatch\)/);
+    expect(versionNotice(old, FP, 'saved')).toMatch(/^Your saved plan was made for an older version of the game/);
+    expect(versionNotice({ ...plan, model: PHYSICS_MODEL + 1 }, FP, 'saved')).toMatch(/a newer version/);
+    expect(versionNotice(plan, FP, 'saved')).toBeNull();
+    // The editor's adopt button keys on this wording.
+    expect(link.mismatch).toMatch(/physics model/);
   });
 
   it('view-only hashes are not errors', () => {

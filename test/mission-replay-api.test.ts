@@ -37,6 +37,7 @@ function canonical(over: Partial<MissionPlan> = {}): MissionPlan {
 const GOLDEN: readonly { model: number; data: string; digest: string }[] = [
   { model: 1, data: '2cb83544', digest: '342786722dea0bca' },
   { model: 2, data: 'fbbf0b54', digest: '2ef22d703dac2622' }, // time-dependent IAU poles, Miranda, Moon parented to Earth, outer moons out of planet GMs. Stage 2: spacecraft fields (Earth, Moon degree 4 with tesserals; J3..J9 of Mars and the giants; tapered), Mimas and Enceladus (Saturn's GM), Saturn J3..J8 and Jupiter J3..J6 on their moons; the fingerprint also covers jn, tesseral, taper radii, prime meridians and Earth's ERA/Delta-T (stage 1: data 2a78461f, digest efe76eec721faaf3)
+  { model: 2, data: '76a862ea', digest: '4ca023ac13053da6' }, // stage 3 (mission layer): altitudes above each body's reference radius (BodyData.referenceRadius, now in the body data), so the launch circle is Earth's 6378136.6 m field radius instead of WGS84's 6378137 m (0.4 m lower: the digest changes); the fingerprint also covers the reference radii (MissionBody.radius: impact and atmosphere thresholds) and the IAU pole models inclination objectives measure against
 ];
 
 describe('replay hooks and abort', () => {
@@ -79,7 +80,8 @@ describe('replay hooks and abort', () => {
     expect(l.state.length).toBe(6);
     expect(l.inclinationDeg!).toBeGreaterThan(28);
     expect(l.inclinationDeg!).toBeLessThan(29);
-    expect(Math.hypot(l.geocentric![0], l.geocentric![1], l.geocentric![2])).toBeCloseTo(6378137 + 250e3, -4);
+    // Mean radius of the parking orbit: Earth's reference radius (6378136.6 m) + the altitude asked for (the j2-mean wobble is ~1-2 km).
+    expect(Math.hypot(l.geocentric![0], l.geocentric![1], l.geocentric![2])).toBeCloseTo(6378136.6 + 250e3, -4);
   });
 
   it('matches the golden digest for this PHYSICS_MODEL and data', () => {

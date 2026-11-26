@@ -33,16 +33,26 @@ export function parsePlanHash(hash: string, fingerprint: string): HashLoad {
   if (p === null) return { missionId, plan: null, error: null, mismatch: null };
   try {
     const plan = decodePlan(p);
-    const mismatch =
-      plan.model !== PHYSICS_MODEL || plan.data !== fingerprint
-        ? `This link was made with physics model ${plan.model} and data ${plan.data}; this build is model ${PHYSICS_MODEL} with data ${fingerprint}. ` +
-          'Its replay would not match the original, so it is refused (outcome: version mismatch). You can adopt the plan for this build, which re-flies it under the current physics.'
-        : null;
-    return { missionId, plan, error: null, mismatch };
+    return { missionId, plan, error: null, mismatch: versionNotice(plan, fingerprint, 'link') };
   } catch (e) {
     const msg = e instanceof PlanError ? e.message : String(e);
     return { missionId, plan: null, error: `Could not load the shared plan: ${msg}`, mismatch: null };
   }
+}
+
+/**
+ * Notice for a plan made for another version of the game (physics model or
+ * data fingerprint), or null when it matches this build. Older plans (e.g.
+ * physics model 1 after the model 2 release) say so plainly: their replay is
+ * refused (outcome: version mismatch) until the player adopts them, which
+ * re-flies them under the current physics.
+ */
+export function versionNotice(plan: Pick<MissionPlan, 'model' | 'data'>, fingerprint: string, source: 'link' | 'saved'): string | null {
+  if (plan.model === PHYSICS_MODEL && plan.data === fingerprint) return null;
+  const what = source === 'link' ? 'This link was made' : 'Your saved plan was made';
+  const age = plan.model < PHYSICS_MODEL ? 'an older version of the game' : plan.model > PHYSICS_MODEL ? 'a newer version of the game' : 'a different data version of the game';
+  return `${what} for ${age} (physics model ${plan.model}, data ${plan.data}); this build is physics model ${PHYSICS_MODEL}, data ${fingerprint}. ` +
+    'Its replay would not match the original, so it is refused (outcome: version mismatch). You can adopt the plan for this build, which re-flies it under the current physics and the current mission rules.';
 }
 
 // ---------------------------------------------------------------------------

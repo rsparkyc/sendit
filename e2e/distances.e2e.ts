@@ -11,7 +11,7 @@
  *    Pe/Ap equal the last apsis rows; the readout and hover readout lie
  *    between the lowest periapsis and the highest apoapsis);
  *  - switching the setting to radius changes every one of them together
- *    (each by Earth's mean radius, 6,371 km, to the displayed precision).
+ *    (each by Earth's reference radius, 6,378.1366 km, to the displayed precision).
  * Screenshots go to test-results/distances/.
  */
 import { expect, test, type Page } from '@playwright/test';
@@ -128,17 +128,11 @@ const AFTER_OK = /^(?:\s?(?:alt|altitude|radius)(?![a-z])|\s?from (?:the |\w+(?:
 const BEFORE_OK = /(?:Altitude above \w+|Radius from \w+(?:’|')s centre|Distance from barycentre|Distance from Sun(?:’|')s centre|alt(?:itude)?,? km|Radius, km|radius, km)\s*$/;
 /** Not distances to a body (removed before checking): the corrector's B-plane miss and its Lambert-guess caveat. */
 const NOT_TO_BODY = [/misses by millions of km/g];
-/**
- * Mission-layer briefing text that the UI cannot convert (the number is not a
- * distance in the UI's convention; see the report on equatorial vs mean radius).
- * Listed here so that any new unlabelled form fails the test.
- */
-const KNOWN_MISSION_TEXT = [/a 400 km circular orbit/, /between 100 and 10,000 km altitude/, /within 2 million km/];
 
 function unlabelled(texts: string[]): string[] {
   const bad = new Set<string>();
   for (const s of texts) {
-    const t = [...NOT_TO_BODY, ...KNOWN_MISSION_TEXT].reduce((a, r) => a.replace(r, '«skipped»'), s);
+    const t = NOT_TO_BODY.reduce((a, r) => a.replace(r, '«skipped»'), s);
     for (const m of t.matchAll(/(\d[\d,]*(?:\.\d+)?)\s?(?:million )?km\b(?!\/s|²)/g)) {
       const i = m.index!;
       const after = t.slice(i + m[0].length, i + m[0].length + 40);
@@ -184,13 +178,13 @@ const SCENARIOS: { name: string; setup: (page: Page) => Promise<number | null> }
       await fresh(page, 'geo-from-leo');
       await enter(page, 'input[title^="Flight duration"]', '4.6');
       await settled(page);
-      await node(page, 1658.6759623576477, 2449.4774271734054);
-      await page.evaluate(() => { const w = (window as any).sendit; w.store.set({ t: w.store.get().plan.epoch + 20655.345230579376 }); });
+      await node(page, 1678.9791939258575, 2449.478316355737);
+      await page.evaluate(() => { const w = (window as any).sendit; w.store.set({ t: w.store.get().plan.epoch + 20675.642688512802 }); });
       await page.getByRole('button', { name: '+ Node at cursor' }).click();
-      await enter(page, 'input.met-input', '20655.345230579376');
-      await enter(page, 'input[title="Prograde delta-v, m/s"]', '1467.5909644685012');
-      await enter(page, 'input[title="Normal delta-v, m/s"]', '-210.26166258925892');
-      await enter(page, 'input[title="Radial out delta-v, m/s"]', '-1.6152341157708214');
+      await enter(page, 'input.met-input', '20675.642688512802');
+      await enter(page, 'input[title="Prograde delta-v, m/s"]', '1467.715665002644');
+      await enter(page, 'input[title="Normal delta-v, m/s"]', '-205.3391377520207');
+      await enter(page, 'input[title="Radial out delta-v, m/s"]', '-1.621673268307772');
       await settled(page);
       expect(await page.evaluate(() => (window as any).sendit.store.get().replay.evaluation.success)).toBe(true);
       await setTime(page, 3 * 86400);
@@ -311,7 +305,8 @@ test.describe('distance convention audit', () => {
     console.log(`plane change, radius: ${JSON.stringify(r)}`);
     await page.locator('.readouts').screenshot({ path: `${SHOTS}/readout-panel-radius.png` });
     await page.screenshot({ path: `${SHOTS}/readout-radius.png` });
-    const shift = (x: number, y: number) => expect(Math.abs(y - x - 6371)).toBeLessThanOrEqual(1);
+    // Altitude and radius differ by Earth's reference (equatorial) radius, 6378.1366 km: the one altitude radius of every layer.
+    const shift = (x: number, y: number) => expect(Math.abs(y - x - 6378.1366)).toBeLessThanOrEqual(1);
     a.st.forEach((x, i) => shift(x, r.st[i]));
     a.pe.forEach((x, i) => shift(x, r.pe[i]));
     a.ap.forEach((x, i) => shift(x, r.ap[i]));
@@ -319,8 +314,8 @@ test.describe('distance convention audit', () => {
     // Under a loaded parallel run the second hover sometimes finds no free point on screen (about 1 run in 6):
     // checked when found; the labelled-text audit above covers the hover text in radius mode as well.
     if (Number.isFinite(r.hover)) {
-      expect(r.hover).toBeGreaterThanOrEqual(lo + 6371);
-      expect(r.hover).toBeLessThanOrEqual(hi + 6371);
+      expect(r.hover).toBeGreaterThanOrEqual(lo + 6378.1366);
+      expect(r.hover).toBeLessThanOrEqual(hi + 6378.1366);
     } else console.warn('radius-mode hover readout not captured this run');
     expect(Math.abs(r.ro - r.extra)).toBeLessThanOrEqual(1);
   });
@@ -350,14 +345,14 @@ test('node editor step captions: screenshots at the default dock width and at 39
     return rows.flat();
   };
   await fresh(page, 'geo-from-leo');
-  await node(page, 1658.68, 2449.48);
+  await node(page, 1678.98, 2449.48);
   await page.setViewportSize(SIZES.desktop);
   await check(page, 'desktop');
   const ctx = await browser.newContext({ viewport: SIZES.phone, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });
   const phone = await ctx.newPage();
   await fresh(phone, 'geo-from-leo');
   await phone.locator('#tab-nodes').click();
-  await node(phone, 1658.68, 2449.48);
+  await node(phone, 1678.98, 2449.48);
   const pb = await check(phone, 'phone');
   for (const b of pb) expect(b.h).toBeGreaterThanOrEqual(44);
   await ctx.close();

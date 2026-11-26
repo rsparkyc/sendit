@@ -125,6 +125,20 @@ export function withLaunch(plan: MissionPlan, l: LaunchDefaults): MissionPlan {
   return { ...plan, epoch: l.time, start: { kind: 'launch', site: l.site, params } };
 }
 
+/**
+ * The plan with the mission's fixed launch parameters (rules.launch: parking
+ * altitude, ascent time, downrange angle, circularisation) applied; unchanged
+ * for sandbox, free starts and missions without the rule. The editor locks
+ * those fields, so an older plan is brought into line this way.
+ */
+export function withLaunchRule(entry: MissionEntry | undefined, plan: MissionPlan): MissionPlan {
+  const L = entry?.def?.rules.launch;
+  if (!L || plan.start.kind !== 'launch') return plan;
+  const p = plan.start.params;
+  const params = launchToParams({ mode: 'parking-orbit', siteId: plan.start.site, launchTime: p[0], azimuthDeg: p[1], altitudeM: L.altitudeM, ascentTimeS: L.ascentTimeS, downrangeDeg: L.downrangeDeg, circularization: L.circularization });
+  return params.every((v, i) => Object.is(v, p[i])) && p.length === params.length ? plan : { ...plan, start: { ...plan.start, params } };
+}
+
 /** Free start: a state relative to `center` at `epoch`. */
 export function withStateStart(plan: MissionPlan, center: string, epoch: number, state: number[]): MissionPlan {
   return { ...plan, epoch, start: { kind: 'state', center, state } };

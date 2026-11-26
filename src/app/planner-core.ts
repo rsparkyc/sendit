@@ -120,7 +120,7 @@ async function correctInner(m: Extract<ToPlanner, { type: 'correct' }>): Promise
   const { y: y0, t: t0 } = stateBefore(plan, i, until);
   await yieldNow();
   const bi = bodyIdx(target.body);
-  const R = BODY_DATA[bi].radius;
+  const R = BODY_DATA[bi].referenceRadius;
   const mu = ephem.gm[bi];
   const soi = sandboxSpheres().find((s) => s.body === target.body)?.radius ?? 1e9;
   const burn0 = toAbsBurn(plan, i, bodyIdx) as Burn;

@@ -126,7 +126,7 @@ export function evaluateChain(ephem: Ephemeris, bodies: readonly BodyData[], seq
   const dep = idx[0];
   const depV = vinf(legs[0].v1, st[0]);
   const depVm = mag(depV);
-  const dvDep = departureDv(depVm, ephem.gm[dep], bodies[dep].radius + (opts.parkingAltitude ?? 200e3));
+  const dvDep = departureDv(depVm, ephem.gm[dep], bodies[dep].referenceRadius + (opts.parkingAltitude ?? 200e3));
   const flybys: FlybyReport[] = [];
   let mismatchSum = 0;
   let penalty = 0;
@@ -142,7 +142,7 @@ export function evaluateChain(ephem: Ephemeris, bodies: readonly BodyData[], seq
     const rpB = s2 > 0 ? (muB / (a * a)) * (1 / s2 - 1) : Infinity;
     const rpP = powered(a, c, muB, turn);
     const pdv = Number.isFinite(rpP) ? Math.abs(Math.sqrt(c * c + (2 * muB) / rpP) - Math.sqrt(a * a + (2 * muB) / rpP)) : Math.abs(c - a);
-    const R = bodies[b].radius;
+    const R = bodies[b].referenceRadius;
     const Rmin = R + minFlybyAltitude(bodies[b]);
     mismatchSum += Math.abs(c - a);
     if (!(rpP >= Rmin)) penalty += (ALTITUDE_PENALTY * (Rmin - (Number.isFinite(rpP) ? rpP : 0))) / Rmin;
@@ -158,7 +158,7 @@ export function evaluateChain(ephem: Ephemeris, bodies: readonly BodyData[], seq
   const arrV = mag(vinf(legs[last - 1].v2, st[last]));
   const ao = opts.arrivalOrbit ?? { kind: 'flyby' };
   const arrB = idx[last];
-  const dvArr = ao.kind === 'flyby' ? 0 : captureDv(arrV, ephem.gm[arrB], bodies[arrB].radius + ao.altitude, ao.eccentricity ?? 0);
+  const dvArr = ao.kind === 'flyby' ? 0 : captureDv(arrV, ephem.gm[arrB], bodies[arrB].referenceRadius + ao.altitude, ao.eccentricity ?? 0);
   const totalDv = dvDep + mismatchSum + dvArr;
   return {
     ok, legs, departureVInf: depV, c3: depVm * depVm, departureDv: dvDep, flybys,

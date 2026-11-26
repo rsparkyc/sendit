@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { createEngine, type Engine } from './engine';
 import { withHidden } from './group';
 import { reverify } from './reverify';
+import { fixedLaunch } from '../../src/mission/objectives';
 import { CONFIG, CRAFT, encode, fakeFly, Harness, plan, secret, SITES_MISSION, TEST_MISSION } from './test-kit';
 
 const DAY = 86400;
@@ -80,6 +81,34 @@ describe('submit: validation and rejection', () => {
     expect(r.body.error).toBe('version-mismatch');
     expect(r.body.detail).toEqual({ expected: { model: h.engine.model, data: h.engine.fingerprint }, got: { model: h.engine.model, data: '0badf00d' } });
     expect(h.flights).toBe(0);
+  });
+
+  it('reports a plan made under an older physics model as made for an older version', async () => {
+    const h = new Harness();
+    const old = { ...plan(h.engine), model: h.engine.model - 1, data: '2cb83544' }; // physics model 1's data stamp
+    const r = await h.submit(1, old);
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe('version-mismatch');
+    expect(r.body.message).toMatch(/made for an older version of the game \(physics model 1 \/ data 2cb83544\)/);
+    expect(r.body.detail).toEqual({ expected: { model: h.engine.model, data: h.engine.fingerprint }, got: { model: h.engine.model - 1, data: '2cb83544' } });
+    expect(h.flights).toBe(0);
+  });
+
+  it('refuses a parking orbit, ascent or circularisation the mission fixes (rules.launch)', async () => {
+    const locked = { ...TEST_MISSION, rules: { ...TEST_MISSION.rules!, launch: fixedLaunch(200e3) } };
+    const h = new Harness(CONFIG, { mission: locked });
+    expect((await h.submit(1, plan(h.engine, { burns: [150] }))).status).toBe(200);
+    const p = plan(h.engine, { burns: [150] });
+    const params = [...(p.start as { params: readonly number[] }).params];
+    for (const [i, v, code] of [[2, 2000e3, 'launch-altitude'], [3, 600, 'launch-ascent'], [4, 20, 'launch-ascent'], [5, 1, 'launch-ascent']] as const) {
+      const q = params.slice();
+      q[i] = v;
+      const r = await h.submit(2, { ...p, start: { kind: 'launch', site: 'kourou', params: q } });
+      expect(r.status, `params[${i}]`).toBe(422);
+      expect(r.body.error).toBe('rule-violation');
+      expect(r.body.detail.issues.map((x: { code: string; path: string }) => [x.code, x.path])).toEqual([[code, `start.params[${i}]`]]);
+    }
+    expect(h.flights).toBe(1);
   });
 
   it('rejects plans that break the mission rules', async () => {

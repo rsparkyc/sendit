@@ -53,7 +53,8 @@ import { convertText, setDistanceMode } from './units';
 describe('distance text conversion', () => {
   it('rewrites mission-layer distances and times into the chosen convention', () => {
     setDistanceMode('alt');
-    expect(convertText('held 3 revolutions (rp 42158 km, ra 42164 km)', 'earth')).toBe('held 3 revolutions (rp 35,787 km alt, ra 35,793 km alt)');
+    // Altitude above Earth's reference (equatorial) radius, 6378.1366 km.
+    expect(convertText('held 3 revolutions (rp 42158 km, ra 42164 km)', 'earth')).toBe('held 3 revolutions (rp 35,780 km alt, ra 35,786 km alt)');
     expect(convertText('took 252011 of 604800 s', null)).toBe('took 2.92 of 7.0 days');
     setDistanceMode('radius');
     expect(convertText('closest approach 1801.0 km altitude', 'moon')).toMatch(/km radius$/);

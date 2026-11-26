@@ -155,10 +155,10 @@ export class PorkchopJob {
     this.mu = ephem.gm[this.cenIdx];
     this.muDep = ephem.gm[this.depIdx];
     this.muArr = ephem.gm[this.arrIdx];
-    this.rPark = bodies[this.depIdx].radius + (spec.parkingAltitude ?? 200e3);
+    this.rPark = bodies[this.depIdx].referenceRadius + (spec.parkingAltitude ?? 200e3);
     const ao = spec.arrivalOrbit ?? { kind: 'capture', altitude: 300e3 };
     this.flyby = ao.kind === 'flyby';
-    this.rCap = bodies[this.arrIdx].radius + (ao.kind === 'capture' ? ao.altitude : 0);
+    this.rCap = bodies[this.arrIdx].referenceRadius + (ao.kind === 'capture' ? ao.altitude : 0);
     this.eCap = ao.kind === 'capture' ? (ao.eccentricity ?? 0) : 0;
     this.maxRevs = Math.max(0, Math.floor(spec.maxRevs ?? 0));
     this.retro = spec.retrograde ?? false;

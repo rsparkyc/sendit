@@ -198,7 +198,7 @@ export function budget(plan: MissionPlan): { total: number; requested: number; r
 // Starting orbits (free start): Keplerian elements to a state relative to the body.
 
 export interface OrbitElements {
-  /** Periapsis and apoapsis altitude above the body's mean radius, m. */
+  /** Periapsis and apoapsis altitude above the body's reference radius (BodyData.referenceRadius), m. */
   periAlt: number;
   apoAlt: number;
   /** Inclination to the body's equator (its pole; ICRF equator if unknown), deg. */

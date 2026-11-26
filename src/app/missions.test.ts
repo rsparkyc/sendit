@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { decodePlan, encodePlan, evaluateMission, launchSite, makeWorld, orbitNormalOf, planeCrossings, replay, replayWithSamples, REPLAY_SAMPLE_STRIDE, type MissionPlan, type ReplayResult } from './mission-layer';
-import { initialPlan, launchOf, missionById, withLaunch, type MissionEntry } from './missions';
+import { conformance, initialPlan, launchOf, missionById, withLaunch, withLaunchRule, type MissionEntry } from './missions';
 import { addNode, nodesOf, updateNode, type Vec3 } from './nodes';
 import { BODY_DATA, ReplayEphemeris } from './physics';
 import { replayOptions } from './replay-options';
@@ -49,6 +49,28 @@ function tliNode(plan: MissionPlan, start: number, duration: number) {
   const dv = ve * Math.log(sc.wetMass / (sc.wetMass - (e.thrust / ve) * duration));
   return addNode(plan, { t: start + duration / 2, dv: [dv, 0, 0], frame: { kind: 'orbital', body: 'earth' }, engine: 0 }).plan;
 }
+
+describe('fixed launch (rules.launch)', () => {
+  it('every campaign mission fixes the parking orbit; the editor brings a plan into line, sandbox stays free', () => {
+    for (const id of ['plane-change', 'geo-from-leo', 'earth-escape', 'lunar-flyby', 'mars-orbit', 'jupiter-saturn']) {
+      const m = missionById(id)!;
+      const L = m.def!.rules.launch!;
+      expect(L.kind).toBe('fixed');
+      const base = initialPlan(m, world.fingerprint);
+      expect(launchOf(base)!.altitudeM).toBe(L.altitudeM);
+      expect(conformance(m, base)).toEqual([]);
+      // A free choice of altitude (the old free delta-v) is refused, with a structured reason; withLaunchRule restores it.
+      const high = withLaunch(base, { ...launchOf(base)!, altitudeM: 2000e3 });
+      expect(conformance(m, high).map((i) => [i.code, i.path])).toEqual([['launch-altitude', 'start.params[2]']]);
+      expect(conformance(m, withLaunchRule(m, high))).toEqual([]);
+    }
+    expect(missionById('plane-change')!.def!.rules.launch!.altitudeM).toBe(400e3);
+    const sb = missionById('sandbox')!;
+    const p = withLaunch(initialPlan(sb, world.fingerprint), { site: 'kourou', time: 8.5e8, azimuthDeg: 90, altitudeM: 1500e3 });
+    expect(withLaunchRule(sb, p)).toBe(p);
+    expect(conformance(sb, p)).toEqual([]);
+  });
+});
 
 describe('replayWithSamples', () => {
   it('draws from the scoring replay without changing a bit of it (same digest as a plain replay)', () => {

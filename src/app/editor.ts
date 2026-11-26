@@ -3,7 +3,7 @@
  * object (the plan is immutable), so "did the plan change" is an identity
  * check and the replay client sees each edit exactly once.
  */
-import { initialPlan, missionById, missionForLoadedPlan, MISSIONS, withLaunch, withStateStart, type LaunchDefaults } from './missions';
+import { initialPlan, missionById, missionForLoadedPlan, MISSIONS, withLaunch, withLaunchRule, withStateStart, type LaunchDefaults } from './missions';
 import { PHYSICS_MODEL, type MissionPlan, type PlanFrame, type Spacecraft } from './mission-layer';
 import { addNode, disableNode, enableNode, nodesOf, removeNode, setSpacecraft, updateNode, type ManeuverNode, type Vec3 } from './nodes';
 import type { AppState, Store } from './store';
@@ -113,11 +113,12 @@ export class Editor {
 
   /** Re-stamp a plan made for another physics build so this build will replay it. */
   adoptForThisBuild(): void {
-    this.commit({ ...this.plan, model: PHYSICS_MODEL, data: this.fingerprint }, { notice: null });
+    const entry = missionById(this.store.get().missionId);
+    this.commit(withLaunchRule(entry, { ...this.plan, model: PHYSICS_MODEL, data: this.fingerprint }), { notice: null });
   }
 
   setLaunch(l: LaunchDefaults): void {
-    this.commit(withLaunch(this.plan, l));
+    this.commit(withLaunchRule(missionById(this.store.get().missionId), withLaunch(this.plan, l)));
   }
 
   setStateStart(center: string, epoch: number, state: number[]): void {

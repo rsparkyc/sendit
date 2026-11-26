@@ -52,8 +52,8 @@ async function enter(page: Page, selector: string, value: string): Promise<void>
 }
 
 const GEO_NODES: [number, [number, number, number]][] = [
-  [1658.6759623576477, [2449.4774271734054, 0, 0]],
-  [20655.345230579376, [1467.5909644685012, -210.26166258925892, -1.6152341157708214]],
+  [1678.9791939258575, [2449.478316355737, 0, 0]],
+  [20675.642688512802, [1467.715665002644, -205.3391377520207, -1.621673268307772]],
 ];
 
 async function solveGeo(page: Page): Promise<void> {
@@ -214,7 +214,7 @@ test.describe('desktop', () => {
     await solveGeo(page);
     await settled(page);
     const obj = page.locator('.obj').first();
-    await expect(obj).toContainText('35,693–35,893 km alt');
+    await expect(obj).toContainText('35,686–35,886 km alt'); // 42,064–42,264 km radius less Earth's reference radius 6,378.1366 km (was the mean radius 6,371 km)
     const status = async () => (await page.locator('.tb-status').textContent()) ?? '';
     const lastPe = async () => (await page.locator('.event-row.k-periapsis').filter({ hasText: 'Periapsis Earth' }).last().locator('.eval').textContent()) ?? '';
     // The groups may be collapsed: open them so the last periapsis row is listed.
@@ -232,7 +232,7 @@ test.describe('desktop', () => {
     const st2 = await status();
     const pe2 = await lastPe();
     expect(num(st2, 'radius')).toBe(num(pe2, 'radius'));
-    expect(Number(num(st2, 'radius')!.replace(/,/g, '')) - Number(num(st, 'alt')!.replace(/,/g, ''))).toBeCloseTo(6371, -1); // Earth's radius in the body data (the mission layer's altitude reference)
+    expect(Number(num(st2, 'radius')!.replace(/,/g, '')) - Number(num(st, 'alt')!.replace(/,/g, ''))).toBeCloseTo(6378, -1); // Earth's reference (equatorial) radius, 6378.1366 km: the altitude reference of every layer
     await page.screenshot({ path: `${SHOTS}/12b-distances-radius.png` });
   });
 

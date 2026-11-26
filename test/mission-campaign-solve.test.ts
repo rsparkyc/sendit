@@ -18,7 +18,7 @@ import { J2000_BODIES } from '../src/physics/solar-system';
 import { optimizeChain } from '../src/planning/flyby';
 import {
   DAY, bAngleFor, bodyIdx, chainPoint, closest, cross, describeRun, dot, eph, fly, insertion, launchForAsymptote, launchPlan,
-  matchVelocity, nelderMead, norm, porkchopBest, solveDeparture, solveTcm, unitv, world, type LaunchChoice,
+  matchVelocity, nelderMead, norm, poleAt, porkchopBest, refRadius, solveDeparture, solveTcm, unitv, world, type LaunchChoice,
 } from './helpers/campaign-solver';
 import { SLOW } from './helpers/real-world';
 
@@ -37,7 +37,6 @@ function record(m: CompleteMission, plan: MissionPlan): void {
 
 /** Equator crossings (ascending if `asc`) of an Earth orbit, found with the replay's step hook. */
 function nodeTime(plan: MissionPlan, after: number, asc: boolean): number {
-  const pole = world.bodies[bodyIdx('earth')].pole!;
   const es = new Float64Array(6);
   const y = new Float64Array(7);
   let prev = NaN;
@@ -49,6 +48,7 @@ function nodeTime(plan: MissionPlan, after: number, asc: boolean): number {
         const ti = tp + ((t - tp) * i) / 8;
         interp(ti, y);
         eph.bodyState(bodyIdx('earth'), ti, es);
+        const pole = poleAt('earth', ti);
         const z = (y[0] - es[0]) * pole[0] + (y[1] - es[1]) * pole[1] + (y[2] - es[2]) * pole[2];
         if (Number.isNaN(tNode) && ti > after && (asc ? prev < 0 && z >= 0 : prev * z <= 0)) tNode = tp0 + (ti - tp0) * (prev / (prev - z));
         prev = z;
@@ -72,7 +72,7 @@ describe.skipIf(!SLOW)('campaign solutions, derived from scratch', { timeout: 30
     const base = launchPlan(m, l, [], 3 * 3600);
     const tNode = nodeTime(base, insertion(base).t, true);
     const mu = eph.gm[bodyIdx('earth')];
-    const pole = world.bodies[bodyIdx('earth')].pole!;
+    const pole = poleAt('earth', tNode);
     const inc = (65 * Math.PI) / 180;
     const plan = matchVelocity(m, { ...base, duration: 0.4 * DAY }, 'earth', tNode, (rel) => {
       const r = rel.slice(0, 3);
@@ -101,7 +101,7 @@ describe.skipIf(!SLOW)('campaign solutions, derived from scratch', { timeout: 30
     }
     const a = apo(lo)!;
     const mu = eph.gm[bodyIdx('earth')];
-    const pole = world.bodies[bodyIdx('earth')].pole!;
+    const pole = poleAt('earth', a.t);
     let plan = matchVelocity(m, launchPlan(m, l, [pro(tn - lo / 2, lo)], 6 * DAY), 'earth', a.t, (rel) => {
       const e = unitv(cross(pole, rel.slice(0, 3)));
       const vc = Math.sqrt(mu / norm(rel.slice(0, 3)));
@@ -186,7 +186,7 @@ describe.skipIf(!SLOW)('campaign solutions, derived from scratch', { timeout: 30
     const s = solveDeparture(m, l, p, 'mars', 600e3);
     const tc = solveTcm(m, { ...launchPlan(m, l, [s.burn], s.tClosest - l.t + 3 * DAY), rtol: 1e-11 }, 'mars', s.tClosest - 30 * DAY, 500e3, s.tClosest);
     const mu = eph.gm[bodyIdx('mars')];
-    const ra = 3389.5e3 + 20000e3;
+    const ra = refRadius('mars') + 20000e3;
     const plan = matchVelocity(m, { ...tc.plan, duration: tc.tClosest - l.t + 3 * DAY }, 'mars', tc.tClosest, (rel) => {
       const r = norm(rel.slice(0, 3));
       return unitv(rel.slice(3)).map((x) => x * Math.sqrt(mu * (2 / r - 2 / (r + ra))));
@@ -215,7 +215,7 @@ describe.skipIf(!SLOW)('campaign solutions, derived from scratch', { timeout: 30
     eph.bodyState(bodyIdx('sun'), p.tArr, S);
     const vJ = [J[3] - S[3], J[4] - S[4], J[5] - S[5]];
     const mu = eph.gm[bodyIdx('jupiter')];
-    const RJ = J2000_BODIES[bodyIdx('jupiter')].radius;
+    const RJ = refRadius('jupiter');
     const v = norm(vIn);
     const dmax = 2 * Math.asin(1 / (1 + ((RJ + 100000e3) * v * v) / mu));
     const turn = Math.min(dmax, Math.acos(dot(unitv(vIn), unitv(vJ))));

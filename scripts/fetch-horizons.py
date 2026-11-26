@@ -638,6 +638,21 @@ def main() -> None:
                      samples=[dict(t=(s["jd"] - JD_J2000) * 86400.0, jd=s["jd"], state=s["state"]) for s in bary_states[sd["id"]]])
                 for sd in SYSTEMS]
 
+    # Reference radius for altitudes (physics model 2): the equatorial radius
+    # the body's gravity field is referred to (j2Radius), or the mean radius
+    # for a body modelled as a point mass. Altitude everywhere (launch, events,
+    # objectives, planner, UI) is distance from the centre minus this radius;
+    # "radius" (mean) stays for drawing. Inserted right after "radius".
+    def with_reference_radius(row):
+        out = {}
+        for k, v in row.items():
+            out[k] = v
+            if k == "radius":
+                out["referenceRadius"] = row.get("j2Radius", row["radius"])
+        return out
+    bodies[:] = [with_reference_radius(r) for r in bodies]
+    barycenters[:] = [with_reference_radius(r) for r in barycenters]
+
     # Display name (for labels) separate from the technical name; ids stay stable.
     for row in bodies + barycenters:
         row["displayName"] = row["name"].replace(" system barycenter", "")
@@ -657,6 +672,8 @@ def main() -> None:
         "terms, ICRF unit vector toward the IAU north pole (poleRaDecDeg: RA, Dec). The dynamics orient each J2/J4 "
         "field by the same model's time-dependent pole (src/physics/orientation.ts).",
         radiusSource="JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
+        referenceRadiusSource="referenceRadius (m): the altitude reference, the equatorial radius the gravity field is "
+        "referred to (j2Radius) where there is a field, else the mean radius.",
         moonSource="Satellite systems (Earth-Moon, Jupiter..Pluto; each moon has 'parent'): state = DE441 system "
         "barycenter + Horizons state relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune "
         "are inconsistent with DE441's barycenters by 364/60 km), all members shifted together so the modelled bodies' "

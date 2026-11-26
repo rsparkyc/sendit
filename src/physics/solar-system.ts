@@ -103,8 +103,15 @@ export interface BodyData {
   readonly displayName?: string;
   /** GM, m^3/s^2. */
   readonly gm: number;
-  /** Mean radius, m. */
+  /** Mean radius, m: drawing size only. */
   readonly radius: number;
+  /**
+   * Reference radius, m: the equatorial radius the gravity field is referred
+   * to (j2Radius) where there is a field, else the mean radius. Altitude above
+   * a body is distance from its centre minus this radius, everywhere (launch,
+   * events, impact and atmosphere thresholds, objectives, planner, UI).
+   */
+  readonly referenceRadius: number;
   /** Barycentric ICRF [x,y,z,vx,vy,vz] at J2000 TDB, m and m/s. */
   readonly state: readonly number[];
   /**

@@ -17,13 +17,13 @@ import { el, esc, fillBodySelect, formatMet, parseDuration, section, setText, se
 import type { Editor } from './editor';
 import { Tuner } from './tuner';
 import { tooShort, objectiveBodies } from './status';
-import { bandFromCentre, convertText, fromCentre, fromSurface, onDistanceMode } from './units';
+import { bandFromCentre, bodyRadius, convertText, distanceMode, fromCentre, fromSurface, onDistanceMode } from './units';
 import { eventLabel, listEvents, type ListedEvent } from './events-view';
 import { groupCrossings, type PlaneCrossing } from './plane-nodes';
 import { formatDistance, formatSpeed } from './format';
 import {
-  LAUNCH_SITES, PAR_SCORE, allowedSites, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
-  type MissionDefinition, type MissionPlan, type Objective, type PlanFrame,
+  LAUNCH_SITES, PAR_SCORE, allowedSites, briefingText, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
+  type BriefingDistance, type MissionDefinition, type MissionPlan, type Objective, type PlanFrame,
 } from './mission-layer';
 
 /** The mission as flown from the plan's launch site (that site's limits); unchanged for a free start. */
@@ -142,7 +142,7 @@ export class MissionPanel {
     if (!p || s.missionId !== p.missionId) {
       const m = missionById(s.missionId);
       setValue(this.sel, s.missionId);
-      setText(this.blurb, convertText(m?.blurb ?? '', m?.def ? objectiveBodies(m.def.objectives)[0] ?? null : null));
+      setText(this.blurb, m?.def ? briefingText(m.def, briefingDistance) : (m?.blurb ?? ''));
     }
     if (!p || s.replay !== p.replay || s.missionId !== p.missionId || s.plan !== p.plan) {
       const m = missionById(s.missionId);
@@ -192,7 +192,14 @@ export class MissionPanel {
   }
 }
 
-const bodyRadiusOf = (id: string) => { const i = bodyIndex(id); return i >= 0 ? BODIES[i].radius : 0; };
+/** A briefing's structured distance in the player's convention (altitude or radius). */
+function briefingDistance(d: BriefingDistance): string {
+  if (d.kind === 'altitude') return fromSurface(d.value, d.body);
+  if (d.kind === 'radius') return fromCentre(d.value, d.body);
+  return bandFromCentre(d.lo + bodyRadiusOf(d.body), d.hi + bodyRadiusOf(d.body), d.body);
+}
+
+const bodyRadiusOf = (id: string) => { const i = bodyIndex(id); return i >= 0 ? BODIES[i].refRadius : 0; };
 
 function objectiveText(o: Objective): string {
   switch (o.kind) {
@@ -223,6 +230,9 @@ export class StartPanel {
   private readonly liftoff = el('input', { type: 'text', spellcheck: false, title: 'Liftoff, TDB: YYYY-MM-DD HH:MM[:SS]', className: 'date-input' });
   private readonly az: HTMLInputElement;
   private readonly alt: HTMLInputElement;
+  /** Label of the parking-orbit field: "Parking alt km" or "Parking radius km" (the distance convention). */
+  private readonly altLabel = el('span', { textContent: 'Parking alt km' });
+  private readonly altNote = el('div', { className: 'hint' });
   private readonly targetInc: HTMLInputElement;
   private readonly incOut = el('div', { className: 'kv' });
   private readonly corridor = el('div', { className: 'hint' });
@@ -272,9 +282,11 @@ export class StartPanel {
       const l = launch();
       if (l) ctx.editor.setLaunch({ ...l, azimuthDeg: ((v % 360) + 360) % 360 });
     });
-    this.alt = numInput('Parking orbit altitude over the equatorial radius, km', '1', (v) => {
+    this.alt = numInput('Parking orbit altitude above Earth’s reference (equatorial) radius, km', '1', (v) => {
       const l = launch();
-      if (l && v > 0) ctx.editor.setLaunch({ ...l, altitudeM: v * 1000 });
+      // The field follows the distance convention: radius from Earth's centre in radius mode.
+      const altM = v * 1000 - (distanceMode() === 'radius' ? bodyRadius('earth') : 0);
+      if (l && altM > 0) ctx.editor.setLaunch({ ...l, altitudeM: altM });
     });
     this.targetInc = numInput('Target inclination, degrees: shows the azimuths that reach it', '0.1', () => this.renderAzChoices(ctx.store.get().plan));
     const stepAz = (d: number) => {
@@ -301,7 +313,8 @@ export class StartPanel {
       this.incOut,
       row('Target inc °', this.targetInc),
       this.azChoices,
-      row('Parking alt km', this.alt),
+      el('label', { className: 'frow' }, this.altLabel, el('div', { className: 'fctl' }, this.alt)),
+      this.altNote,
     );
 
     fillBodySelect(this.center, (i) => BODIES[i].id);
@@ -358,7 +371,7 @@ export class StartPanel {
     const i = bodyIndex(this.orbitCenter);
     if (i < 0) return;
     const b = BODIES[i];
-    const state = stateFromElements(b.gm, b.radius, b.pole, this.orbitEls);
+    const state = stateFromElements(b.gm, b.refRadius, b.pole, this.orbitEls);
     this.ctx.editor.setStateStart(b.id, epoch, state);
   }
 
@@ -419,7 +432,14 @@ export class StartPanel {
       setValue(this.site, l.site);
       setValue(this.liftoff, formatCalendar(tdbToCalendar(l.time)));
       setValue(this.az, String(+l.azimuthDeg.toFixed(4)));
-      setValue(this.alt, String(+(l.altitudeM / 1000).toFixed(3)));
+      const radiusMode = distanceMode() === 'radius';
+      setValue(this.alt, String(+((l.altitudeM + (radiusMode ? bodyRadius('earth') : 0)) / 1000).toFixed(3)));
+      setText(this.altLabel, radiusMode ? 'Parking radius km' : 'Parking alt km');
+      // A mission fixes the parking orbit (rules.launch): shown read-only.
+      const fixed = missionById(this.ctx.store.get().missionId)?.def?.rules.launch;
+      this.alt.disabled = !!fixed;
+      this.alt.title = fixed ? `Fixed by this mission: parking orbit at ${fromSurface(fixed.altitudeM, 'earth')}` : `Parking orbit ${radiusMode ? 'radius from Earth’s centre' : 'altitude above Earth’s reference (equatorial) radius'}, km`;
+      setText(this.altNote, fixed ? `Parking orbit fixed by this mission (${fromSurface(fixed.altitudeM, 'earth')}); ascent ${fixed.ascentTimeS} s, ${fixed.downrangeDeg}° downrange.` : '');
       setText(this.corridor, `Range-safety azimuths ${site.azimuthMinDeg}° → ${site.azimuthMaxDeg}° (clockwise)${site.azimuthApproximate ? ', approximate' : ''}`);
       const ok = azimuthAllowed(site, l.azimuthDeg);
       setText(this.azWarn, ok ? '' : `Azimuth ${l.azimuthDeg.toFixed(2)}° is outside ${site.name}'s range-safety corridor: launch refused`);
@@ -436,7 +456,7 @@ export class StartPanel {
         setValue(this.center, st.center);
         setValue(this.epoch, formatCalendar(tdbToCalendar(plan.epoch)));
         const b = BODIES[i];
-        const e = elementsFromState(b.gm, b.radius, b.pole, st.state);
+        const e = elementsFromState(b.gm, b.refRadius, b.pole, st.state);
         setText(this.orbitOut, `Two-body osculating: Pe ${fromSurface(e.periAlt, b.id)}, Ap ${Number.isFinite(e.apoAlt) ? fromSurface(e.apoAlt, b.id) : 'unbound'}, inc ${e.incDeg.toFixed(2)}° to ${b.name}'s equator`);
         for (const [k, inp] of Object.entries(this.orbitIn) as [keyof OrbitElements, HTMLInputElement][]) {
           const v = this.orbitEls[k];
@@ -904,7 +924,7 @@ export function groupApsides(listed: readonly ListedEvent[]): ListedEvent[][] {
     }
     if (run.length && run[0].ev.body !== x.ev.body) flush();
     const r = bodyIndex(x.ev.body);
-    const R = r >= 0 ? BODIES[r].radius : 0;
+    const R = r >= 0 ? BODIES[r].refRadius : 0;
     const alts = [...run.map((y) => y.ev.altitude), x.ev.altitude];
     const spread = Math.max(...alts) - Math.min(...alts);
     if (run.length && spread > 0.02 * (Math.min(...alts) + R)) flush();

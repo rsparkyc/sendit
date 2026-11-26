@@ -20,8 +20,10 @@ export interface BodyInfo {
   readonly parentId: string | null;
   /** m^3/s^2 */
   readonly gm: number;
-  /** Mean radius, m. */
+  /** Mean radius, m: drawing size only. */
   readonly radius: number;
+  /** Reference radius, m (BodyData.referenceRadius): what every altitude is measured from, as in the mission layer. */
+  readonly refRadius: number;
   /** Barycentric ICRF state at J2000, m and m/s (for deriving parents and periods). */
   readonly state0: readonly number[];
   /** Spin-axis unit vector (ICRF), if the data has one. */
@@ -35,6 +37,7 @@ export const BODIES: readonly BodyInfo[] = J2000_BODIES.map((b, index) => ({
   parentId: b.parent ?? null,
   gm: b.gm,
   radius: b.radius,
+  refRadius: b.referenceRadius,
   state0: b.state,
   pole: b.pole ?? null,
 }));

@@ -13,10 +13,19 @@ import { replay, type ReplayResult } from '../../src/mission/replay';
 import { J2000_BODIES } from '../../src/physics/solar-system';
 import type { Burn } from '../../src/physics/spacecraft';
 import { realWorld } from './real-world';
+import { bodyPoleAt } from '../../src/mission/world';
 
 export const { eph, world } = realWorld();
 export const DAY = 86400;
 export const bodyIdx = (id: string) => J2000_BODIES.findIndex((b) => b.id === id);
+/** Reference radius (altitude zero) of a body. */
+export const refRadius = (id: string) => J2000_BODIES[bodyIdx(id)].referenceRadius;
+/** A body's pole at t as the physics (and the orbit objective) uses it. */
+export function poleAt(id: string, t: number): number[] {
+  const out = [0, 0, 1];
+  bodyPoleAt(world, bodyIdx(id), t, out);
+  return out;
+}
 
 export interface LaunchChoice { site: string; t: number; az: number; alt: number }
 
@@ -214,7 +223,7 @@ export function solveDeparture(m: CompleteMission, l: LaunchChoice, p: PorkchopP
   const e = m.spacecraft.engines[0];
   const dep = planDeparture(eph, J2000_BODIES, { departure: 'earth', vInf: p.vInfDepVec, tDep: p.tDep, parking: ins.y, t0: ins.t, engine: e, propagateOptions: { rtol } });
   if (dep.burn.tStart < ins.t + 60) throw new Error('departure burn before insertion: launch earlier');
-  const R = J2000_BODIES[ti].radius;
+  const R = J2000_BODIES[ti].referenceRadius;
   const vinf = Math.hypot(...p.vInfArrVec);
   const b = bForPeriapsis(R + aimAlt, vinf, eph.gm[ti]);
   // Phase 0 aims beside the body (aiming at its centre can fly an iterate through it).
@@ -240,7 +249,7 @@ export function solveDeparture(m: CompleteMission, l: LaunchChoice, p: PorkchopP
 export function solveTcm(m: CompleteMission, plan: MissionPlan, target: string, tTcm: number, aimAlt: number, tPeri: number, engine = 0, br = 0, rtol = 1e-11): { plan: MissionPlan; closestAlt: number; tClosest: number } {
   const y0 = stateAt(plan, tTcm);
   const ti = bodyIdx(target);
-  const R = J2000_BODIES[ti].radius;
+  const R = J2000_BODIES[ti].referenceRadius;
   const e = m.spacecraft.engines[engine];
   // Approach velocity relative to the target a few days out (v-infinity estimate and B-plane direction).
   const pre = flyToTarget(eph, ti, y0, tTcm, tPeri + 20 * DAY, tPeri, [], { searchFrom: tPeri - 40 * DAY, rtol });

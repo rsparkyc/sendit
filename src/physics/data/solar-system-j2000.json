@@ -11,6 +11,7 @@
   "j2Source": "Unnormalized J2 with reference radius j2Radius (m). Sun/Earth/Moon: DE440 header. Mars..Neptune: JPL satellite ephemeris headers (NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ mar099/jup365/sat441/ura111xl-799/nep097 .cmt). J4 (j4, same radius) for Jupiter..Neptune from the same headers. In systemBarycenters the planet's J2 is applied about the system barycenter (offset <~200 km for Jupiter).",
   "poleSource": "IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc, as generated into src/physics/data/iau-rotation.json by scripts/gen-iau-rotation.py: J2000 value including the periodic terms, ICRF unit vector toward the IAU north pole (poleRaDecDeg: RA, Dec). The dynamics orient each J2/J4 field by the same model's time-dependent pole (src/physics/orientation.ts).",
   "radiusSource": "JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
+  "referenceRadiusSource": "referenceRadius (m): the altitude reference, the equatorial radius the gravity field is referred to (j2Radius) where there is a field, else the mean radius.",
   "moonSource": "Satellite systems (Earth-Moon, Jupiter..Pluto; each moon has 'parent'): state = DE441 system barycenter + Horizons state relative to it (see scripts/fetch-horizons.py: Horizons' SSB-centred Uranus/Neptune are inconsistent with DE441's barycenters by 364/60 km), all members shifted together so the modelled bodies' center of mass is the barycenter; GM, J2, J4 and RADIUS from the satellite ephemeris Horizons uses (https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ jup365, sat441, ura184_part-1, nep098_part-1, plu060 .cmt; Earth-Moon: DE440 header); planet GM = that file's system GM minus the modelled moons and minus the unmodelled moons outside the modelled moons' orbits (Hyperion, Phoebe, Helene; Nix, Hydra, Kerberos, Styx), which are left out; unmodelled inner moons stay lumped in the planet; radius from https://ssd.jpl.nasa.gov/sats/phys_par/.",
   "generatedBy": "scripts/fetch-horizons.py",
   "bodies": [
@@ -21,6 +22,7 @@
       "gm": 1.3271244004127942e+20,
       "gmSource": "GMS",
       "radius": 695700000.0,
+      "referenceRadius": 696000000.0,
       "pole": [
         0.12235349347232782,
         -0.42307208364764326,
@@ -54,6 +56,7 @@
       "gm": 22031868551400.0,
       "gmSource": "GM1",
       "radius": 2439400.0,
+      "referenceRadius": 2439400.0,
       "pole": [
         0.09137781820826625,
         -0.4696473503642596,
@@ -80,6 +83,7 @@
       "gm": 324858592000000.0,
       "gmSource": "GM2",
       "radius": 6051800.0,
+      "referenceRadius": 6051800.0,
       "pole": [
         0.018690814168902073,
         -0.3877088083617989,
@@ -106,6 +110,7 @@
       "gm": 398600435507022.56,
       "gmSource": "GM_EARTH",
       "radius": 6371008.399999999,
+      "referenceRadius": 6378136.6,
       "pole": [
         6.123233995736766e-17,
         0.0,
@@ -201,6 +206,7 @@
       "gm": 4902800118457.549,
       "gmSource": "GM_MOON",
       "radius": 1737400.0,
+      "referenceRadius": 1738000.0,
       "pole": [
         -0.02260867140418245,
         -0.4118309009426125,
@@ -297,6 +303,7 @@
       "gm": 42828375815756.1,
       "gmSource": "GM4",
       "radius": 3389500.0,
+      "referenceRadius": 3396000.0,
       "pole": [
         0.4461552707768573,
         -0.4062426653624658,
@@ -341,6 +348,7 @@
       "gm": 1.2668653209772181e+17,
       "gmSource": "jup365.cmt: system GM minus the modelled moons; inner unmodelled moons ['505', '514', '515', '516'] lumped in; DE440 GM5 = 126712764.09999996 km^3/s^2",
       "radius": 69911000.0,
+      "referenceRadius": 71492000.0,
       "pole": [
         -0.014597290902157927,
         -0.43032959427365014,
@@ -386,6 +394,7 @@
       "gm": 3.793120735736166e+16,
       "gmSource": "sat441.cmt: system GM minus the modelled moons and the outer unmodelled moons ['607', '609', '612'] (left out); DE440 GM6 = 37940584.8418 km^3/s^2",
       "radius": 58232000.0,
+      "referenceRadius": 60330000.0,
       "pole": [
         0.0854788318610717,
         0.0732357578775289,
@@ -431,6 +440,7 @@
       "gm": 5793950737840896.0,
       "gmSource": "ura184_part-1.cmt: system GM minus the modelled moons; inner unmodelled moons ['715'] lumped in; DE440 GM7 = 5794556.399999998 km^3/s^2",
       "radius": 25362000.0,
+      "referenceRadius": 25559000.0,
       "pole": [
         -0.21199958153779855,
         -0.9415591572895124,
@@ -473,6 +483,7 @@
       "gm": 6835103145462294.0,
       "gmSource": "nep098_part-1.cmt: system GM minus the modelled moons; inner unmodelled moons ['803', '804', '805', '806', '807', '808'] lumped in; DE440 GM8 = 6836527.100580399 km^3/s^2",
       "radius": 24622000.0,
+      "referenceRadius": 24764000.0,
       "pole": [
         0.3585765089087283,
         -0.6380951021167844,
@@ -515,6 +526,7 @@
       "gm": 869326122631.1509,
       "gmSource": "plu060.cmt: system GM minus the modelled moons and the outer unmodelled moons ['902', '903', '904', '905'] (left out); DE440 GM9 = 975.4999999999999 km^3/s^2",
       "radius": 1188300.0,
+      "referenceRadius": 1188300.0,
       "pole": [
         -0.677967909916917,
         0.7272096774535675,
@@ -542,6 +554,7 @@
       "gm": 5959915466180.539,
       "gmSource": "jup365.cmt body table",
       "radius": 1821490.0,
+      "referenceRadius": 1821490.0,
       "state": [
         597899632088.0131,
         409104628033.1595,
@@ -560,6 +573,7 @@
       "gm": 3202712099607.295,
       "gmSource": "jup365.cmt body table",
       "radius": 1560800.0,
+      "referenceRadius": 1560800.0,
       "state": [
         596938673377.9362,
         408670775934.12396,
@@ -578,6 +592,7 @@
       "gm": 9887832752719.639,
       "gmSource": "jup365.cmt body table",
       "radius": 2631200.0,
+      "referenceRadius": 2631200.0,
       "state": [
         596678572756.8232,
         408375184125.9785,
@@ -596,6 +611,7 @@
       "gm": 7179283402579.837,
       "gmSource": "jup365.cmt body table",
       "radius": 2410300.0,
+      "referenceRadius": 2410300.0,
       "state": [
         597824997582.3167,
         410663927187.76416,
@@ -614,6 +630,7 @@
       "gm": 41213528854.89587,
       "gmSource": "sat441.cmt body table",
       "radius": 531100.0,
+      "referenceRadius": 531100.0,
       "state": [
         957534685701.9292,
         923120299188.1969,
@@ -632,6 +649,7 @@
       "gm": 73116071724.82066,
       "gmSource": "sat441.cmt body table",
       "radius": 561400.0,
+      "referenceRadius": 561400.0,
       "state": [
         957546200574.0615,
         923020026755.4749,
@@ -650,6 +668,7 @@
       "gm": 153941751914.65628,
       "gmSource": "sat441.cmt body table",
       "radius": 763500.0,
+      "referenceRadius": 763500.0,
       "state": [
         956792889562.7423,
         923296338066.7744,
@@ -668,6 +687,7 @@
       "gm": 8978137095521.047,
       "gmSource": "sat441.cmt body table",
       "radius": 2574760.0,
+      "referenceRadius": 2574760.0,
       "state": [
         956370849002.0135,
         924143533252.308,
@@ -686,6 +706,7 @@
       "gm": 120515106013.76419,
       "gmSource": "sat441.cmt body table",
       "radius": 734300.0,
+      "referenceRadius": 734300.0,
       "state": [
         954463878701.6902,
         921048219931.5945,
@@ -704,6 +725,7 @@
       "gm": 2503488768.152587,
       "gmSource": "sat441.cmt body table",
       "radius": 198200.0,
+      "referenceRadius": 198200.0,
       "state": [
         957458639887.6637,
         923203013802.2736,
@@ -722,6 +744,7 @@
       "gm": 7210366688.598896,
       "gmSource": "sat441.cmt body table",
       "radius": 252100.0,
+      "referenceRadius": 252100.0,
       "state": [
         957479362037.8036,
         923146293418.533,
@@ -740,6 +763,7 @@
       "gm": 83430746772.82457,
       "gmSource": "ura184_part-1.cmt body table",
       "radius": 578900.0,
+      "referenceRadius": 578900.0,
       "state": [
         2158083010108.3403,
         -1871326121923.3767,
@@ -758,6 +782,7 @@
       "gm": 85403004223.26411,
       "gmSource": "ura184_part-1.cmt body table",
       "radius": 584700.0,
+      "referenceRadius": 584700.0,
       "state": [
         2158007342496.5354,
         -1871261766367.5337,
@@ -776,6 +801,7 @@
       "gm": 222800635187.9754,
       "gmSource": "ura184_part-1.cmt body table",
       "radius": 788900.0,
+      "referenceRadius": 788900.0,
       "state": [
         2157844225171.0593,
         -1871178849309.1677,
@@ -794,6 +820,7 @@
       "gm": 214209839940.7347,
       "gmSource": "ura184_part-1.cmt body table",
       "radius": 761400.0,
+      "referenceRadius": 761400.0,
       "state": [
         2157346762212.9116,
         -1871161888643.0146,
@@ -812,6 +839,7 @@
       "gm": 4105527241.1815605,
       "gmSource": "ura184_part-1.cmt body table",
       "radius": 235800.0,
+      "referenceRadius": 235800.0,
       "state": [
         2157803002640.582,
         -1871271981598.77,
@@ -830,6 +858,7 @@
       "gm": 1428495462910.464,
       "gmSource": "nep098_part-1.cmt body table",
       "radius": 1352600.0,
+      "referenceRadius": 1352600.0,
       "state": [
         2513773068210.077,
         -3438160138304.472,
@@ -848,6 +877,7 @@
       "gm": 106101138823.6118,
       "gmSource": "plu060.cmt body table",
       "radius": 606000.0,
+      "referenceRadius": 606000.0,
       "state": [
         -1478405466769.1301,
         -4185982966516.6333,
@@ -867,6 +897,7 @@
       "gm": 1.2671276409999997e+17,
       "gmSource": "GM5",
       "radius": 69911000.0,
+      "referenceRadius": 71492000.0,
       "pole": [
         -0.014597290902157927,
         -0.43032959427365014,
@@ -896,6 +927,7 @@
       "gm": 3.79405848418e+16,
       "gmSource": "GM6",
       "radius": 58232000.0,
+      "referenceRadius": 60330000.0,
       "pole": [
         0.0854788318610717,
         0.0732357578775289,
@@ -925,6 +957,7 @@
       "gm": 5794556399999998.0,
       "gmSource": "GM7",
       "radius": 25362000.0,
+      "referenceRadius": 25559000.0,
       "pole": [
         -0.21199958153779855,
         -0.9415591572895124,
@@ -954,6 +987,7 @@
       "gm": 6836527100580399.0,
       "gmSource": "GM8",
       "radius": 24622000.0,
+      "referenceRadius": 24764000.0,
       "pole": [
         0.3585765089087283,
         -0.6380951021167844,
@@ -983,6 +1017,7 @@
       "gm": 975499999999.9999,
       "gmSource": "GM9",
       "radius": 1188300.0,
+      "referenceRadius": 1188300.0,
       "pole": [
         -0.677967909916917,
         0.7272096774535675,

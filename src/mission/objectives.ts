@@ -31,17 +31,18 @@
  * ORBIT CHECK WITHOUT ORBITAL ELEMENTS. Periapsis and apoapsis are the
  * observed distance extrema (periapsis / apoapsis events). Inclination is
  * checked with dot products: cos i = h.k / |h| (h = r x v at each extremum,
- * k the body's pole or the frame z axis) compared with dmath cos of the band
+ * k the body's pole at that time, as the physics orients its field, or the
+ * frame z axis) compared with dmath cos of the band
  * limits. The period for counting revolutions is 2 pi sqrt(a^3/mu) with
  * a = (rp + ra)/2 from the first extrema of the run (sqrt only). Everything is
  * exactly defined, so evaluation is as deterministic as the replay.
  */
 import type { TrajectoryEvent } from './events';
 import { cos, DEG, PI } from '../physics/dmath';
-import { DEFAULT_ASCENT_TIME_S, launchToParams } from './launch';
+import { DEFAULT_ASCENT_TIME_S, DEFAULT_DOWNRANGE_DEG, launchToParams } from './launch';
 import { makePlan, type MissionPlan, type Spacecraft } from './plan';
 import type { ReplayOptions, ReplayResult } from './replay';
-import { bodyIndexOf, type MissionWorld } from './world';
+import { bodyIndexOf, bodyPoleAt, type MissionWorld } from './world';
 
 export type Band = readonly [number, number];
 
@@ -100,6 +101,29 @@ export type SiteOption =
     }
   | { readonly site: string; readonly offered: false; readonly reason: string };
 
+/**
+ * What a mission fixes about the abstracted launch (rules.launch). The launch
+ * itself is not charged for, so a free parking altitude would be free
+ * delta-v: a mission fixes it, with the ascent time, downrange angle and
+ * circularisation; the player chooses site, liftoff time and azimuth. Rule
+ * data, so a later launch-vehicle performance model can replace the 'fixed'
+ * kind with its own without touching the check's callers.
+ */
+export interface FixedLaunchRule {
+  readonly kind: 'fixed';
+  /** Parking-orbit altitude above Earth's reference radius, m. */
+  readonly altitudeM: number;
+  readonly ascentTimeS: number;
+  readonly downrangeDeg: number;
+  readonly circularization: 'j2-mean' | 'two-body';
+}
+export type LaunchRule = FixedLaunchRule;
+
+/** The fixed-launch rule with the launch model's defaults (launch.ts) at a given parking altitude. */
+export function fixedLaunch(altitudeM: number): FixedLaunchRule {
+  return { kind: 'fixed', altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S, downrangeDeg: DEFAULT_DOWNRANGE_DEG, circularization: 'j2-mean' };
+}
+
 /** Restrictions on the start a player may choose. Absent fields: unrestricted. */
 export interface StartRules {
   /** Launch sites the player may use (with `launchSites`, exactly the offered ones). */
@@ -110,6 +134,8 @@ export interface StartRules {
   readonly altitude?: Band;
   /** True: the plan must launch (a free 'state' start is not allowed). */
   readonly launchOnly?: boolean;
+  /** Launch parameters the mission fixes (see FixedLaunchRule). */
+  readonly launch?: LaunchRule;
 }
 
 export interface MissionDefinition {
@@ -123,8 +149,15 @@ export interface MissionDefinition {
   // --- Complete definitions (campaign.ts) also carry everything below. ---
   /** Bumped whenever anything that changes results or limits changes; scores of different versions are not comparable. */
   readonly version?: number;
-  /** A few sentences for the player: the goal and the concept it teaches. */
+  /**
+   * A few sentences for the player: the goal and the concept it teaches.
+   * Distances are placeholders `{key}` resolved from `briefingDistances`, so
+   * the UI can state them in the player's convention (altitude or radius);
+   * use briefingText to render.
+   */
   readonly briefing?: string;
+  /** Structured distances the briefing mentions, by placeholder key. */
+  readonly briefingDistances?: Readonly<Record<string, BriefingDistance>>;
   /** Default liftoff / start time, TDB s from J2000. */
   readonly epoch?: number;
   readonly start?: MissionStart;
@@ -146,6 +179,31 @@ export interface MissionDefinition {
    * references are shared by all sites.
    */
   readonly launchSites?: readonly SiteOption[];
+}
+
+/**
+ * A distance a briefing mentions: an altitude above the body's reference
+ * radius, a band of such altitudes, or a distance from the body's centre
+ * (m). Altitude and radius differ only by BodyData.referenceRadius.
+ */
+export type BriefingDistance =
+  | { readonly kind: 'altitude'; readonly body: string; readonly value: number }
+  | { readonly kind: 'altitude-band'; readonly body: string; readonly lo: number; readonly hi: number }
+  | { readonly kind: 'radius'; readonly body: string; readonly value: number };
+
+const kmText = (m: number) => `${Math.round(m / 1000).toLocaleString('en-US')} km`;
+
+/** Default rendering of a briefing distance (altitudes as "N km altitude", radii as "N km from the centre"). */
+export function defaultBriefingDistance(d: BriefingDistance): string {
+  if (d.kind === 'altitude') return `${kmText(d.value)} altitude`;
+  if (d.kind === 'altitude-band') return `${Math.round(d.lo / 1000).toLocaleString('en-US')}–${kmText(d.hi)} altitude`;
+  return `${kmText(d.value)} from ${d.body === 'sun' ? 'the Sun' : d.body[0].toUpperCase() + d.body.slice(1)}’s centre`;
+}
+
+/** The briefing with its `{key}` distances rendered by `fmt` (default: defaultBriefingDistance). Unknown keys are left as they are. */
+export function briefingText(m: Pick<MissionDefinition, 'briefing' | 'briefingDistances'>, fmt: (d: BriefingDistance) => string = defaultBriefingDistance): string {
+  const ds = m.briefingDistances ?? {};
+  return (m.briefing ?? '').replace(/\{([a-zA-Z0-9_-]+)\}/g, (all, k: string) => (Object.prototype.hasOwnProperty.call(ds, k) ? fmt(ds[k]) : all));
 }
 
 /** A mission definition with every optional setup field present. */
@@ -330,8 +388,10 @@ function orbitGoal(o: Extract<Objective, { kind: 'orbit' }>, ctx: Ctx, after: nu
   const k = bodyIndexOf(ctx.world, o.body);
   if (k < 0) return { t: null, detail: `unknown body ${o.body}` };
   const mu = ctx.world.ephemeris.gm[k];
-  const pole = o.reference === 'frame' ? null : ctx.world.bodies[k].pole;
-  const axis: readonly number[] = pole ?? [0, 0, 1];
+  // Equator: the body's pole at the time of each extremum (the time-dependent
+  // pole the physics uses, bodyPoleAt); 'frame' or no pole known: the frame z axis.
+  const axis = [0, 0, 1];
+  const useEquator = o.reference !== 'frame';
   const inc = o.inclination;
   const cosHi = inc ? cos(inc[1] * DEG) : -1; // cos i >= cosHi  <=>  i <= hi
   const cosLo = inc ? cos(inc[0] * DEG) : 1; //  cos i <= cosLo  <=>  i >= lo
@@ -340,6 +400,11 @@ function orbitGoal(o: Extract<Objective, { kind: 'orbit' }>, ctx: Ctx, after: nu
     const band = e.kind === 'periapsis' ? o.periapsis : o.apoapsis;
     if (!(e.distance >= band[0] && e.distance <= band[1])) return false;
     if (!inc) return true;
+    if (!useEquator || !bodyPoleAt(ctx.world, k, e.t, axis)) {
+      axis[0] = 0;
+      axis[1] = 0;
+      axis[2] = 1;
+    }
     const h = cross(e.rel);
     const hn = Math.sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]);
     const hk = h[0] * axis[0] + h[1] * axis[1] + h[2] * axis[2];
@@ -443,7 +508,9 @@ export type ConformanceCode =
   | 'start-state'
   | 'launch-site'
   | 'launch-window'
-  | 'launch-altitude';
+  | 'launch-altitude'
+  /** Ascent time, downrange angle or circularisation differ from the mission's fixed launch. */
+  | 'launch-ascent';
 
 export interface ConformanceIssue {
   readonly code: ConformanceCode;
@@ -461,7 +528,8 @@ const sameBits = (a: number, b: number): boolean => Object.is(a, b);
  * definition specifies: the spacecraft bit-for-bit (wet and dry mass, every
  * engine's thrust and Isp, engine count), the duration limit, the start kind
  * (launch-only, or the mission's own start kind), the launch site, the start
- * window and the parking altitude band. Sandbox has no mission, so no check.
+ * window, the parking altitude band and the fixed launch parameters
+ * (rules.launch). Sandbox has no mission, so no check.
  */
 export function checkPlanConformance(mission: MissionDefinition, plan: MissionPlan): ConformanceIssue[] {
   const out: ConformanceIssue[] = [];
@@ -498,6 +566,18 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
   if (r) {
     if (r.window && !(plan.epoch >= r.window[0] && plan.epoch <= r.window[1])) add('launch-window', 'epoch', `start time ${plan.epoch} outside the window ${r.window[0]}..${r.window[1]}`);
     if (r.altitude && st.kind === 'launch' && !(st.params[2] >= r.altitude[0] && st.params[2] <= r.altitude[1])) add('launch-altitude', 'start.params[2]', `parking altitude ${st.params[2]} m outside ${r.altitude[0]}..${r.altitude[1]} m`);
+    const L = r.launch;
+    if (L && st.kind === 'launch') {
+      // Absent trailing params take the launch model's defaults (launchFromParams).
+      const p = st.params;
+      const ascent = p[3] ?? DEFAULT_ASCENT_TIME_S;
+      const downrange = p[4] ?? DEFAULT_DOWNRANGE_DEG;
+      const circ = (p[5] ?? 0) === 1 ? 'two-body' : 'j2-mean';
+      if (!sameBits(p[2], L.altitudeM)) add('launch-altitude', 'start.params[2]', `this mission fixes the parking orbit at ${L.altitudeM / 1000} km altitude, got ${p[2] / 1000} km`);
+      if (!sameBits(ascent, L.ascentTimeS)) add('launch-ascent', 'start.params[3]', `this mission fixes the ascent time at ${L.ascentTimeS} s, got ${ascent}`);
+      if (!sameBits(downrange, L.downrangeDeg)) add('launch-ascent', 'start.params[4]', `this mission fixes the downrange angle at ${L.downrangeDeg}°, got ${downrange}`);
+      if (circ !== L.circularization) add('launch-ascent', 'start.params[5]', `this mission fixes the circularisation at ${L.circularization}, got ${circ}`);
+    }
   }
   return out;
 }
@@ -515,11 +595,17 @@ export function missionReplayOptions(mission: MissionDefinition): ReplayOptions 
 /** Default integrator tolerance of a fresh mission plan. */
 export const DEFAULT_MISSION_RTOL = 1e-10;
 
+/** Altitude and ascent fields of a mission's launch: the fixed rule's, else the given altitude with the defaults. */
+export function launchFields(mission: MissionDefinition, altitudeM: number): { altitudeM: number; ascentTimeS: number; downrangeDeg: number; circularization: 'j2-mean' | 'two-body' } {
+  const L = mission.rules?.launch;
+  return L ? { altitudeM: L.altitudeM, ascentTimeS: L.ascentTimeS, downrangeDeg: L.downrangeDeg, circularization: L.circularization } : { altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S, downrangeDeg: DEFAULT_DOWNRANGE_DEG, circularization: 'j2-mean' };
+}
+
 /** A fresh plan for a complete mission: its default start, spacecraft and duration, no burns. */
 export function initialMissionPlan(mission: CompleteMission, fingerprint: string): MissionPlan {
   const st = mission.start;
   const start: MissionPlan['start'] = st.kind === 'launch'
-    ? { kind: 'launch', site: st.site, params: launchToParams({ mode: 'parking-orbit', siteId: st.site, launchTime: mission.epoch, azimuthDeg: st.azimuthDeg, altitudeM: st.altitudeM, ascentTimeS: DEFAULT_ASCENT_TIME_S }) }
+    ? { kind: 'launch', site: st.site, params: launchToParams({ mode: 'parking-orbit', siteId: st.site, launchTime: mission.epoch, azimuthDeg: st.azimuthDeg, ...launchFields(mission, st.altitudeM) }) }
     : { kind: 'state', center: st.center, state: st.state.slice() };
   return makePlan({ data: fingerprint, epoch: mission.epoch, duration: mission.maxDuration, rtol: DEFAULT_MISSION_RTOL, start, spacecraft: mission.spacecraft, burns: [] });
 }

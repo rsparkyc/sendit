@@ -23,7 +23,7 @@ import { optimizeChain } from '../src/planning/flyby';
 import type { PorkchopPoint } from '../src/planning/porkchop';
 import {
   DAY, bAngleFor, bodyIdx, chainPoint, closest, cross, describeRun, dot, eph, fly, insertion, launchForAsymptote, launchPlan,
-  matchVelocity, nelderMead, norm, porkchopBest, solveDeparture, solveTcm, unitv, world, type LaunchChoice,
+  matchVelocity, nelderMead, norm, poleAt, porkchopBest, refRadius, solveDeparture, solveTcm, unitv, world, type LaunchChoice,
 } from './helpers/campaign-solver';
 import { ENV, SLOW } from './helpers/real-world';
 
@@ -41,7 +41,7 @@ function record(m: CompleteMission, plan: MissionPlan): void {
   const goalsOk = x.ev.objectives.filter((o) => o.objective.kind !== 'max-delta-v' && o.objective.kind !== 'max-time').every((o) => o.ok);
   (out[m.id] ??= {})[site] = goalsOk
     ? { params: s.kind === 'launch' ? s.params.slice(0, 3) : [], duration: plan.duration, rtol: plan.rtol, burns: plan.burns, dv: x.ev.deltaV, time: x.ev.missionTime }
-    : { failed: describeRun(m, x) };
+    : { failed: describeRun(m, x), params: s.kind === 'launch' ? s.params.slice(0, 3) : [], duration: plan.duration, rtol: plan.rtol, burns: plan.burns };
 }
 
 function attempt(m: CompleteMission, site: string, f: () => MissionPlan): void {
@@ -67,7 +67,6 @@ function lowestInclination(site: string): { inc: number; az: number } {
 
 /** Equator crossing (ascending if asc) of an Earth orbit after `after`; NaN for an equatorial orbit. */
 function nodeTime(plan: MissionPlan, after: number, asc: boolean): number {
-  const pole = world.bodies[bodyIdx('earth')].pole!;
   const es = new Float64Array(6);
   const y = new Float64Array(7);
   let prev = NaN;
@@ -79,6 +78,7 @@ function nodeTime(plan: MissionPlan, after: number, asc: boolean): number {
         const ti = tp + ((t - tp) * i) / 8;
         interp(ti, y);
         eph.bodyState(bodyIdx('earth'), ti, es);
+        const pole = poleAt('earth', ti);
         const z = (y[0] - es[0]) * pole[0] + (y[1] - es[1]) * pole[1] + (y[2] - es[2]) * pole[2];
         if (Number.isNaN(tNode) && ti > after && (asc ? prev < 0 && z >= 0 : prev * z <= 0)) tNode = tp0 + (ti - tp0) * (prev / (prev - z));
         prev = z;
@@ -157,7 +157,7 @@ const solvers: Record<string, (site: string) => MissionPlan> = {
     const base = launchPlan(m, l, [], 3 * 3600);
     const tNode = nodeTime(base, insertion(base).t, true);
     const mu = eph.gm[bodyIdx('earth')];
-    const pole = world.bodies[bodyIdx('earth')].pole!;
+    const pole = poleAt('earth', tNode);
     const inc = (65 * Math.PI) / 180;
     return matchVelocity(m, { ...base, duration: 0.4 * DAY }, 'earth', tNode, (rel) => {
       const r = rel.slice(0, 3);
@@ -187,7 +187,7 @@ const solvers: Record<string, (site: string) => MissionPlan> = {
     }
     const a = apo(lo)!;
     const mu = eph.gm[bodyIdx('earth')];
-    const pole = world.bodies[bodyIdx('earth')].pole!;
+    const pole = poleAt('earth', a.t);
     const plan = matchVelocity(m, launchPlan(m, l, [pro(tn - lo / 2, lo)], 6 * DAY), 'earth', a.t, (rel) => {
       const e = unitv(cross(pole, rel.slice(0, 3)));
       const vc = Math.sqrt(mu / norm(rel.slice(0, 3)));
@@ -211,7 +211,8 @@ const solvers: Record<string, (site: string) => MissionPlan> = {
     };
     let x = [0, 1, 0, 0, 0];
     if (cost(x) > 30e3) for (let k = 0; k < 4; k++) x = nelderMead(cost, x, [10, 0.01, 0.01, 0.01, 0.01], 300, 1e-10).x;
-    return { ...mk(x), duration: a.t - plan.epoch + 3.8 * DAY };
+    // Fly long enough for three revolutions of a near-circular orbit, whose extrema come irregularly (from Mahia 3.8 days were short).
+    return { ...mk(x), duration: a.t - plan.epoch + 4.5 * DAY };
   },
 
   'earth-escape': (site) => {
@@ -268,13 +269,25 @@ const solvers: Record<string, (site: string) => MissionPlan> = {
     // The return corridor is narrow: start from the flyby solution, grid over start and duration, then tune.
     const x0 = tuneInjection(m, l, 339, (x) => { const p = closest(replay(launchPlan(m, l, [injection(x)], 5 * DAY), world), 'moon'); return p ? Math.abs(p.altitude - 3000e3) : 1e12; });
     let best = { x: x0, f: f(x0) };
-    for (let ds = -300; ds <= 300; ds += 20) for (let dd = -8; dd <= 8; dd += 1) for (const dn of [-0.01, 0, 0.01]) {
+    // Normal component: +-0.03 (the free return from the Cape needs ~0.025 more than the flyby's).
+    for (let ds = -300; ds <= 300; ds += 20) for (let dd = -8; dd <= 8; dd += 1) for (const dn of [-0.03, -0.02, -0.01, 0, 0.01, 0.02, 0.03]) {
       const x = [x0[0] + ds, x0[1] + dd, x0[2] + dn];
       const v = f(x);
       if (v < best.f) best = { x, f: v };
     }
     let x = best.x;
     for (let k = 0; k < 4; k++) x = nelderMead(f, x, [5, 0.5, 0.002], 200, 1e-12).x;
+    if (f(x) > 0) {
+      // Missed the corridor (from the Cape under model 2): a finer grid, then tune again.
+      best = { x, f: f(x) };
+      for (let ds = -300; ds <= 300; ds += 10) for (let dd = -8; dd <= 8; dd += 1) for (let dn = -0.03; dn <= 0.0301; dn += 0.005) {
+        const y = [x0[0] + ds, x0[1] + dd, x0[2] + dn];
+        const v = f(y);
+        if (v < best.f) best = { x: y, f: v };
+      }
+      x = best.x;
+      for (let k = 0; k < 4; k++) x = nelderMead(f, x, [5, 0.5, 0.002], 200, 1e-12).x;
+    }
     return launchPlan(m, l, [injection(x)], 12 * DAY);
   },
 
@@ -321,7 +334,7 @@ const solvers: Record<string, (site: string) => MissionPlan> = {
     const s = solveDeparture(m, l, p, 'mars', 600e3);
     const tc = solveTcm(m, { ...launchPlan(m, l, [s.burn], s.tClosest - l.t + 3 * DAY), rtol: 1e-11 }, 'mars', s.tClosest - 30 * DAY, 500e3, s.tClosest);
     const mu = eph.gm[bodyIdx('mars')];
-    const ra = 3389.5e3 + 20000e3;
+    const ra = refRadius('mars') + 20000e3;
     return matchVelocity(m, { ...tc.plan, duration: tc.tClosest - l.t + 3 * DAY }, 'mars', tc.tClosest, (rel) => {
       const r = norm(rel.slice(0, 3));
       return unitv(rel.slice(3)).map((x) => x * Math.sqrt(mu * (2 / r - 2 / (r + ra))));
@@ -349,7 +362,7 @@ const solvers: Record<string, (site: string) => MissionPlan> = {
     eph.bodyState(bodyIdx('sun'), p.tArr, S);
     const vJ = [J[3] - S[3], J[4] - S[4], J[5] - S[5]];
     const mu = eph.gm[bodyIdx('jupiter')];
-    const RJ = J2000_BODIES[bodyIdx('jupiter')].radius;
+    const RJ = refRadius('jupiter');
     const v = norm(vIn);
     const dmax = 2 * Math.asin(1 / (1 + ((RJ + 100000e3) * v * v) / mu));
     const turn = Math.min(dmax, Math.acos(dot(unitv(vIn), unitv(vJ))));
