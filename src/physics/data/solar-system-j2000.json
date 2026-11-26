@@ -8,6 +8,8 @@
   "frame": "ICRF, origin at solar-system barycenter (Horizons CENTER=500@0)",
   "stateSource": "JPL Horizons API, EPHEM_TYPE=VECTORS (planetary ephemeris DE441)",
   "gmSource": "DE440 header constants, https://ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de440/header.440 (Park et al. 2021, AJ 161:105); Earth/Moon split from GMB with EMRAT=81.30056822149722",
+  "j2Source": "Unnormalized J2 with reference radius j2Radius (m). Sun/Earth/Moon: DE440 header. Mars..Neptune: JPL satellite ephemeris headers (NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/ mar099/jup365/sat441/ura111xl-799/nep097 .cmt). Giant-planet J2 is the planet's own, applied about the system barycenter (offset <~200 km for Jupiter).",
+  "poleSource": "IAU WGCCRE 2015 (Archinal et al. 2018) via NAIF https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc, J2000 value, ICRF unit vector; secular pole motion and nutation terms ignored.",
   "radiusSource": "JPL SSD Planetary Physical Parameters (mean radius), https://ssd.jpl.nasa.gov/planets/phys_par.html",
   "generatedBy": "scripts/fetch-horizons.py",
   "bodies": [
@@ -18,6 +20,18 @@
       "gm": 1.3271244004127942e+20,
       "gmSource": "GMS",
       "radius": 695700000.0,
+      "pole": [
+        0.12235349347232782,
+        -0.42307208364764326,
+        0.8977971010607901
+      ],
+      "poleRaDecDeg": [
+        286.13,
+        63.87
+      ],
+      "j2": 2.1961391516529825e-07,
+      "j2Radius": 696000000.0,
+      "j2Source": "DE440 header J2SUN, ASUN",
       "state": [
         -1067706805.380953,
         -396036184.7959462,
@@ -34,6 +48,15 @@
       "gm": 22031868551400.0,
       "gmSource": "GM1",
       "radius": 2439400.0,
+      "pole": [
+        0.09137781820826625,
+        -0.4696473503642596,
+        0.8781124419089661
+      ],
+      "poleRaDecDeg": [
+        281.0103,
+        61.4155
+      ],
       "state": [
         -20529433161.23468,
         -60324003958.27633,
@@ -50,6 +73,15 @@
       "gm": 324858592000000.0,
       "gmSource": "GM2",
       "radius": 6051800.0,
+      "pole": [
+        0.018690814168902073,
+        -0.3877088083617989,
+        0.9215923900425705
+      ],
+      "poleRaDecDeg": [
+        272.76,
+        67.16
+      ],
       "state": [
         -108524200857.5715,
         -7318564959.678599,
@@ -66,6 +98,18 @@
       "gm": 398600435507022.56,
       "gmSource": "GM_EARTH",
       "radius": 6371008.399999999,
+      "pole": [
+        6.123233995736766e-17,
+        0.0,
+        1.0
+      ],
+      "poleRaDecDeg": [
+        0.0,
+        90.0
+      ],
+      "j2": 0.00108262539,
+      "j2Radius": 6378136.6,
+      "j2Source": "DE440 header J2E, RE",
       "state": [
         -27566740482.81145,
         132361381153.5491,
@@ -82,6 +126,18 @@
       "gm": 4902800118457.549,
       "gmSource": "GM_MOON",
       "radius": 1737400.0,
+      "pole": [
+        -3.543751262843568e-05,
+        -0.39812154993705506,
+        0.9173326715101232
+      ],
+      "poleRaDecDeg": [
+        269.9949,
+        66.5392
+      ],
+      "j2": 0.000203214360135,
+      "j2Radius": 1738000.0,
+      "j2Source": "DE440 header J2M, AM",
       "state": [
         -27858348866.99916,
         132094664319.69499,
@@ -98,6 +154,18 @@
       "gm": 42828375815756.1,
       "gmSource": "GM4",
       "radius": 3389500.0,
+      "pole": [
+        0.42725938216877546,
+        -0.3946890453593222,
+        0.8134309914320348
+      ],
+      "poleRaDecDeg": [
+        317.269202,
+        54.432516
+      ],
+      "j2": 0.001956608633534895,
+      "j2Radius": 3396000.0,
+      "j2Source": "NAIF mar099.cmt J402, RADIUS",
       "state": [
         206980433836.45142,
         -186417011.4371795,
@@ -114,6 +182,18 @@
       "gm": 1.2671276409999997e+17,
       "gmSource": "GM5",
       "radius": 69911000.0,
+      "pole": [
+        -0.014602136035502304,
+        -0.43033742027421007,
+        0.9025499888288396
+      ],
+      "poleRaDecDeg": [
+        268.056595,
+        64.495303
+      ],
+      "j2": 0.0146965063,
+      "j2Radius": 71492000.0,
+      "j2Source": "NAIF jup365.cmt J502, RADIUS",
       "state": [
         597499876792.548,
         408990313931.7586,
@@ -130,6 +210,18 @@
       "gm": 3.79405848418e+16,
       "gmSource": "GM6",
       "radius": 58232000.0,
+      "pole": [
+        0.0854788318610717,
+        0.0732357578775289,
+        0.9936447519469775
+      ],
+      "poleRaDecDeg": [
+        40.589,
+        83.537
+      ],
+      "j2": 0.01629061510215236,
+      "j2Radius": 60330000.0,
+      "j2Source": "NAIF sat441.cmt J602, RADIUS",
       "state": [
         957317417414.3425,
         923319621896.9913,
@@ -146,6 +238,18 @@
       "gm": 5794556399999998.0,
       "gmSource": "GM7",
       "radius": 25362000.0,
+      "pole": [
+        -0.21199958153779855,
+        -0.9415591572895124,
+        -0.2617680858165514
+      ],
+      "poleRaDecDeg": [
+        257.311,
+        -15.175
+      ],
+      "j2": 0.003510685384697763,
+      "j2Radius": 25559000.0,
+      "j2Source": "NAIF ura111xl-799.cmt J702, RADIUS",
       "state": [
         2157907312953.845,
         -1871306838939.559,
@@ -162,6 +266,18 @@
       "gm": 6836527100580399.0,
       "gmSource": "GM8",
       "radius": 24622000.0,
+      "pole": [
+        0.35588325685864897,
+        -0.6326232961330794,
+        0.6878480011437111
+      ],
+      "poleRaDecDeg": [
+        299.36,
+        43.46
+      ],
+      "j2": 0.003536297303482466,
+      "j2Radius": 24764000.0,
+      "j2Source": "NAIF nep097.cmt J802, RADIUS",
       "state": [
         2513978721723.721,
         -3438170140316.856,
@@ -178,6 +294,15 @@
       "gm": 975499999999.9999,
       "gmSource": "GM9",
       "radius": 1188300.0,
+      "pole": [
+        -0.677967909916917,
+        0.7272096774535675,
+        -0.10735733855105338
+      ],
+      "poleRaDecDeg": [
+        132.993,
+        -6.163
+      ],
       "state": [
         -1478399372814.445,
         -4185975131407.77,

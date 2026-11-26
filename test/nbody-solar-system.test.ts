@@ -1,6 +1,8 @@
 /**
- * The real solar system: conservation, step-size convergence, reversibility,
- * and comparison with JPL Horizons (DE441), with the residuals attributed.
+ * The real solar system with NEWTONIAN POINT MASSES ONLY (the baseline):
+ * conservation, step-size convergence, reversibility, and comparison with JPL
+ * Horizons (DE441), with the residuals attributed. The production physics
+ * (J2 + Sun 1PN) is tested in nbody-physics.test.ts.
  *
  * Run with `--silent=false` to see the tables.
  */
@@ -95,7 +97,7 @@ beforeAll(() => {
   }
 }, 120_000);
 
-describe('real solar system, Newtonian point masses', () => {
+describe('real solar system, Newtonian point masses (baseline)', () => {
   it('conserves energy, linear and angular momentum over 100 years', () => {
     const maxE = Math.max(...conservation.map((c) => c.dE));
     const maxP = Math.max(...conservation.map((c) => c.dP));
@@ -238,18 +240,14 @@ describe('real solar system, Newtonian point masses', () => {
     console.table(rows);
   });
 
-  it('adding Sun 1PN (GR) removes the bulk of the inner-planet error', () => {
-    // Diagnostic only, test-side RK4 at 0.05 d. If the Newtonian residual is
-    // GR, adding the Schwarzschild 1PN term must collapse it.
+  it('adding Sun 1PN (GR) removes the bulk of the inner-planet error (independent RK4 check)', () => {
+    // Test-side RK4 at 0.05 d, independent of the production integrator. If the
+    // Newtonian residual is GR, adding the Schwarzschild 1PN term must collapse it.
     const T = 100 * JULIAN_YEAR;
     const hRK = 0.05 * DAY;
     const pn = integrateRK4(gm, s0, hRK, Math.round(T / hRK), true);
     const hz = horizonsState(T)!;
     const ours = states.get(T)!;
-    const rows = ids.map((id, i) => ({ body: id, newtonKm: Math.round(posErr(ours, hz, i) / 1e3), withSun1PNKm: Math.round(posErr(pn, hz, i) / 1e3) }));
-    rows.push({ body: 'moon geo', newtonKm: Math.round(geoMoonErr(ours, hz) / 1e3), withSun1PNKm: Math.round(geoMoonErr(pn, hz) / 1e3) });
-    console.log('Error at +100 yr vs Horizons, Newtonian vs Newtonian + Sun 1PN (km)');
-    console.table(rows);
     // Observed: Mercury 7409 -> 51, Venus 9186 -> 47, Earth 6109 -> 36, Mars 4110 -> 63, Jupiter 424 -> 76.
     for (const id of ['mercury', 'venus', 'earth', 'mars']) {
       const i = ids.indexOf(id);
@@ -257,26 +255,5 @@ describe('real solar system, Newtonian point masses', () => {
     }
     // But GR does almost nothing for the Moon's Earth-relative error (~1450 km).
     expect(geoMoonErr(pn, hz)).toBeGreaterThan(0.9 * geoMoonErr(ours, hz));
-  }, 120_000);
-
-  it("Earth's J2 explains most of the Moon's Earth-relative drift", () => {
-    // Diagnostic: RK4 + Sun 1PN + Earth J2 (pole along ICRF z, ignoring precession).
-    const J2 = 1.08263e-3; // EGM2008 / IERS 2010 (zero-tide C20 = -4.8417e-4 * sqrt(5))
-    const RE = 6378137;
-    const hRK = 0.05 * DAY;
-    const rows = [];
-    for (const years of [-10, 10]) {
-      const T = years * JULIAN_YEAR;
-      const hz = horizonsState(T)!;
-      const nSteps = Math.round(Math.abs(T) / hRK);
-      const pn = integrateRK4(gm, s0, Math.sign(T) * hRK, nSteps, true);
-      const j2 = integrateRK4(gm, s0, Math.sign(T) * hRK, nSteps, true, SUN, { body: EARTH, on: MOON, j2: J2, radius: RE });
-      const base = geoMoonErr(states.get(T)!, hz);
-      rows.push({ years, newtonKm: (base / 1e3).toFixed(1), sun1PNKm: (geoMoonErr(pn, hz) / 1e3).toFixed(1), sun1PNplusEarthJ2Km: (geoMoonErr(j2, hz) / 1e3).toFixed(1) });
-      // Observed ~180 km -> ~36-39 km at 10 yr.
-      expect(geoMoonErr(j2, hz)).toBeLessThan(0.35 * base);
-    }
-    console.log("Moon's Earth-relative error vs Horizons (km)");
-    console.table(rows);
   }, 120_000);
 });

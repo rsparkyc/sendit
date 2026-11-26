@@ -3,8 +3,8 @@
  * interpolation accuracy, an end-to-end LEO smoke test, and cost measurements.
  */
 import { describe, expect, it } from 'vitest';
-import { NBodyIntegrator } from '../src/physics/nbody';
-import { DAY, DEFAULT_STEP, IntegratedEphemeris, J2000_BODIES, JULIAN_YEAR, bodyIndex, initialState } from '../src/physics/solar-system';
+import { KAHAN_LI_8, NBodyIntegrator } from '../src/physics/nbody';
+import { DAY, DEFAULT_STEP, IntegratedEphemeris, createSolarSystemIntegrator, J2000_BODIES, JULIAN_YEAR, bodyIndex, initialState } from '../src/physics/solar-system';
 import { propagate } from '../src/physics/spacecraft';
 
 const N = J2000_BODIES.length;
@@ -43,7 +43,7 @@ describe('IntegratedEphemeris', () => {
     const out = new Float64Array(3 * N);
     for (const k of [7, -7]) {
       eph.positions(k * DEFAULT_STEP, out);
-      const it = new NBodyIntegrator(eph.gm, initialState(), 0, Math.sign(k) * DEFAULT_STEP);
+      const it = new NBodyIntegrator(eph.gm, initialState(), 0, Math.sign(k) * DEFAULT_STEP, KAHAN_LI_8, eph.physics);
       for (let i = 0; i < Math.abs(k); i++) it.step();
       for (let j = 0; j < 3 * N; j++) expect(out[j]).toBe(it.q[j]);
     }
@@ -71,19 +71,28 @@ describe('IntegratedEphemeris', () => {
     });
     console.log(`LEO 3 days: altitude above mean radius ${((rMin - 6_371_000) / 1e3).toFixed(3)}..${((rMax - 6_371_000) / 1e3).toFixed(3)} km altitude, ${res.accepted} steps`);
     expect(res.t).toBe(3 * DAY);
-    // Point-mass Earth + Moon/Sun tides: the orbit stays near-circular. Tidal
-    // perturbation at LEO is ~1e-7 g, so the radius varies by well under 1 km.
-    expect(rMin).toBeGreaterThan(R - 1000);
-    expect(rMax).toBeLessThan(R + 1000);
+    // With Earth's J2 the extra inward pull in the equatorial plane makes the
+    // point-mass circular speed slightly too low, so the orbit dips by about
+    // 3 J2 (Re/R)^2 R (observed 19.5 km vs 19.6 km predicted). Lunisolar tides
+    // (~1e-7 g) and Sun 1PN are far smaller. It stays in orbit.
+    const ob = eph.oblateness[EARTH]!;
+    const dip = 3 * ob.j2 * (ob.radius / R) ** 2 * R;
+    expect(Math.abs(R - rMin - dip)).toBeLessThan(0.1 * dip);
+    expect(rMax).toBeLessThan(R + 100);
   }, 60_000);
 
   it('measures cost of a century and memory if every step were stored', () => {
     const h = DEFAULT_STEP;
     const steps = Math.round((100 * JULIAN_YEAR) / h);
-    const it = new NBodyIntegrator(J2000_BODIES.map((b) => b.gm), initialState(), 0, h);
-    const t0 = performance.now();
+    const newton = new NBodyIntegrator(J2000_BODIES.map((b) => b.gm), initialState(), 0, h);
+    let t0 = performance.now();
+    for (let i = 0; i < steps; i++) newton.step();
+    const msNewton = performance.now() - t0;
+    const it = createSolarSystemIntegrator(h);
+    t0 = performance.now();
     for (let i = 0; i < steps; i++) it.step();
     const ms = performance.now() - t0;
+    console.log(`100 yr wall clock: Newtonian ${(msNewton / 1000).toFixed(2)} s, full physics (J2 pairs + Sun 1PN) ${(ms / 1000).toFixed(2)} s`);
     const bytesPerStep = 9 * N * 8; // q, v, a per body, float64 (what IntegratedEphemeris keeps)
     const posVelBytes = 6 * N * 8;
     console.log(

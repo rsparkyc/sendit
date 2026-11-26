@@ -20,7 +20,27 @@ export interface Ephemeris {
   positions(t: number, out: Float64Array): void;
   /** Write position and velocity of one body into out[0..5]. */
   bodyState(body: number, t: number, out: Float64Array): void;
+  /**
+   * Optional zonal J2 per body (null where none). When present, every body's
+   * J2 acts on the spacecraft. Absent: point masses (FixedBodies).
+   */
+  readonly oblateness?: ArrayLike<BodyOblateness | null>;
+  /** Optional: apply this body's (the Sun's) 1PN Schwarzschild term to the spacecraft. */
+  readonly relativity?: { readonly body: number };
 }
+
+export interface BodyOblateness {
+  /** Unnormalized J2. */
+  readonly j2: number;
+  /** Reference radius, m. */
+  readonly radius: number;
+  /** Spin-axis unit vector in the ephemeris frame. */
+  readonly pole: ArrayLike<number>;
+}
+
+/** Speed of light, m/s. */
+const C_LIGHT = 299792458;
+const C2 = C_LIGHT * C_LIGHT;
 
 export type BurnFrame =
   /** Direction is a fixed vector in the inertial frame. */
@@ -121,6 +141,9 @@ export function propagate(
   const gm = ephem.gm;
   const bodyPos = new Float64Array(3 * nBodies);
   const ref = new Float64Array(6);
+  const oblateness = ephem.oblateness;
+  const relBody = ephem.relativity ? ephem.relativity.body : -1;
+  const sunState = new Float64Array(6);
 
   // Burn currently firing, with its direction pre-normalised.
   let active: Burn | null = null;
@@ -147,6 +170,50 @@ export function propagate(
       ax += k * dx;
       ay += k * dy;
       az += k * dz;
+    }
+
+    // Zonal J2 of every body that has one. r = spacecraft - body, s = r.pole:
+    // a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ].
+    if (oblateness !== undefined) {
+      for (let i = 0; i < nBodies; i++) {
+        const ob = oblateness[i];
+        if (ob === null || ob === undefined) continue;
+        const rx = x - bodyPos[3 * i];
+        const ry = yy - bodyPos[3 * i + 1];
+        const rz = z - bodyPos[3 * i + 2];
+        const px = ob.pole[0];
+        const py = ob.pole[1];
+        const pz = ob.pole[2];
+        const r2 = rx * rx + ry * ry + rz * rz;
+        const sp = rx * px + ry * py + rz * pz;
+        const f = (-1.5 * ob.j2 * gm[i] * ob.radius * ob.radius) / (r2 * r2 * Math.sqrt(r2));
+        const c1 = 1 - (5 * sp * sp) / r2;
+        ax += f * (c1 * rx + 2 * sp * px);
+        ay += f * (c1 * ry + 2 * sp * py);
+        az += f * (c1 * rz + 2 * sp * pz);
+      }
+    }
+
+    // Sun 1PN (IERS 2010 eq. 10.12, beta = gamma = 1), relative to the Sun:
+    // a = mu/(c^2 r^3) [ (4 mu/r - v^2) r + 4 (r.v) v ]. DOP853 handles the
+    // velocity dependence directly.
+    if (relBody >= 0) {
+      ephem.bodyState(relBody, t, sunState);
+      const rx = x - sunState[0];
+      const ry = yy - sunState[1];
+      const rz = z - sunState[2];
+      const vx = y[3] - sunState[3];
+      const vy = y[4] - sunState[4];
+      const vz = y[5] - sunState[5];
+      const mu = gm[relBody];
+      const r2 = rx * rx + ry * ry + rz * rz;
+      const r = Math.sqrt(r2);
+      const f = mu / (C2 * r2 * r);
+      const cr = f * ((4 * mu) / r - (vx * vx + vy * vy + vz * vz));
+      const cv = f * 4 * (rx * vx + ry * vy + rz * vz);
+      ax += cr * rx + cv * vx;
+      ay += cr * ry + cv * vy;
+      az += cr * rz + cv * vz;
     }
 
     let mdot = 0;

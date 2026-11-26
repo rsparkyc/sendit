@@ -4,12 +4,12 @@
  * The body list is data-driven (src/physics/data/solar-system-j2000.json,
  * produced by scripts/fetch-horizons.py). Adding moons later means adding rows.
  *
- * DETERMINISM: only + - * /, Math.sqrt, and Math.floor (exact, used only to
- * find the sample interval) in here.
+ * DETERMINISM: exactly-defined operations only (+ - * /, Math.sqrt, abs,
+ * min/max, floor, comparisons). No transcendental functions.
  */
 import data from './data/solar-system-j2000.json';
 import type { Ephemeris } from './spacecraft';
-import { NBodyIntegrator } from './nbody';
+import { KAHAN_LI_8, NBodyIntegrator, type NBodyPhysics, type ZonalHarmonic } from './nbody';
 
 export interface BodyData {
   readonly id: string;
@@ -20,6 +20,12 @@ export interface BodyData {
   readonly radius: number;
   /** Barycentric ICRF [x,y,z,vx,vy,vz] at J2000 TDB, m and m/s. */
   readonly state: readonly number[];
+  /** Spin-axis unit vector in ICRF (IAU WGCCRE 2015 at J2000; fixed). */
+  readonly pole?: readonly number[];
+  /** Unnormalized zonal harmonic J2, referred to j2Radius. */
+  readonly j2?: number;
+  /** J2 reference radius, m. */
+  readonly j2Radius?: number;
 }
 
 export const J2000_BODIES: readonly BodyData[] = data.bodies;
@@ -42,6 +48,69 @@ export function bodyIndex(id: string, bodies: readonly BodyData[] = J2000_BODIES
   return i;
 }
 
+/** Oblateness of one body in the form the spacecraft and N-body code consume, or null. */
+export interface Oblateness {
+  readonly j2: number;
+  readonly radius: number;
+  readonly pole: readonly [number, number, number];
+}
+
+export function oblatenessOf(b: BodyData): Oblateness | null {
+  if (b.j2 === undefined || b.j2Radius === undefined || b.pole === undefined) return null;
+  return { j2: b.j2, radius: b.j2Radius, pole: [b.pole[0], b.pole[1], b.pole[2]] };
+}
+
+/** Build zonal terms from (body id -> target ids) pairs. */
+export function zonalTerms(pairs: Readonly<Record<string, readonly string[]>>, bodies: readonly BodyData[] = J2000_BODIES): ZonalHarmonic[] {
+  const out: ZonalHarmonic[] = [];
+  for (const id of Object.keys(pairs)) {
+    const i = bodyIndex(id, bodies);
+    const ob = oblatenessOf(bodies[i]);
+    if (ob === null) throw new Error(`${id} has no J2 data`);
+    out.push({ body: i, j2: ob.j2, radius: ob.radius, pole: ob.pole, targets: pairs[id].map((t) => bodyIndex(t, bodies)) });
+  }
+  return out;
+}
+
+/**
+ * Which J2 pairs act among the massive bodies (body -> bodies it acts on; the
+ * reaction is always applied). Chosen from the measured displacement each pair
+ * alone causes after 100 years (h = 1 d, with Sun 1PN), against a numerical
+ * noise floor of a few metres:
+ *   Earth -> Moon 1940 km, Moon -> Earth 36 km, Jupiter -> Sun 16 km (moves
+ *   Jupiter), Sun -> Mercury 12 km, Sun -> Venus 3 km, Saturn -> Sun 1.9 km,
+ *   Sun -> Earth 1.3 km, Sun -> Mars 530 m, Earth -> Sun 365 m, Sun -> Moon 97 m,
+ *   Mars -> Sun 73 m, Sun -> Jupiter 23 m; Uranus/Neptune -> Sun and every
+ *   planet -> planet pair < 10 m (indistinguishable from noise): excluded.
+ * Sun -> all and planet -> Sun are kept uniformly since they cost O(n).
+ */
+export const MASSIVE_BODY_J2_PAIRS: Readonly<Record<string, readonly string[]>> = {
+  sun: ['mercury', 'venus', 'earth', 'moon', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto'],
+  earth: ['moon', 'sun'],
+  moon: ['earth'],
+  mars: ['sun'],
+  jupiter: ['sun'],
+  saturn: ['sun'],
+  uranus: ['sun'],
+  neptune: ['sun'],
+};
+
+/** An integrator for these bodies with the full physics, starting at J2000 (t = 0). */
+export function createSolarSystemIntegrator(h: number = DEFAULT_STEP, bodies: readonly BodyData[] = J2000_BODIES): NBodyIntegrator {
+  return new NBodyIntegrator(bodies.map((b) => b.gm), initialState(bodies), 0, h, KAHAN_LI_8, solarSystemPhysics(bodies));
+}
+
+/** Full massive-body physics for these bodies: selected J2 pairs + Sun 1PN. */
+export function solarSystemPhysics(
+  bodies: readonly BodyData[] = J2000_BODIES,
+  pairs: Readonly<Record<string, readonly string[]>> = MASSIVE_BODY_J2_PAIRS,
+): NBodyPhysics {
+  const ids = new Set(bodies.map((b) => b.id));
+  const present: Record<string, readonly string[]> = {};
+  for (const id of Object.keys(pairs)) if (ids.has(id)) present[id] = pairs[id].filter((t) => ids.has(t));
+  return { zonal: zonalTerms(present, bodies), relativity: { sun: bodyIndex('sun', bodies) } };
+}
+
 export function initialState(bodies: readonly BodyData[] = J2000_BODIES): Float64Array {
   const s = new Float64Array(6 * bodies.length);
   bodies.forEach((b, i) => s.set(b.state, 6 * i));
@@ -54,14 +123,20 @@ export function initialState(bodies: readonly BodyData[] = J2000_BODIES): Float6
  * Between samples it uses quintic Hermite interpolation (exact to O(h^6)).
  *
  * Measured accuracy at the default 0.5 d step (test/nbody-ephemeris.test.ts):
- * interpolated Moon position within ~1e-2 m of a direct integration to the same time;
- * see the test for the bound. Memory is 72*n bytes per step (n bodies); a century
- * would be ~116 MB for 11 bodies, so this is for smoke tests, not production —
- * the production path is a Chebyshev fit.
+ * interpolated Moon position within ~0.1 m of a direct integration to the same
+ * time. Memory is 72*n bytes per step (n bodies); a century is ~58 MB for 11
+ * bodies, so this is for smoke tests, not production (that is a Chebyshev fit).
+ *
+ * Physics defaults to solarSystemPhysics(bodies) (J2 pairs + Sun 1PN). Pass
+ * `{}` for Newtonian point masses. It also exposes every body's J2 and the
+ * Sun's relativity to the spacecraft through the Ephemeris interface.
  */
 export class IntegratedEphemeris implements Ephemeris {
   readonly count: number;
   readonly gm: Float64Array;
+  readonly physics: NBodyPhysics;
+  readonly oblateness: readonly (Oblateness | null)[];
+  readonly relativity?: { readonly body: number };
   readonly h: number;
   readonly t0: number;
   private readonly fwd: NBodyIntegrator;
@@ -70,14 +145,17 @@ export class IntegratedEphemeris implements Ephemeris {
   private readonly fwdSamples: Float64Array[] = [];
   private readonly bwdSamples: Float64Array[] = [];
 
-  constructor(bodies: readonly BodyData[] = J2000_BODIES, h: number = DEFAULT_STEP, t0 = 0) {
+  constructor(bodies: readonly BodyData[] = J2000_BODIES, h: number = DEFAULT_STEP, t0 = 0, physics?: NBodyPhysics) {
     this.count = bodies.length;
     this.gm = Float64Array.from(bodies.map((b) => b.gm));
     this.h = h;
     this.t0 = t0;
+    this.physics = physics ?? solarSystemPhysics(bodies);
+    this.oblateness = bodies.map(oblatenessOf);
+    if (this.physics.relativity) this.relativity = { body: this.physics.relativity.sun };
     const s = initialState(bodies);
-    this.fwd = new NBodyIntegrator(this.gm, s, t0, h);
-    this.bwd = new NBodyIntegrator(this.gm, s, t0, -h);
+    this.fwd = new NBodyIntegrator(this.gm, s, t0, h, KAHAN_LI_8, this.physics);
+    this.bwd = new NBodyIntegrator(this.gm, s, t0, -h, KAHAN_LI_8, this.physics);
     const first = this.snapshot(this.fwd);
     this.fwdSamples.push(first);
     this.bwdSamples.push(first);
@@ -88,7 +166,7 @@ export class IntegratedEphemeris implements Ephemeris {
     const out = new Float64Array(3 * m);
     out.set(it.q, 0);
     out.set(it.v, m);
-    out.set(it.acc, 2 * m);
+    it.totalAcceleration(out.subarray(2 * m));
     return out;
   }
 
