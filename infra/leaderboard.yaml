@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  sendit leaderboard: DynamoDB table (on-demand, PITR, TTL) and two Lambda
+  functions (submit: replays plans; read: boards and own rank) behind
+  function URLs that only the site's CloudFront distribution can call (origin
+  access control). Deploy in us-east-1 next to infra/site.yaml; see README.md.
+  Plain CloudFormation (no SAM transform): nothing here needs SAM, and plain
+  templates deploy and diff exactly as written.
+
+Parameters:
+  DistributionId:
+    Type: String
+    Description: Id of the site's CloudFront distribution (site stack output DistributionId); only it may invoke the functions.
+    AllowedPattern: '^[A-Z0-9]{8,20}$'
+  ArtifactBucket:
+    Type: String
+    Description: Private S3 bucket (same region) holding the Lambda bundle zip.
+  ArtifactKey:
+    Type: String
+    Description: Object key of the bundle zip (scripts/deploy-leaderboard.sh uploads it under a content-hash name).
+  IpHashSalt:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    Description: Secret salt for hashing client IPs in rate-limit keys (e.g. openssl rand -hex 32). Changing it only resets rate windows.
+  ExposePlans:
+    Type: String
+    AllowedValues: ['false', 'true']
+    Default: 'false'
+    Description: Whether other players may fetch stored flight plans (product decision; default no).
+  NameBlocklist:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Extra comma-separated terms refused in display names (the reserved operator names always apply).
+  SubmitReservedConcurrency:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 50
+    Description: Most submissions replayed at once (the cost ceiling; see README).
+  ReadReservedConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+  MaxTableReadUnits:
+    Type: Number
+    Default: 500
+    Description: On-demand ceiling, read request units per second (table and each index). Throttles instead of billing a flood.
+  MaxTableWriteUnits:
+    Type: Number
+    Default: 200
+    Description: On-demand ceiling, write request units per second (table and each index).
+
+Rules:
+  RequireUsEast1:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
+        AssertDescription: Deploy this stack in us-east-1 (next to the site stack).
+
+Resources:
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      OnDemandThroughput:
+        MaxReadRequestUnits: !Ref MaxTableReadUnits
+        MaxWriteRequestUnits: !Ref MaxTableWriteUnits
+      AttributeDefinitions:
+        - { AttributeName: pk, AttributeType: S }
+        - { AttributeName: sk, AttributeType: S }
+        - { AttributeName: cPk, AttributeType: S }
+        - { AttributeName: cSk, AttributeType: S }
+        - { AttributeName: dPk, AttributeType: S }
+        - { AttributeName: dSk, AttributeType: S }
+        - { AttributeName: tPk, AttributeType: S }
+        - { AttributeName: tSk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: pk, KeyType: HASH }
+        - { AttributeName: sk, KeyType: RANGE }
+      # Sparse indexes: only entries with a valid, visible result on that board carry the keys.
+      GlobalSecondaryIndexes:
+        - IndexName: combined
+          KeySchema:
+            - { AttributeName: cPk, KeyType: HASH }
+            - { AttributeName: cSk, KeyType: RANGE }
+          Projection: { ProjectionType: INCLUDE, NonKeyAttributes: [pid, name, tag, cV] }
+          OnDemandThroughput: { MaxReadRequestUnits: !Ref MaxTableReadUnits, MaxWriteRequestUnits: !Ref MaxTableWriteUnits }
+        - IndexName: deltaV
+          KeySchema:
+            - { AttributeName: dPk, KeyType: HASH }
+            - { AttributeName: dSk, KeyType: RANGE }
+          Projection: { ProjectionType: INCLUDE, NonKeyAttributes: [pid, name, tag, dV] }
+          OnDemandThroughput: { MaxReadRequestUnits: !Ref MaxTableReadUnits, MaxWriteRequestUnits: !Ref MaxTableWriteUnits }
+        - IndexName: time
+          KeySchema:
+            - { AttributeName: tPk, KeyType: HASH }
+            - { AttributeName: tSk, KeyType: RANGE }
+          Projection: { ProjectionType: INCLUDE, NonKeyAttributes: [pid, name, tag, tV] }
+          OnDemandThroughput: { MaxReadRequestUnits: !Ref MaxTableReadUnits, MaxWriteRequestUnits: !Ref MaxTableWriteUnits }
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: false # AWS-owned key encryption (always on); true would switch to a billed KMS key.
+
+  SubmitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-submit'
+      RetentionInDays: !Ref LogRetentionDays
+
+  ReadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-read'
+      RetentionInDays: !Ref LogRetentionDays
+
+  SubmitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: leaderboard-submit
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt SubmitLogGroup.Arn
+              - Sid: ReadEntriesBoardsCache
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:Query]
+                Resource: [!GetAtt Table.Arn, !Sub '${Table.Arn}/index/*']
+              - Sid: WriteEntriesAndScoreCache
+                Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !GetAtt Table.Arn
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys: ['E#*', 'S#*']
+              - Sid: RateCounters
+                Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !GetAtt Table.Arn
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys: ['R#*']
+
+  ReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: leaderboard-read
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt ReadLogGroup.Arn
+              - Sid: ReadEntriesAndBoards
+                Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:Query]
+                Resource: [!GetAtt Table.Arn, !Sub '${Table.Arn}/index/*']
+              - Sid: RateCounters
+                Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !GetAtt Table.Arn
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys: ['R#*']
+
+  SubmitFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-submit'
+      Description: sendit leaderboard submissions (re-flies each plan)
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: handler.handler
+      Code: { S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey }
+      Role: !GetAtt SubmitRole.Arn
+      # 1769 MB = one full vCPU; the replay is single-threaded CPU work.
+      MemorySize: 1769
+      Timeout: 40
+      ReservedConcurrentExecutions: !Ref SubmitReservedConcurrency
+      LoggingConfig: { LogGroup: !Ref SubmitLogGroup, LogFormat: Text }
+      Environment:
+        Variables:
+          ROLE: submit
+          TABLE_NAME: !Ref Table
+          IP_HASH_SALT: !Ref IpHashSalt
+          EXPOSE_PLANS: !Ref ExposePlans
+          NAME_BLOCKLIST: !Ref NameBlocklist
+          REPLAY_BUDGET_MS: '30000'
+          MAX_STEPS: '100000'
+          MAX_CHUNKS: '160'
+          MAX_BODY_BYTES: '20000'
+          NODE_OPTIONS: --enable-source-maps
+
+  ReadFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-read'
+      Description: sendit leaderboard boards, own rank, mission list
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: handler.handler
+      Code: { S3Bucket: !Ref ArtifactBucket, S3Key: !Ref ArtifactKey }
+      Role: !GetAtt ReadRole.Arn
+      MemorySize: 512
+      Timeout: 10
+      ReservedConcurrentExecutions: !Ref ReadReservedConcurrency
+      LoggingConfig: { LogGroup: !Ref ReadLogGroup, LogFormat: Text }
+      Environment:
+        Variables:
+          ROLE: read
+          TABLE_NAME: !Ref Table
+          IP_HASH_SALT: !Ref IpHashSalt
+          EXPOSE_PLANS: !Ref ExposePlans
+          MAX_CHUNKS: '1'
+          NODE_OPTIONS: --enable-source-maps
+
+  SubmitUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt SubmitFunction.Arn
+      AuthType: AWS_IAM
+
+  ReadUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt ReadFunction.Arn
+      AuthType: AWS_IAM
+
+  # Only the site's distribution (signing through its origin access control) may call the URLs.
+  SubmitUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SubmitFunction
+      Action: lambda:InvokeFunctionUrl
+      FunctionUrlAuthType: AWS_IAM
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}'
+
+  SubmitInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SubmitFunction
+      Action: lambda:InvokeFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}'
+
+  ReadUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ReadFunction
+      Action: lambda:InvokeFunctionUrl
+      FunctionUrlAuthType: AWS_IAM
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}'
+
+  ReadInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ReadFunction
+      Action: lambda:InvokeFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}'
+
+Outputs:
+  TableName:
+    Value: !Ref Table
+  SubmitFunctionName:
+    Value: !Ref SubmitFunction
+  ReadFunctionName:
+    Value: !Ref ReadFunction
+  # Host names only (https://<id>.lambda-url.us-east-1.on.aws/ -> <id>.lambda-url.us-east-1.on.aws), for the site stack's origins.
+  SubmitOriginDomain:
+    Value: !Select [2, !Split ['/', !GetAtt SubmitUrl.FunctionUrl]]
+  ReadOriginDomain:
+    Value: !Select [2, !Split ['/', !GetAtt ReadUrl.FunctionUrl]]
