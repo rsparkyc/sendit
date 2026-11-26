@@ -7,28 +7,35 @@
  * main thread installs transferred chunks and evaluates them, and never builds.
  */
 import { ChebyshevEphemeris } from '../physics/chebyshev-ephemeris';
-import { J2000_BODIES } from '../physics/solar-system';
-import { propagate, type Burn, type BurnFrame } from '../physics/spacecraft';
+import { CHECKPOINT_ASSET_URL, installCheckpointAsset } from '../physics/checkpoint-asset';
+import { J2000_BODIES, type BodyData } from '../physics/solar-system';
 
 export interface BodyInfo {
   readonly index: number;
   readonly id: string;
+  /** Display name from the data (e.g. "Mars", not "Mars system barycenter"). */
   readonly name: string;
+  /** Id of the planet a moon belongs to, from the data's `parent` field. */
+  readonly parentId: string | null;
   /** m^3/s^2 */
   readonly gm: number;
   /** Mean radius, m. */
   readonly radius: number;
   /** Barycentric ICRF state at J2000, m and m/s (for deriving parents and periods). */
   readonly state0: readonly number[];
+  /** Spin-axis unit vector (ICRF), if the data has one. */
+  readonly pole: readonly number[] | null;
 }
 
 export const BODIES: readonly BodyInfo[] = J2000_BODIES.map((b, index) => ({
   index,
   id: b.id,
-  name: b.name,
+  name: b.displayName ?? b.name,
+  parentId: b.parent ?? null,
   gm: b.gm,
   radius: b.radius,
   state0: b.state,
+  pole: b.pole ?? null,
 }));
 
 export const BODY_GM: Float64Array = Float64Array.from(BODIES.map((b) => b.gm));
@@ -38,9 +45,11 @@ export function bodyIndex(id: string): number {
 }
 
 /**
- * Ephemeris wrapper that knows which chunks it holds. Covered chunks are always
- * a contiguous range [lo, hi] containing chunk 0 (or empty: lo = 0, hi = -1),
- * because chunks are built and installed outward from the epoch.
+ * Ephemeris wrapper that knows which chunks it holds. [lo, hi] is the
+ * contiguous range around the epoch that the background worker builds outward;
+ * the main thread may also install chunks elsewhere (built by the replay
+ * worker from the checkpoint asset for a flight's span), so `has`/`covers`
+ * look at the chunks actually present.
  */
 export class Ephemeris {
   private readonly eph = new ChebyshevEphemeris(J2000_BODIES);
@@ -62,7 +71,7 @@ export class Ephemeris {
   }
 
   has(k: number): boolean {
-    return k >= this.lo && k <= this.hi;
+    return this.eph.hasChunk(k);
   }
 
   /** True if t can be evaluated without building anything. */
@@ -75,10 +84,17 @@ export class Ephemeris {
     return [this.chunkStart(this.lo), this.chunkStart(this.hi + 1)];
   }
 
-  /** Install a chunk built elsewhere. Must be the next one outward (hi+1 or lo-1). */
-  install(k: number, coeffs: Float64Array): void {
+  /** Install a chunk built elsewhere (any order; ignored if already present). Returns true if new. */
+  install(k: number, coeffs: Float64Array): boolean {
+    if (this.eph.hasChunk(k)) return false;
     this.eph.addChunk(k, coeffs);
-    this.track(k);
+    this.resync();
+    return true;
+  }
+
+  /** Indices of every installed chunk. */
+  chunks(): number[] {
+    return this.eph.builtChunks();
   }
 
   private track(k: number): void {
@@ -93,7 +109,7 @@ export class Ephemeris {
    * Returns a copy of the coefficients suitable for transfer.
    */
   build(k: number): Float64Array {
-    if (this.has(k)) return this.eph.getChunk(k)!.slice();
+    if (this.eph.hasChunk(k)) return this.eph.getChunk(k)!.slice();
     if (!(k === this.hi + 1 || k === this.lo - 1 || (this.lo > this.hi && (k === 0 || k === -1)))) {
       throw new Error(`chunk ${k} is not next to the covered range [${this.lo}, ${this.hi}]`);
     }
@@ -105,7 +121,7 @@ export class Ephemeris {
 
   /** Coefficients of an installed chunk (shared; do not mutate). */
   chunk(k: number): Float64Array | undefined {
-    return this.has(k) ? this.eph.getChunk(k) : undefined;
+    return this.eph.getChunk(k);
   }
 
   /**
@@ -135,58 +151,54 @@ export class Ephemeris {
   }
 }
 
-export interface ThrustBurn {
-  tStart: number;
-  duration: number;
-  thrust: number;
-  isp: number;
-  /** (prograde, normal, radial-out) relative to `body`, held for the whole burn. */
-  direction: readonly [number, number, number];
-  body: number;
-}
-
-export interface DenseSample {
-  t: number;
-  /** x y z vx vy vz mass */
-  y: Float64Array;
-}
+/** Physics body data, for the mission adapter's world (launch starts need it). Opaque to the rest of the app. */
+export const BODY_DATA: readonly BodyData[] = J2000_BODIES;
+export type { BodyData };
 
 /**
- * Propagate a spacecraft with the real ephemeris, calling `sample` with dense
- * output at `perStep` evenly spaced times inside every accepted step (plus the
- * initial state). Returns the final state.
+ * Ephemeris used by the replay worker: the real ChebyshevEphemeris with the
+ * shipped checkpoint asset installed, so any chunk between 1950 and 2100 is
+ * built directly from its nearest checkpoint (a flight's span is available in
+ * a few chunk builds, not by integrating outward from J2000). Chunks are
+ * bit-identical either way, so replay results do not depend on who built them.
  */
-export function propagateDense(
-  eph: Ephemeris,
-  y0: ArrayLike<number>,
-  t0: number,
-  t1: number,
-  burns: readonly ThrustBurn[],
-  perStep: number,
-  sample: (t: number, y: Float64Array) => void,
-  dryMass = 0,
-): { t: number; y: Float64Array; steps: number } {
-  const physBurns: Burn[] = burns.map((b) => ({
-    tStart: b.tStart,
-    duration: b.duration,
-    thrust: b.thrust,
-    isp: b.isp,
-    direction: b.direction,
-    frame: { kind: 'orbital', body: b.body } satisfies BurnFrame,
-  }));
-  const tmp = new Float64Array(7);
-  sample(t0, Float64Array.from(y0));
-  const r = propagate(eph.physics, y0, t0, t1, physBurns, {
-    dryMass,
-    onStep: (t, y, interpolate, tPrev) => {
-      for (let i = 1; i < perStep; i++) {
-        const ti = tPrev + ((t - tPrev) * i) / perStep;
-        interpolate(ti, tmp);
-        sample(ti, tmp);
-      }
-      sample(t, y);
-    },
-  });
-  eph.resync();
-  return { t: r.t, y: r.y, steps: r.accepted };
+export class ReplayEphemeris {
+  readonly physics = new ChebyshevEphemeris(J2000_BODIES);
+  readonly chunkLength = this.physics.layout.chunkLength;
+
+  /** Fetch and install the checkpoint asset. Without it chunks are still correct, only slower to build. */
+  async loadCheckpoints(): Promise<void> {
+    const res = await fetch(CHECKPOINT_ASSET_URL);
+    if (!res.ok) throw new Error(`checkpoint asset: HTTP ${res.status}`);
+    installCheckpointAsset(this.physics, J2000_BODIES, new Uint8Array(await res.arrayBuffer()));
+  }
+
+  /** Install checkpoints from bytes (tests, Node). */
+  installCheckpoints(bytes: Uint8Array): void {
+    installCheckpointAsset(this.physics, J2000_BODIES, bytes);
+  }
+
+  chunkIndex(t: number): number {
+    return this.physics.chunkIndex(t);
+  }
+
+  has(k: number): boolean {
+    return this.physics.hasChunk(k);
+  }
+
+  add(k: number, coeffs: Float64Array): void {
+    if (!this.physics.hasChunk(k)) this.physics.addChunk(k, coeffs);
+  }
+
+  /** Build every chunk covering [ta, tb]; returns the indices that were newly built. */
+  ensure(ta: number, tb: number): number[] {
+    const before = new Set(this.physics.builtChunks());
+    this.physics.ensure(ta, tb);
+    return this.physics.builtChunks().filter((k) => !before.has(k));
+  }
+
+  /** Copy of chunk k for transfer. */
+  copy(k: number): Float64Array | undefined {
+    return this.physics.getChunk(k)?.slice();
+  }
 }

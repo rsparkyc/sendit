@@ -4,7 +4,8 @@
  */
 import { frameLabel, type FrameSpec } from './frames';
 import { formatDistance, formatSpeed } from './format';
-import type { Store, ViewState } from './store';
+import { fillBodySelect } from './dom';
+import type { AppState, Store } from './store';
 import { WARP_RATES } from './store';
 import { formatCalendar, formatRate, tdbToCalendar, tdbToUtc, utcIsPredicted } from './time';
 
@@ -30,6 +31,14 @@ export interface HudActions {
   spacecraftName: string | null;
 }
 
+export interface HudSlots {
+  left: HTMLElement;
+  right: HTMLElement;
+  bottom: HTMLElement;
+  /** Fixed overlay (loading banner, help). */
+  overlay: HTMLElement;
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
   Object.assign(e, props);
@@ -43,7 +52,7 @@ export class Hud {
   private readonly warp = el('span', { className: 'warp' });
   private readonly pauseBtn = el('button', { className: 'btn', title: 'Pause / resume (Space)' });
   private readonly focusSel = el('select', { title: 'Focus' });
-  private readonly kindSel = el('select', { title: 'Frame type' });
+  private readonly kindSel = el('select', { title: 'Frame type', className: 'frame-kind' });
   private readonly centerSel = el('select', { title: 'Frame centre' });
   private readonly secondarySel = el('select', { title: 'Body held fixed on the frame x axis' });
   private readonly readouts = el('div', { className: 'readouts' });
@@ -53,8 +62,8 @@ export class Hud {
   private readonly jumpError = el('div', { className: 'error' });
 
   constructor(
-    root: HTMLElement,
-    private readonly store: Store<ViewState>,
+    slots: HudSlots,
+    private readonly store: Store<AppState>,
     private readonly bodies: readonly HudBody[],
     private readonly actions: HudActions,
   ) {
@@ -83,17 +92,14 @@ export class Hud {
       el('div', { className: 'row' }, this.pauseBtn, slower, this.warp, faster),
       jumpForm, this.jumpError, presets);
 
-    if (actions.spacecraftName) this.focusSel.append(el('option', { value: '-1', textContent: actions.spacecraftName }));
-    bodies.forEach((b, i) => this.focusSel.append(el('option', { value: String(i), textContent: b.name })));
+    fillBodySelect(this.focusSel, String, actions.spacecraftName ? [{ value: '-1', label: actions.spacecraftName }] : []);
     this.focusSel.onchange = () => store.set({ focus: Number(this.focusSel.value) });
 
     for (const [v, t] of [['barycentric', 'Barycentric'], ['inertial', 'Body-centred inertial'], ['rotating', 'Body-centred rotating']]) {
       this.kindSel.append(el('option', { value: v, textContent: t }));
     }
-    bodies.forEach((b, i) => {
-      this.centerSel.append(el('option', { value: String(i), textContent: b.name }));
-      this.secondarySel.append(el('option', { value: String(i), textContent: b.name }));
-    });
+    fillBodySelect(this.centerSel);
+    fillBodySelect(this.secondarySel);
     const onFrame = () => this.commitFrame();
     this.kindSel.onchange = onFrame;
     this.centerSel.onchange = () => {
@@ -109,8 +115,11 @@ export class Hud {
       el('label', { className: 'center' }, el('span', { textContent: 'Centre' }), this.centerSel),
       el('label', { className: 'secondary' }, el('span', { textContent: 'Fixed' }), this.secondarySel));
 
-    const help = el('div', { className: 'help', textContent: 'Drag: rotate · Wheel: zoom · Click label: focus · Space: pause · , . : warp' });
-    root.append(time, view, el('section', { className: 'panel info' }, this.readouts, this.perf), this.loading, help);
+    const help = el('div', { className: 'help', textContent: 'Drag: rotate · Wheel: zoom · Click trajectory: add burn · Click label: focus · Space: pause · , . : warp · W/S A/D Q/E: nudge node Δv · [ ]: node time · Del: delete node' });
+    slots.left.prepend(time);
+    slots.right.prepend(view);
+    slots.bottom.append(el('section', { className: 'panel info' }, this.readouts, this.perf));
+    slots.overlay.append(this.loading, help);
 
     store.subscribe((s, p) => this.render(s, p));
     this.render(store.get(), null);
@@ -129,13 +138,14 @@ export class Hud {
     if (kind === 'barycentric') frame = { kind: 'barycentric' };
     else if (kind === 'inertial') frame = { kind: 'inertial', center };
     else {
-      if (secondary === center) secondary = this.bodies[center].defaultSecondary;
+      const prev = this.store.get().frame;
+      if (secondary === center || prev.kind !== 'rotating') secondary = this.bodies[center].defaultSecondary;
       frame = { kind: 'rotating', center, secondary };
     }
     this.store.set({ frame });
   }
 
-  private render(s: ViewState, p: ViewState | null): void {
+  private render(s: AppState, p: AppState | null): void {
     if (!p || s.paused !== p.paused) {
       this.pauseBtn.textContent = s.paused ? '▶' : '❚❚';
       this.pauseBtn.classList.toggle('active', s.paused);

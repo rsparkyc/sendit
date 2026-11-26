@@ -6,31 +6,44 @@ uses only exactly-rounded floating-point operations.
 
 The site has two pages:
 
-- `index.html`: the 3D solar-system viewer (future mission-planning map view). Physics
-  runs in a Web Worker; see `src/app/` below.
+- `index.html`: the flight-plan editor on the 3D solar-system view. Physics runs in Web
+  Workers; see `src/app/` below.
 - `check.html`: the cross-browser determinism diagnostic. It runs the canonical scenario
   (`src/fixtures/determinism.ts`) in a Web Worker and reports PASS only if all seven
   final state components match the stored Float64 bits.
 
-## Viewer (`src/app/`)
+## Flight-plan editor (`src/app/`)
 
-- `physics.ts` is the only module that imports `src/physics`. It wraps
-  `ChebyshevEphemeris` so the main thread can only evaluate installed chunks (never build).
-- `worker.ts` builds ephemeris chunks one at a time, outward from the epoch (order from
-  `schedule.ts`), transfers each to the main thread, and propagates the demo spacecraft
-  (`mission.ts`: LEO parking orbit, finite TLI burn, ten-day coast).
-- `frames.ts`: plotting frames (barycentric, body-centred inertial, body-centred rotating),
-  pure and unit-tested. `paths.ts` turns body paths and trajectories into frame coordinates.
-- `scene.ts` (three.js): positions in float64 on the CPU, rendered relative to the camera,
-  logarithmic depth buffer. `labels.ts`: DOM labels and markers for small bodies.
-- `store.ts` (UI state), `hud.ts` (plain-DOM controls), `camera.ts`, `time.ts` (TDB/UTC).
+The main page is the game's core loop: an editable mission plan, replayed live.
 
-Dates are shown in TDB (the ephemeris time scale) with UTC alongside, derived via the
-leap-second table in `time.ts` and marked as a prediction beyond it.
+- **The plan is the source of truth.** Editor state is a `MissionPlan` (src/mission/plan.ts)
+  in the one store (`store.ts`). Every edit makes a new plan; `replay-client.ts` sends it
+  (debounced, newest wins, a long run is cancelled by terminating the worker) to
+  `replay-worker.ts`, which flies it with the mission layer's `replay` (the scoring path)
+  using the canonical options in `replay-options.ts`, evaluates the mission's objectives,
+  and returns trajectory samples taken from inside that same replay. Nothing else
+  computes a displayed trajectory. Long flights get a preview first: the same replay cut
+  short (an exact prefix of the flight), then the full one.
+- **Adapters.** `physics.ts` is the only module that imports `src/physics`;
+  `mission-layer.ts` is the only one that imports `src/mission`.
+- **Nodes** (`nodes.ts`, pure): a maneuver node (time, prograde/normal/radial delta-v
+  relative to a reference body, engine) is a view of a real finite `PlanBurn`: duration
+  from the rocket equation with the mass at that point, centred on the node time.
+  Edits keep earlier burns bit-identical and later nodes' requested delta-v.
+- **Missions** (`missions.ts`): sandbox plus the sample missions, flown in the real
+  ephemeris world with their objectives and limits, starting with no burns.
+  `missions.test.ts` holds the author's solutions (the UI never shows them).
+- **Sharing** (`share.ts`): `#m=<mission>&p=<plan>` with the plan encoder; the working
+  plan is also kept in local storage. The replay digest is shown under the flight panel.
+- Panels: `editor-ui.ts` (plain DOM, built once and updated in place from the store;
+  helpers in `dom.ts`), events filtering in `events-view.ts`, editing actions in `editor.ts`.
+- Viewer pieces as before: `worker.ts` builds ephemeris chunks outward from J2000;
+  `frames.ts`, `paths.ts`, `scene.ts`, `labels.ts`, `hud.ts`, `camera.ts`, `time.ts`.
 
-Keys: Space pauses, `,` and `.` change warp. The URL hash can set the initial view, e.g.
-`#t=2027-01-14T18:00&frame=rot:earth:moon&focus=earth&dist=1.3e9&paused=1`
-(`frame` is `bary`, `in:<body>` or `rot:<centre>:<fixed body>`; `focus=sc` is the spacecraft).
+Keys: Space pauses, `,` and `.` change warp. With a node selected: W/S prograde, D/A
+normal, E/Q radial (Shift x10, Alt x0.1 of the step), `[` `]` move it in time, Delete
+removes it, N adds a node at the time cursor. Clicking the trajectory adds a node there.
+The URL hash may also set the initial view, e.g. `#frame=rot:earth:moon&focus=earth&dist=1.3e9`.
 
 ## Develop
 

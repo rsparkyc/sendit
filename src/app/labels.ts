@@ -17,6 +17,8 @@ export interface LabelItem {
   /** Offset of the label from the point, px (clears the disc of large bodies). */
   offset: number;
   onScreen: boolean;
+  /** Extra CSS class (e.g. event and node markers). */
+  className?: string;
 }
 
 interface Entry {
@@ -52,6 +54,14 @@ export class Labels {
   }
 
   update(items: LabelItem[]): void {
+    // Remove entries no longer present (event and node markers come and go).
+    const keys = new Set(items.map((i) => i.key));
+    for (const [k, e] of this.entries) {
+      if (!keys.has(k)) {
+        e.el.remove();
+        this.entries.delete(k);
+      }
+    }
     const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
     const sorted = [...items].sort((a, b) => b.priority - a.priority);
     const w = this.root.clientWidth;
@@ -86,6 +96,11 @@ export class Labels {
         continue;
       }
       e.el.style.display = '';
+      const cls = `label${item.className ? ` ${item.className}` : ''}`;
+      if (e.el.dataset.cls !== cls) {
+        e.el.dataset.cls = cls;
+        e.el.className = cls;
+      }
       e.el.style.transform = `translate(${item.x.toFixed(1)}px, ${item.y.toFixed(1)}px)`;
       e.dot.style.display = item.marker ? '' : 'none';
       e.dot.style.background = item.color;

@@ -76,6 +76,8 @@ export class SceneView {
   private readonly paths: AnchoredLine[] = [];
   private readonly trajectory: AnchoredLine;
   private readonly trajectoryPast: AnchoredLine;
+  private readonly burnArcs: AnchoredLine;
+  private readonly trajectoryMaterial: THREE.LineBasicMaterial;
   private readonly light: THREE.PointLight;
   private readonly lightBody: number;
 
@@ -99,9 +101,11 @@ export class SceneView {
       this.scene.add(line.group);
       this.paths.push(line);
     }
-    this.trajectory = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.9, depthWrite: false }));
+    this.trajectoryMaterial = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.9, depthWrite: false });
+    this.trajectory = new AnchoredLine(this.trajectoryMaterial);
     this.trajectoryPast = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0x3b7a58, transparent: true, opacity: 0.8, depthWrite: false }));
-    this.scene.add(this.trajectory.group, this.trajectoryPast.group);
+    this.burnArcs = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0xff8a3d, transparent: false, depthWrite: false, depthTest: false }));
+    this.scene.add(this.trajectory.group, this.trajectoryPast.group, this.burnArcs.group);
     this.light = new THREE.PointLight(0xffffff, 3, 0, 0);
     this.scene.add(this.light, new THREE.AmbientLight(0xffffff, 0.06));
   }
@@ -126,6 +130,18 @@ export class SceneView {
       this.trajectory.clear();
       this.trajectoryPast.clear();
     }
+  }
+
+  /** Powered arcs, drawn over the trajectory in a distinct colour. */
+  setBurnArcs(segs: AnchoredSegment[] | null): void {
+    if (segs && segs.length) this.burnArcs.set(segs);
+    else this.burnArcs.clear();
+  }
+
+  /** Dim the trajectory (e.g. it belongs to a plan that is no longer current). */
+  setTrajectoryDim(dim: boolean): void {
+    for (const l of [this.trajectory, this.trajectoryPast]) l.group.visible = true;
+    (this.trajectoryMaterial.opacity) = dim ? 0.35 : 0.9;
   }
 
   /** Vertex index of the current time along the trajectory polyline (fractional allowed: rounded). */
@@ -154,6 +170,7 @@ export class SceneView {
     }
     this.trajectory.place(cam);
     this.trajectoryPast.place(cam);
+    this.burnArcs.place(cam);
     const l = this.lightBody;
     if (l >= 0) this.light.position.copy(this.bodies[l].position);
     this.renderer.render(this.scene, c);

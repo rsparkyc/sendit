@@ -1,22 +1,37 @@
 /**
- * Viewer entry point: wires the worker-fed ephemeris, store, camera, scene,
- * labels and HUD, and runs the frame loop.
+ * Entry point: the flight-plan editor. Wires the worker-fed ephemeris, the
+ * replay worker, the store, camera, scene, labels, HUD and editor panels, and
+ * runs the frame loop.
+ *
+ * Data flow: an edit changes `plan` in the store -> the replay client replays
+ * it in the worker with the mission layer's `replay` (the scoring path) ->
+ * the result and its trajectory samples land in `replay` in the store -> the
+ * trajectory, burn arcs, event markers and panels are redrawn from it. No
+ * trajectory is ever computed any other way.
  */
 import './style.css';
 import { deriveMeta } from './body-meta';
 import { OrbitCamera } from './camera';
+import { Editor } from './editor';
+import { bodyName, CraftPanel, EventsPanel, MissionPanel, NodesPanel, ResultsPanel, Scrubber, StartPanel, type UiContext } from './editor-ui';
+import { listEvents, eventMarker, type ListedEvent } from './events-view';
 import { computeFrame, frameCenter, frameKey, newFrameState, parseFrameKey, toFrame, type FrameSpec } from './frames';
 import { Hud, type Readout } from './hud';
 import { Labels, type LabelItem } from './labels';
-import { anchorSegments, bodyPath, trajectoryPath, type FrameContext, type FramePath } from './paths';
-import { MISSION_LAUNCH } from './mission';
-import { BODIES, BODY_GM, bodyIndex, Ephemeris } from './physics';
-import type { FromWorker, MissionInfo, ToWorker } from './protocol';
+import { makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, type EventKind } from './mission-layer';
+import { initialPlan, missionById, MISSIONS } from './missions';
+import { nodesOf } from './nodes';
+import { anchorSegments, bodyPath, frameAt, trajectoryPath, type FrameContext, type FramePath } from './paths';
+import { BODIES, BODY_DATA, BODY_GM, bodyIndex, Ephemeris } from './physics';
+import type { FromWorker, ToWorker } from './protocol';
+import { ReplayClient } from './replay-client';
+import { sandboxSpheres } from './replay-options';
 import { SceneView, UNIT } from './scene';
 import { chunksMissing } from './schedule';
-import { Store, WARP_RATES, type ViewState } from './store';
+import { loadSaved, parsePlanHash, planHash, save } from './share';
+import { Store, WARP_RATES, type AppState } from './store';
 import { calendarToTdb, formatCalendar, JULIAN_YEAR, parseCalendar, tdbToCalendar, utcMsToTdb } from './time';
-import { stateAt, trajectoryFrom, type Trajectory } from './trajectory';
+import { SAMPLE_STRIDE, stateAt, trajectoryFrom, type Trajectory } from './trajectory';
 
 const SPACECRAFT = -1;
 const PATH_SAMPLES = 360;
@@ -26,7 +41,7 @@ const meta = deriveMeta(BODIES);
 const sunIndex = meta.findIndex((m) => m.parent < 0);
 
 // ---------------------------------------------------------------------------
-// Ephemeris fed by the worker
+// Ephemeris fed by the background worker (outward from J2000) and by the replay worker (flight spans)
 
 const eph = new Ephemeris();
 const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -34,22 +49,17 @@ const metrics = {
   chunkMs: [] as number[],
   frameCpuMs: 0,
   frameIntervalMs: 0,
-  mission: null as MissionInfo | null,
+  /** Edit to trajectory-on-screen, ms: replay client latency plus the redraw. */
+  redrawLatencyMs: 0,
   errors: [] as string[],
 };
-let trajectory: Trajectory | null = null;
 let coverageVersion = 0;
 
 worker.onmessage = (ev: MessageEvent<FromWorker>) => {
   const m = ev.data;
   if (m.type === 'chunk') {
-    eph.install(m.k, m.coeffs);
+    if (eph.install(m.k, m.coeffs)) coverageVersion++;
     if (m.ms > 0) metrics.chunkMs.push(m.ms);
-    coverageVersion++;
-  } else if (m.type === 'mission') {
-    trajectory = trajectoryFrom(m.samples);
-    metrics.mission = m.info;
-    trajectoryDirty = true;
   } else if (m.type === 'error') {
     metrics.errors.push(m.message);
     console.error('physics worker:', m.message);
@@ -68,22 +78,26 @@ function want(lo: number, hi: number): void {
   worker.postMessage({ type: 'want', lo, hi } satisfies ToWorker);
 }
 
+const world = makeWorld(eph.physics, BODY_DATA);
+const fingerprint = world.fingerprint;
+const soi = new Map(sandboxSpheres().map((s) => [s.body, s.radius]));
+
 // ---------------------------------------------------------------------------
-// Initial state (URL hash overrides, e.g. #t=2030-01-01&frame=rot:earth:moon&focus=earth&dist=1e9)
+// Initial state: shared link (#m=..&p=..) > saved work > sandbox. View params (#t=, frame=, ...) still apply.
 
 const params = new URLSearchParams(location.hash.slice(1));
 const earth = bodyIndex('earth');
-const moon = bodyIndex('moon');
 const home = earth >= 0 ? earth : 0;
 
-function initialTime(): number {
-  const p = params.get('t');
-  if (p !== null) {
-    if (/^-?\d+(\.\d+)?(e\d+)?$/.test(p)) return Number(p);
-    const c = parseCalendar(p);
-    if (c) return calendarToTdb(c);
+function initialEditor(): Pick<AppState, 'missionId' | 'plan' | 'parked' | 'notice'> {
+  const link = parsePlanHash(location.hash, fingerprint);
+  const saved = loadSaved();
+  if (link.plan) {
+    const missionId = missionById(link.missionId ?? '')?.id ?? 'sandbox';
+    return { missionId, plan: link.plan, parked: [], notice: link.mismatch };
   }
-  return MISSION_LAUNCH + 3600;
+  const fallback = saved ? { missionId: missionById(saved.missionId)?.id ?? 'sandbox', plan: saved.plan, parked: saved.parked } : { missionId: 'sandbox', plan: initialPlan(MISSIONS[0], fingerprint), parked: [] };
+  return { ...fallback, notice: link.error };
 }
 
 function defaultSecondary(c: number): number {
@@ -95,44 +109,77 @@ function defaultSecondary(c: number): number {
   return meta[c].parent >= 0 ? meta[c].parent : (c + 1) % n;
 }
 
+const ed0 = initialEditor();
+function initialTime(): number {
+  const p = params.get('t');
+  if (p !== null) {
+    if (/^-?\d+(\.\d+)?(e\d+)?$/.test(p)) return Number(p);
+    const c = parseCalendar(p);
+    if (c) return calendarToTdb(c);
+  }
+  return ed0.plan.epoch + simulationStartOffset(ed0.plan.start) + 60;
+}
 const focusParam = params.get('focus');
 const initialFocus = focusParam === 'sc' ? SPACECRAFT : focusParam && bodyIndex(focusParam) >= 0 ? bodyIndex(focusParam) : home;
 const initialFrame: FrameSpec = parseFrameKey(params.get('frame') ?? '', bodyIndex) ?? { kind: 'inertial', center: home };
 const t0 = initialTime();
 
-const store = new Store<ViewState>({
+const store = new Store<AppState>({
   t: t0,
-  paused: params.get('paused') === '1',
+  paused: params.get('paused') !== '0',
   warpIndex: Math.max(0, Math.min(WARP_RATES.length - 1, Number(params.get('warp') ?? 3))),
   focus: initialFocus,
   frame: initialFrame,
   loadingTarget: t0,
   loadingChunks: 0,
+  ...ed0,
+  selectedNode: null,
+  selectedEvent: null,
+  replay: null,
+  replayStatus: 'idle',
 });
+const editor = new Editor(store, fingerprint);
 
 // ---------------------------------------------------------------------------
-// Scene, camera, labels, HUD
+// Scene, camera, labels, HUD, panels
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const overlay = document.getElementById('labels') as HTMLElement;
+const hudRoot = document.getElementById('hud') as HTMLElement;
+const slots = {
+  left: Object.assign(document.createElement('div'), { className: 'col left' }),
+  right: Object.assign(document.createElement('div'), { className: 'col right' }),
+  bottom: Object.assign(document.createElement('div'), { className: 'bottom' }),
+  overlay: hudRoot,
+};
+hudRoot.append(slots.left, slots.right, slots.bottom);
+
 const scene = new SceneView(
   canvas,
   BODIES.map((b, i) => ({ radius: b.radius, color: meta[i].color, emissive: i === sunIndex })),
   sunIndex,
 );
 const camera = new OrbitCamera();
-camera.setDistance(Number(params.get('dist') ?? 1.6e9), true);
+camera.setDistance(Number(params.get('dist') ?? 6e7), true);
 if (params.has('az')) camera.azimuth = Number(params.get('az'));
 if (params.has('el')) camera.elevation = Number(params.get('el'));
 
-const labels = new Labels(overlay, (key) => store.set({ focus: key === 'sc' ? SPACECRAFT : Number(key) }));
+const labels = new Labels(overlay, (key) => {
+  if (key === 'sc') store.set({ focus: SPACECRAFT });
+  else if (key.startsWith('node:')) store.set({ selectedNode: Number(key.slice(5)) });
+  else if (key.startsWith('ev:')) {
+    const i = Number(key.slice(3));
+    const ev = store.get().replay?.result.events[i];
+    if (ev) store.set({ selectedEvent: i, t: ev.t, paused: true, loadingTarget: ev.t });
+  } else store.set({ focus: Number(key) });
+});
 
 function jumpTo(t: number): void {
   store.set({ loadingTarget: t });
 }
 
 const hud = new Hud(
-  document.getElementById('hud') as HTMLElement,
+  slots,
   store,
   BODIES.map((b, i) => ({ name: b.name, defaultSecondary: defaultSecondary(i) })),
   {
@@ -144,13 +191,81 @@ const hud = new Hud(
     },
     jumpTo,
     presets: [
-      { label: 'Mission', t: MISSION_LAUNCH + 3600 },
+      {
+        label: 'Flight start',
+        get t() {
+          const pl = store.get().plan;
+          return pl.epoch + simulationStartOffset(pl.start);
+        },
+      },
       { label: 'Now', t: utcMsToTdb(Date.now()) },
       { label: 'J2000', t: 0 },
     ],
-    spacecraftName: 'Demo TLI (spacecraft)',
+    spacecraftName: 'Spacecraft',
   },
 );
+
+// Spacecraft trajectory of the latest replay. Subscribed before the panels so they see it updated.
+let trajectory: Trajectory | null = null;
+store.subscribe((s, p) => {
+  if (s.replay !== p.replay) {
+    trajectory = s.replay ? trajectoryFrom(toStride7(s.replay.samples)) : null;
+    trajectoryDirty = true;
+  }
+});
+const tmpState = new Float64Array(6);
+const tmpPos = new Float64Array(3 * n);
+
+/** Body (id) whose sphere of influence holds the craft at mission time t; the launch / start body otherwise. */
+function dominantBody(tMission: number): string {
+  const plan = store.get().plan;
+  const fallback = plan.start.kind === 'state' ? plan.start.center : 'earth';
+  const t = plan.epoch + tMission;
+  if (!trajectory || !stateAt(trajectory, t, tmpState) || !eph.evaluate(t, tmpPos, null)) return fallback;
+  let best: string | null = null;
+  let bestR = Infinity;
+  for (let i = 0; i < n; i++) {
+    const r = soi.get(BODIES[i].id);
+    if (r === undefined || r >= bestR) continue;
+    const d = Math.hypot(tmpState[0] - tmpPos[3 * i], tmpState[1] - tmpPos[3 * i + 1], tmpState[2] - tmpPos[3 * i + 2]);
+    if (d < r) {
+      best = BODIES[i].id;
+      bestR = r;
+    }
+  }
+  return best ?? BODIES[sunIndex].id;
+}
+
+function shareUrl(): string | null {
+  const s = store.get();
+  const h = planHash(s.missionId, s.plan);
+  return h ? `${location.origin}${location.pathname}${h}` : null;
+}
+
+const ui: UiContext = {
+  store,
+  editor,
+  soi,
+  dominantBody,
+  focusBody(id) {
+    const i = bodyIndex(id);
+    if (i >= 0) store.set({ focus: i });
+  },
+  shareUrl,
+};
+
+function failureKinds(): readonly EventKind[] {
+  const def = missionById(store.get().missionId)?.def;
+  const reentry = def ? JSON.stringify(def.objectives).includes('"reentry"') || JSON.stringify(def.objectives).includes('"return"') : false;
+  return reentry ? ['impact'] : ['impact', 'atmosphere-entry'];
+}
+
+slots.left.append(new MissionPanel(ui).root, new StartPanel(ui).root, new CraftPanel(ui).root);
+const nodesPanel = new NodesPanel(ui);
+const eventsPanel = new EventsPanel(ui, () => ({ failureKinds: failureKinds(), dominant: (t: number) => dominantBody(t - store.get().plan.epoch) }));
+slots.right.append(nodesPanel.root, eventsPanel.root);
+slots.bottom.prepend(new Scrubber(ui).root);
+slots.left.append(new ResultsPanel(ui).root);
 
 function resize(): void {
   scene.resize(canvas.clientWidth, canvas.clientHeight);
@@ -158,31 +273,145 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
-// Input
-let drag: { x: number; y: number } | null = null;
+// ---------------------------------------------------------------------------
+// Replay: every plan change is replayed in the worker
+
+const replayClient = new ReplayClient(eph, {
+  onResult(d) {
+    store.set({
+      replay: { plan: d.plan, result: d.result, evaluation: d.evaluation, samples: d.samples, replayMs: d.replayMs, latencyMs: d.latencyMs, preview: d.preview },
+      replayStatus: d.stale || d.preview !== null ? 'running' : store.get().replayStatus,
+    });
+  },
+  onChunk(k, coeffs) {
+    if (eph.install(k, coeffs)) coverageVersion++;
+  },
+  onStatus(s) {
+    store.set({ replayStatus: s });
+  },
+  onError(message) {
+    metrics.errors.push(message);
+    console.error('replay worker:', message);
+  },
+});
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+function planChanged(): void {
+  const s = store.get();
+  if (planErrors(s.plan).plan.length + planErrors(s.plan).burns.size === 0) replayClient.request(s.plan, s.missionId);
+  else store.set({ replayStatus: 'idle' });
+  if (saveTimer !== null) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    const st = store.get();
+    save(st.missionId, st.plan, st.parked);
+    const h = planHash(st.missionId, st.plan);
+    if (h && location.hash !== h) history.replaceState(null, '', h);
+  }, 250);
+}
+
+store.subscribe((s, p) => {
+  if (s.plan.epoch !== p.plan.epoch && s.loadingTarget === null) {
+    // Liftoff / start moved: keep the time cursor at the same mission elapsed time, inside the flight.
+    const met = Math.max(simulationStartOffset(s.plan.start), Math.min(s.plan.duration, s.t - p.plan.epoch));
+    store.set({ t: s.plan.epoch + met, loadingTarget: s.plan.epoch + met });
+  }
+  if (s.plan !== p.plan || s.missionId !== p.missionId) planChanged();
+  else if (s.parked !== p.parked) save(s.missionId, s.plan, s.parked);
+  if (s.selectedEvent !== p.selectedEvent || s.selectedNode !== p.selectedNode) markersDirty = true;
+});
+planChanged();
+
+function toStride7(samples: Float64Array): Float64Array {
+  const m = samples.length / REPLAY_SAMPLE_STRIDE;
+  const out = new Float64Array(m * SAMPLE_STRIDE);
+  for (let i = 0; i < m; i++) out.set(samples.subarray(i * REPLAY_SAMPLE_STRIDE, i * REPLAY_SAMPLE_STRIDE + 7), i * SAMPLE_STRIDE);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Input: drag rotates, wheel zooms, a click on the trajectory adds a burn there
+
+let drag: { x: number; y: number; x0: number; y0: number } | null = null;
 canvas.addEventListener('pointerdown', (e) => {
-  drag = { x: e.clientX, y: e.clientY };
+  drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
   canvas.setPointerCapture(e.pointerId);
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
   camera.rotate(-(e.clientX - drag.x) * 0.005, (e.clientY - drag.y) * 0.005);
-  drag = { x: e.clientX, y: e.clientY };
+  drag = { ...drag, x: e.clientX, y: e.clientY };
 });
-canvas.addEventListener('pointerup', () => (drag = null));
+canvas.addEventListener('pointerup', (e) => {
+  const d = drag;
+  drag = null;
+  if (d && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 4) clickTrajectory(e.clientX, e.clientY);
+});
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
   camera.zoom(Math.exp(dy * 0.0015));
 }, { passive: false });
+
+/** Nearest drawn trajectory sample to a screen point (within 12 px), as mission time. */
+function pickTrajectory(x: number, y: number): number | null {
+  const path = trajectoryPathCache;
+  if (!path) return null;
+  const rect = canvas.getBoundingClientRect();
+  const px = x - rect.left;
+  const py = y - rect.top;
+  let best = 144;
+  let bestT: number | null = null;
+  const pr = { x: 0, y: 0 };
+  for (let i = 0; i < path.times.length; i++) {
+    if (!scene.project(path.points, 3 * i, camera.position, pr)) continue;
+    const d2 = (pr.x - px) ** 2 + (pr.y - py) ** 2;
+    if (d2 < best) {
+      best = d2;
+      bestT = path.times[i];
+    }
+  }
+  return bestT === null ? null : bestT - store.get().plan.epoch;
+}
+
+function clickTrajectory(x: number, y: number): void {
+  const t = pickTrajectory(x, y);
+  if (t === null) return;
+  const plan = store.get().plan;
+  if (t < simulationStartOffset(plan.start)) return;
+  editor.addNode(Math.round(t * 10) / 10, { kind: 'orbital', body: dominantBody(t) });
+}
+
 window.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-  if (e.code === 'Space') {
+  const s = store.get();
+  const i = s.selectedNode;
+  const mult = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
+  const nudge: Record<string, [0 | 1 | 2, number]> = { KeyW: [0, 1], KeyS: [0, -1], KeyD: [1, 1], KeyA: [1, -1], KeyE: [2, 1], KeyQ: [2, -1] };
+  if (i !== null && nudge[e.code]) {
     e.preventDefault();
-    store.set({ paused: !store.get().paused });
+    const [axis, sign] = nudge[e.code];
+    editor.nudgeDv(i, axis, sign * mult * nodesPanel.step());
+    return;
+  }
+  if (i !== null && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+    e.preventDefault();
+    editor.nudgeTime(i, (e.code === 'BracketLeft' ? -1 : 1) * mult * nodesPanel.timeStep());
+    return;
+  }
+  if (i !== null && (e.key === 'Delete' || e.key === 'Backspace')) {
+    e.preventDefault();
+    editor.removeNode(i);
+    return;
+  }
+  if (e.key === 'Escape') store.set({ selectedNode: null, selectedEvent: null });
+  else if (e.code === 'Space') {
+    e.preventDefault();
+    store.set({ paused: !s.paused });
   } else if (e.key === ',') hud.stepWarp(-1);
   else if (e.key === '.') hud.stepWarp(1);
+  else if (e.key === 'n' || e.key === 'N') nodesPanel.addAtCursor();
 });
 
 // ---------------------------------------------------------------------------
@@ -198,11 +427,24 @@ interface PathState {
 }
 const pathState: (PathState | null)[] = new Array(n).fill(null);
 let trajectoryDirty = false;
+let trajectoryCoverage = -1;
+let trajectoryClipped = false;
 let trajectoryPathCache: FramePath | null = null;
+let markersDirty = true;
+
+interface Marker {
+  key: string;
+  text: string;
+  cls: string;
+  pos: Float64Array;
+  priority: number;
+  color: string;
+}
+let markers: Marker[] = [];
+let listed: ListedEvent[] = [];
 
 /** Time span drawn for body i's path in this frame (one orbit, or the period of the frame's own motion). */
 function pathSpan(i: number, frame: FrameSpec): number {
-  // 2% overlap so the ends meet despite the osculating period being approximate.
   if (Number.isFinite(meta[i].period)) return meta[i].period * 1.02;
   const c = frameCenter(frame);
   if (c !== null && Number.isFinite(meta[c].period)) return meta[c].period;
@@ -211,7 +453,6 @@ function pathSpan(i: number, frame: FrameSpec): number {
 
 function updatePaths(t: number, frame: FrameSpec, budget: number): void {
   const c = frameCenter(frame);
-  const [ca, cb] = eph.span();
   for (let i = 0; i < n && budget > 0; i++) {
     if (i === c) {
       if (pathState[i]) {
@@ -225,17 +466,94 @@ function updatePaths(t: number, frame: FrameSpec, budget: number): void {
     const stale = !s || Math.abs(t - s.center) > span / 24 || (s.clipped && s.coverage !== coverageVersion);
     if (!stale) continue;
     budget--;
-    const ta = t - span / 2;
-    const tb = t + span / 2;
-    const p = bodyPath(ctx, frame, i, Math.max(ta, ca), Math.min(tb, cb - 1), PATH_SAMPLES);
+    // Samples the ephemeris cannot evaluate yet are dropped; redrawn when coverage grows.
+    const p = bodyPath(ctx, frame, i, t - span / 2, t + span / 2, PATH_SAMPLES);
     scene.setBodyPath(i, anchorSegments(p.points, UNIT));
-    pathState[i] = { center: t, span, coverage: coverageVersion, clipped: ta < ca || tb > cb };
+    pathState[i] = { center: t, span, coverage: coverageVersion, clipped: p.times.length < PATH_SAMPLES + 1 };
   }
 }
 
 function invalidatePaths(): void {
   pathState.fill(null);
   trajectoryDirty = true;
+}
+
+/** Rebuild the trajectory, burn arcs and markers in the current frame. */
+function rebuildTrajectory(frame: FrameSpec): void {
+  const s = store.get();
+  const r = s.replay;
+  trajectoryCoverage = coverageVersion;
+  if (!r || !trajectory || trajectory.n < 2) {
+    scene.setTrajectory(null);
+    scene.setBurnArcs(null);
+    trajectoryPathCache = null;
+    markers = [];
+    return;
+  }
+  const path = trajectoryPath(ctx, frame, trajectory);
+  trajectoryClipped = path.times.length < trajectory.n;
+  trajectoryPathCache = path;
+  scene.setTrajectory(anchorSegments(path.points, UNIT));
+  scene.setTrajectoryDim(r.plan !== s.plan);
+  // Burn arcs: the samples between each burn's actual ignition and cutoff.
+  const arcs: ReturnType<typeof anchorSegments> = [];
+  const times = path.times;
+  r.result.burns.forEach((b, i) => {
+    if (!(b.burnTime > 0)) return;
+    const ta = r.plan.epoch + r.plan.burns[i].start;
+    const tb = ta + b.burnTime;
+    let lo = 0;
+    while (lo < times.length && times[lo] < ta) lo++;
+    let hi = lo;
+    while (hi < times.length && times[hi] <= tb) hi++;
+    const from = Math.max(0, lo - 1);
+    const to = Math.min(times.length, hi + 1);
+    if (to - from >= 2) arcs.push(...anchorSegments(path.points.slice(3 * from, 3 * to), UNIT));
+  });
+  scene.setBurnArcs(arcs);
+  rebuildMarkers(frame);
+}
+
+function rebuildMarkers(frame: FrameSpec): void {
+  markersDirty = false;
+  markers = [];
+  const s = store.get();
+  const r = s.replay;
+  if (!r || !trajectory) return;
+  listed = listEvents(r.result.events, soi, { failureKinds: failureKinds(), dominant: (t) => dominantBody(t - r.plan.epoch) });
+  const scratch = { pos: new Float64Array(3 * n), vel: new Float64Array(3 * n), fs: newFrameState() };
+  const st = new Float64Array(6);
+  const place = (t: number): Float64Array | null => {
+    if (!stateAt(trajectory!, t, st)) return null;
+    const f = frameAt(ctx, frame, t, scratch);
+    if (!f) return null;
+    const q = new Float64Array(3);
+    toFrame(f, st, 0, q, 0);
+    return q;
+  };
+  for (const x of listed) {
+    // Periapsis / apoapsis markers only for the selected event or bodies other than the many-orbit primary.
+    const isExt = x.role === 'event' && (x.ev.kind === 'periapsis' || x.ev.kind === 'apoapsis');
+    if (isExt && listed.length > 40 && s.selectedEvent !== x.index) continue;
+    const pos = place(x.ev.t);
+    if (!pos) continue;
+    markers.push({
+      key: `ev:${x.index}`,
+      text: eventMarker(x, bodyName),
+      cls: `marker ev ${x.failure ? 'failure' : ''} ${x.role} ${s.selectedEvent === x.index ? 'selected' : ''}`,
+      pos,
+      priority: x.failure ? 900 : s.selectedEvent === x.index ? 800 : x.role === 'closest' ? 20 : 12,
+      color: x.failure ? '#ff4d4d' : x.role === 'closest' ? '#ffd36b' : '#9fc6ff',
+    });
+  }
+  // Nodes of the replayed plan, at ignition.
+  if (r.plan === s.plan) {
+    nodesOf(r.plan).forEach((x, i) => {
+      const pos = place(r.plan.epoch + x.node.t);
+      if (!pos) return;
+      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${s.selectedNode === i ? 'selected' : ''}`, pos, priority: s.selectedNode === i ? 950 : 700, color: '#ff8a3d' });
+    });
+  }
 }
 
 store.subscribe((s, p) => {
@@ -277,6 +595,18 @@ function readout(title: string, p: ArrayLike<number>, po: number, v: ArrayLike<n
   };
 }
 
+function phaseAt(t: number): string {
+  const r = store.get().replay;
+  if (!r) return '';
+  const tm = t - r.plan.epoch;
+  for (let i = 0; i < r.plan.burns.length; i++) {
+    const b = r.plan.burns[i];
+    const flown = r.result.burns[i]?.burnTime ?? 0;
+    if (tm >= b.start && tm <= b.start + flown) return `Burn ${i + 1}`;
+  }
+  return 'Coast';
+}
+
 function tick(now: number): void {
   const dtReal = Math.min(0.25, (now - last) / 1000);
   metrics.frameIntervalMs = metrics.frameIntervalMs * 0.95 + (now - last) * 0.05;
@@ -286,9 +616,7 @@ function tick(now: number): void {
 
   // Time.
   if (s.loadingTarget !== null) {
-    if (eph.covers(s.loadingTarget)) {
-      store.set({ t: s.loadingTarget, loadingTarget: null, loadingChunks: 0 });
-    }
+    if (eph.covers(s.loadingTarget)) store.set({ t: s.loadingTarget, loadingTarget: null, loadingChunks: 0 });
   } else if (!s.paused) {
     const tn = s.t + dtReal * WARP_RATES[s.warpIndex];
     if (eph.covers(tn)) store.set({ t: tn });
@@ -297,7 +625,6 @@ function tick(now: number): void {
   s = store.get();
   const tFocus = s.loadingTarget ?? s.t;
   const k = eph.chunkIndex(tFocus);
-  // Enough around the current time for the inner planets' paths; the worker prefetches beyond.
   want(Math.min(k - 1, eph.chunkIndex(tFocus - PATH_WINDOW)), Math.max(k + 1, eph.chunkIndex(tFocus + PATH_WINDOW)));
   if (s.loadingTarget !== null && coverageVersion !== lastCoverageForWant) {
     lastCoverageForWant = coverageVersion;
@@ -312,13 +639,14 @@ function tick(now: number): void {
     updatePaths(t, frame, 2);
 
     // Spacecraft.
+    if (trajectoryDirty || (trajectoryClipped && trajectoryCoverage !== coverageVersion)) {
+      trajectoryDirty = false;
+      rebuildTrajectory(frame);
+      const r = store.get().replay;
+      if (r) metrics.redrawLatencyMs = r.latencyMs + (performance.now() - cpu0);
+    } else if (markersDirty) rebuildMarkers(frame);
     let scVisible = false;
     if (trajectory) {
-      if (trajectoryDirty) {
-        trajectoryPathCache = trajectoryPath(ctx, frame, trajectory);
-        scene.setTrajectory(anchorSegments(trajectoryPathCache.points, UNIT));
-        trajectoryDirty = false;
-      }
       scVisible = stateAt(trajectory, t, scState);
       if (scVisible) toFrame(fs, scState, 0, scFrame, 0);
       if (trajectoryPathCache) {
@@ -356,49 +684,41 @@ function tick(now: number): void {
       const on = scene.project(framePos, 3 * i, camera.position, proj);
       const d = Math.hypot(framePos[3 * i] - camera.position[0], framePos[3 * i + 1] - camera.position[1], framePos[3 * i + 2] - camera.position[2]);
       const px = scene.pixelRadius(BODIES[i].radius, d);
-      items.push({
-        key: String(i),
-        text: BODIES[i].name,
-        color: meta[i].color,
-        priority: (i === s.focus ? 1000 : 0) + Math.log10(BODIES[i].gm),
-        x: proj.x,
-        y: proj.y,
-        marker: px < 3,
-        offset: px < 3 ? 0 : px,
-        onScreen: on,
-      });
+      items.push({ key: String(i), text: BODIES[i].name, color: meta[i].color, priority: (i === s.focus ? 1000 : 0) + Math.log10(BODIES[i].gm), x: proj.x, y: proj.y, marker: px < 3, offset: px < 3 ? 0 : px, onScreen: on });
     }
     if (scVisible) {
       const on = scene.project(scFrame, 0, camera.position, proj);
-      items.push({ key: 'sc', text: metrics.mission?.name ?? 'Spacecraft', color: '#7dffb0', priority: s.focus === SPACECRAFT ? 1000 : 13.5, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on });
+      items.push({ key: 'sc', text: 'Spacecraft', color: '#7dffb0', priority: s.focus === SPACECRAFT ? 1000 : 13.5, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on });
+    }
+    // Markers are drawn in the frame at their own time; in a moving frame they sit on the drawn path, as the path does.
+    for (const m of markers) {
+      const on = scene.project(m.pos, 0, camera.position, proj);
+      items.push({ key: m.key, text: m.text, color: m.color, priority: m.priority, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: m.cls });
     }
     labels.update(items);
 
     // Readouts.
     const ro: Readout[] = [];
     if (s.focus !== SPACECRAFT) ro.push(readout(BODIES[s.focus].name, pos, 3 * s.focus, vel, 3 * s.focus, frame));
-    if (trajectory && metrics.mission) {
-      const mi = metrics.mission;
-      const ca = `Closest lunar approach ${Math.round(mi.closestApproach / 1000).toLocaleString('en-US')} km, ${formatCalendar(tdbToCalendar(mi.closestApproachTime), false)}`;
+    const r = s.replay;
+    if (r && trajectory) {
       if (scVisible) {
-        const phase = t < mi.burnStart ? 'Parking orbit' : t < mi.burnEnd ? 'TLI burn' : 'Coast';
-        let extra = `${phase} · TLI Δv ${mi.deltaV.toFixed(0)} m/s`;
-        if (moon >= 0) {
-          const dm = Math.hypot(scState[0] - pos[3 * moon], scState[1] - pos[3 * moon + 1], scState[2] - pos[3 * moon + 2]);
-          extra += ` · Moon ${Math.round(dm / 1000).toLocaleString('en-US')} km`;
-        }
-        ro.push(readout(mi.name, scState, 0, scState, 3, frame, `${extra} · ${ca}`));
+        const dom = dominantBody(t - r.plan.epoch);
+        const di = bodyIndex(dom);
+        const alt = Math.hypot(scState[0] - pos[3 * di], scState[1] - pos[3 * di + 1], scState[2] - pos[3 * di + 2]) - BODIES[di].radius;
+        const vr = Math.hypot(scState[3] - vel[3 * di], scState[4] - vel[3 * di + 1], scState[5] - vel[3 * di + 2]);
+        ro.push(readout('Spacecraft', scState, 0, scState, 3, frame, `${phaseAt(t)} · ${BODIES[di].name} altitude ${Math.round(alt / 1000).toLocaleString('en-US')} km, ${vr.toFixed(0)} m/s`));
       } else {
-        ro.push({ title: mi.name, relativeTo: '—', distance: NaN, speed: NaN, extra: `Not flying at this date (${formatCalendar(tdbToCalendar(mi.launch), false)} to ${formatCalendar(tdbToCalendar(mi.end), false)} TDB). ${ca}` });
+        ro.push({ title: 'Spacecraft', relativeTo: '—', distance: NaN, speed: NaN, extra: `Not flying at this time (${formatCalendar(tdbToCalendar(r.plan.epoch), false)} to ${Number.isFinite(r.result.finalT) ? formatCalendar(tdbToCalendar(r.result.finalT), false) : '—'} TDB).` });
       }
     }
-    const [ya, yb] = eph.span().map((x) => tdbToCalendar(x).year);
     const avgChunk = metrics.chunkMs.length ? metrics.chunkMs.reduce((a, b) => a + b, 0) / metrics.chunkMs.length : 0;
     metrics.frameCpuMs = metrics.frameCpuMs * 0.95 + (performance.now() - cpu0) * 0.05;
+    const st = replayClient.stats;
     hud.frame(
       ro,
-      `${(1000 / metrics.frameIntervalMs).toFixed(0)} fps · frame CPU ${metrics.frameCpuMs.toFixed(2)} ms · ephemeris ${ya}–${yb} (${eph.hi - eph.lo + 1} chunks, ${avgChunk.toFixed(0)} ms each)` +
-        (metrics.mission ? ` · mission propagated in ${metrics.mission.propagateMs.toFixed(0)} ms (search ${metrics.mission.searchMs.toFixed(0)} ms)` : '') +
+      `${(1000 / metrics.frameIntervalMs).toFixed(0)} fps · frame CPU ${metrics.frameCpuMs.toFixed(2)} ms · ${eph.chunks().length} ephemeris chunks (${avgChunk.toFixed(0)} ms each)` +
+        (st.runs ? ` · replay ${st.lastReplayMs.toFixed(0)} ms, edit→redraw ${metrics.redrawLatencyMs.toFixed(0)} ms` : '') +
         (metrics.errors.length ? ` · WORKER ERROR: ${metrics.errors[0]}` : ''),
     );
   }
@@ -407,4 +727,30 @@ function tick(now: number): void {
 requestAnimationFrame(tick);
 
 // For automated checks and debugging from the console.
-Object.assign(window, { sendit: { store, camera, metrics, eph, bodies: BODIES.map((b) => b.id), frameKey: () => frameKey(store.get().frame, (i) => BODIES[i].id) } });
+Object.assign(window, {
+  sendit: {
+    store,
+    editor,
+    camera,
+    metrics,
+    eph,
+    replayStats: replayClient.stats,
+    nodesOf: () => nodesOf(store.get().plan),
+    shareUrl,
+    listedEvents: () => listed,
+    bodies: BODIES.map((b) => b.id),
+    frameKey: () => frameKey(store.get().frame, (i) => BODIES[i].id),
+    /** Screen position of the drawn trajectory at mission time t (for tests clicking on it). */
+    screenAt(tMission: number): { x: number; y: number } | null {
+      const path = trajectoryPathCache;
+      if (!path) return null;
+      const t = store.get().plan.epoch + tMission;
+      let best = 0;
+      for (let i = 0; i < path.times.length; i++) if (Math.abs(path.times[i] - t) < Math.abs(path.times[best] - t)) best = i;
+      const pr = { x: 0, y: 0 };
+      if (!scene.project(path.points, 3 * best, camera.position, pr)) return null;
+      const rect = canvas.getBoundingClientRect();
+      return { x: pr.x + rect.left, y: pr.y + rect.top };
+    },
+  },
+});
