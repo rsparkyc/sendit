@@ -55,6 +55,7 @@
  */
 import data from './data/solar-system-j2000.json';
 import type { Ephemeris } from './spacecraft';
+import type { TesseralTerm } from './gravity-field';
 import { KAHAN_LI_8, NBodyIntegrator, type NBodyPhysics, type ZonalHarmonic } from './nbody';
 import { IAU_ROTATION, type IauRotation } from './orientation';
 
@@ -82,6 +83,15 @@ export interface BodyData {
   readonly j2Radius?: number;
   /** Unnormalized zonal harmonic J4, referred to j2Radius. */
   readonly j4?: number;
+  /**
+   * Unnormalized zonal series J_n for n = 2, 3, ... (jn[0] = J2, equal to j2;
+   * jn[2] = J4, equal to j4), referred to j2Radius. See "GRAVITY FIELDS".
+   */
+  readonly jn?: readonly number[];
+  /** Sectoral and tesseral terms [n, m, C_nm, S_nm] (unnormalized, j2Radius, IAU body-fixed frame). */
+  readonly tesseral?: readonly (readonly number[])[];
+  /** Provenance of jn and tesseral. */
+  readonly fieldSource?: string;
   /** For a moon: id of its planet. */
   readonly parent?: string;
 }
@@ -123,15 +133,21 @@ export function bodyIndex(id: string, bodies: readonly BodyData[] = J2000_BODIES
   return i;
 }
 
-/** Oblateness of one body in the form the spacecraft and N-body code consume, or null. */
+/** Gravity field of one body in the form the spacecraft and N-body code consume, or null. */
 export interface Oblateness {
   readonly j2: number;
   /** Present for Jupiter..Neptune. */
   readonly j4?: number;
+  /** Zonal series J_n from n = 2 (BodyData.jn), when the data has one. */
+  readonly jn?: readonly number[];
+  /** Sectoral and tesseral terms (n, m, C, S) (BodyData.tesseral). */
+  readonly tesseral?: readonly TesseralTerm[];
+  /** Prime meridian of the body-fixed frame: Earth's is the Earth Rotation Angle (earth-rotation.ts). */
+  readonly primeMeridian?: 'iau' | 'earth-rotation-angle';
   readonly radius: number;
   /** J2000 pole (BodyData.pole). */
   readonly pole: readonly [number, number, number];
-  /** IAU rotation model: when present, the field is oriented by its pole at the current time. */
+  /** IAU rotation model: when present, the field is oriented by its pole (and prime meridian) at the current time. */
   readonly rotation?: IauRotation;
 }
 
@@ -140,28 +156,78 @@ export function rotationOf(b: BodyData): IauRotation | undefined {
   return Object.prototype.hasOwnProperty.call(IAU_ROTATION, b.id) ? IAU_ROTATION[b.id] : undefined;
 }
 
+/** Bodies whose body-fixed frame uses the Earth Rotation Angle rather than the IAU W. */
+const ERA_BODIES: ReadonlySet<string> = new Set(['earth']);
+
 /**
- * Oblateness of a body, or null. `fixedPole`: leave out the rotation model, so
- * the field keeps the J2000 pole (the physics before model 2; for comparisons).
+ * Gravity field of a body, or null: J2 (J4), the zonal series `jn` and the
+ * sectoral/tesseral terms where the data has them. `fixedPole`: the physics
+ * before model 2 (for comparisons): J2 and J4 only, about the J2000 pole.
  */
 export function oblatenessOf(b: BodyData, fixedPole = false): Oblateness | null {
   if (b.j2 === undefined || b.j2Radius === undefined || b.pole === undefined) return null;
   const pole: [number, number, number] = [b.pole[0], b.pole[1], b.pole[2]];
-  const rotation = fixedPole ? undefined : rotationOf(b);
   const base = b.j4 === undefined ? { j2: b.j2, radius: b.j2Radius, pole } : { j2: b.j2, j4: b.j4, radius: b.j2Radius, pole };
-  return rotation === undefined ? base : { ...base, rotation };
+  if (fixedPole) return base;
+  const rotation = rotationOf(b);
+  const more: { jn?: readonly number[]; tesseral?: readonly TesseralTerm[]; primeMeridian?: 'earth-rotation-angle' } = {};
+  if (b.jn !== undefined) more.jn = b.jn;
+  if (b.tesseral !== undefined && b.tesseral.length > 0) {
+    if (rotation === undefined) throw new Error(`${b.id}: tesseral terms need an IAU rotation model`);
+    more.tesseral = b.tesseral.map((r) => [r[0], r[1], r[2], r[3]] as const);
+    if (ERA_BODIES.has(b.id)) more.primeMeridian = 'earth-rotation-angle';
+  }
+  return rotation === undefined ? { ...base, ...more } : { ...base, ...more, rotation };
 }
 
-/** Build zonal terms from (body id -> target ids) pairs. */
-export function zonalTerms(pairs: Readonly<Record<string, readonly string[]>>, bodies: readonly BodyData[] = J2000_BODIES, fixedPole = false): ZonalHarmonic[] {
+/** Which part of a body's field acts between massive bodies (see MASSIVE_BODY_FIELDS). */
+export interface MassiveFieldSelection {
+  /** Highest degree used (zonal and, with `tesseral`, sectoral/tesseral). */
+  readonly degree: number;
+  /** Include the sectoral and tesseral terms up to `degree`. */
+  readonly tesseral?: boolean;
+}
+
+/** The field of `ob` truncated to a selection: J_n and (optionally) C_nm, S_nm with n <= degree. */
+export function truncateField(ob: Oblateness, sel: MassiveFieldSelection): { j2: number; j4?: number; jn?: number[]; tesseral?: TesseralTerm[] } {
+  const all = ob.jn ?? (ob.j4 !== undefined ? [ob.j2, 0, ob.j4] : [ob.j2]);
+  const jn = all.slice(0, Math.max(1, sel.degree - 1));
+  const out: { j2: number; j4?: number; jn?: number[]; tesseral?: TesseralTerm[] } = { j2: ob.j2 };
+  if (jn.length >= 3 && jn[2] !== 0) out.j4 = jn[2];
+  // Only J2/J4: leave jn out, so the field takes the closed J2/J4 form.
+  if (jn.some((j, i) => i !== 0 && i !== 2 && j !== 0)) out.jn = jn;
+  if (sel.tesseral && ob.tesseral !== undefined) {
+    const t = ob.tesseral.filter((r) => r[0] <= sel.degree);
+    if (t.length > 0) {
+      out.tesseral = t;
+      out.jn = jn;
+    }
+  }
+  return out;
+}
+
+/**
+ * Build field terms from (body id -> target ids) pairs. `fields` selects the
+ * degree (and whether sectoral/tesseral terms act) per body; a body not in it
+ * acts with J2 and, where the data has it, J4 (the model-1 selection).
+ */
+export function zonalTerms(
+  pairs: Readonly<Record<string, readonly string[]>>,
+  bodies: readonly BodyData[] = J2000_BODIES,
+  fixedPole = false,
+  fields: Readonly<Record<string, MassiveFieldSelection>> = {},
+): ZonalHarmonic[] {
   const out: ZonalHarmonic[] = [];
   for (const id of Object.keys(pairs)) {
     const i = bodyIndex(id, bodies);
     const ob = oblatenessOf(bodies[i], fixedPole);
     if (ob === null) throw new Error(`${id} has no J2 data`);
     const targets = pairs[id].map((t) => bodyIndex(t, bodies));
-    const z: ZonalHarmonic = ob.j4 === undefined ? { body: i, j2: ob.j2, radius: ob.radius, pole: ob.pole, targets } : { body: i, j2: ob.j2, j4: ob.j4, radius: ob.radius, pole: ob.pole, targets };
+    const sel = fixedPole ? undefined : fields[id];
+    const f = sel !== undefined ? truncateField(ob, sel) : { j2: ob.j2, ...(ob.j4 !== undefined ? { j4: ob.j4 } : {}) };
+    const z: ZonalHarmonic = { body: i, ...f, radius: ob.radius, pole: ob.pole, targets };
     if (ob.rotation !== undefined) z.rotation = ob.rotation;
+    if (f.tesseral !== undefined && ob.primeMeridian !== undefined) z.primeMeridian = ob.primeMeridian;
     out.push(z);
   }
   return out;
@@ -194,6 +260,13 @@ export const MASSIVE_BODY_J2_PAIRS: Readonly<Record<string, readonly string[]>> 
   neptune: ['sun', 'triton'],
 };
 
+/**
+ * Which part of each body's field acts between massive bodies (the pairs of
+ * MASSIVE_BODY_J2_PAIRS); bodies not listed: J2 and J4. PROVISIONAL, set from
+ * the measurements described below.
+ */
+export const MASSIVE_BODY_FIELDS: Readonly<Record<string, MassiveFieldSelection>> = {};
+
 /** An integrator for these bodies with the full physics, starting at J2000 (t = 0). */
 export function createSolarSystemIntegrator(h: number = DEFAULT_STEP, bodies: readonly BodyData[] = J2000_BODIES): NBodyIntegrator {
   return new NBodyIntegrator(bodies.map((b) => b.gm), initialState(bodies), 0, h, KAHAN_LI_8, solarSystemPhysics(bodies));
@@ -207,12 +280,12 @@ export function createSolarSystemIntegrator(h: number = DEFAULT_STEP, bodies: re
 export function solarSystemPhysics(
   bodies: readonly BodyData[] = J2000_BODIES,
   pairs: Readonly<Record<string, readonly string[]>> = MASSIVE_BODY_J2_PAIRS,
-  opts: { fixedPoles?: boolean } = {},
+  opts: { fixedPoles?: boolean; fields?: Readonly<Record<string, MassiveFieldSelection>> } = {},
 ): NBodyPhysics {
   const ids = new Set(bodies.map((b) => b.id));
   const present: Record<string, readonly string[]> = {};
   for (const id of Object.keys(pairs)) if (ids.has(id)) present[id] = pairs[id].filter((t) => ids.has(t));
-  return { zonal: zonalTerms(present, bodies, opts.fixedPoles === true), relativity: { sun: bodyIndex('sun', bodies) } };
+  return { zonal: zonalTerms(present, bodies, opts.fixedPoles === true, opts.fields ?? MASSIVE_BODY_FIELDS), relativity: { sun: bodyIndex('sun', bodies) } };
 }
 
 export function initialState(bodies: readonly BodyData[] = J2000_BODIES): Float64Array {

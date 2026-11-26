@@ -6,6 +6,7 @@
  * Bodies are always looked up by id (`bodyIndexOf`), never by position: the
  * physics body list grows (moons are being added).
  */
+import { earthRotationConstants } from '../physics/earth-rotation';
 import { IAU_ROTATION } from '../physics/orientation';
 import type { BodyData } from '../physics/solar-system';
 import type { Ephemeris } from '../physics/spacecraft';
@@ -104,8 +105,15 @@ export function worldFromBodyData(ephemeris: Ephemeris, data: readonly BodyData[
     if (r) {
       extra.push(...r.ra, ...r.dec);
       for (const n of r.nut ?? []) extra.push(...n.angle, n.ra, n.dec);
+      // Prime meridian (tesseral fields turn with it), incl. its libration terms.
+      extra.push(...r.pm);
+      for (const n of r.nut ?? []) extra.push((n as { pm?: number }).pm ?? 0);
     }
+    // Higher zonals and tesserals (stage 2 of model 2).
+    for (const j of b.jn ?? []) extra.push(j);
+    for (const t of b.tesseral ?? []) extra.push(...t);
   }
+  extra.push(...earthRotationConstants());
   return { ...makeWorld(ephemeris, bodies, extra), bodyData: data };
 }
 

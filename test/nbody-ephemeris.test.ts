@@ -77,11 +77,13 @@ describe('IntegratedEphemeris', () => {
     // With Earth's J2 the extra inward pull in the equatorial plane makes the
     // point-mass circular speed slightly too low, so the orbit dips by about
     // 3 J2 (Re/R)^2 R (observed 19.5 km vs 19.6 km predicted). Lunisolar tides
-    // (~1e-7 g) and Sun 1PN are far smaller. It stays in orbit.
+    // (~1e-7 g) and Sun 1PN are far smaller. It stays in orbit. From model 2
+    // the field is degree 4 with C22/S22 etc. (J3, tesserals ~1e-6 relative):
+    // the radius then also rises above R, observed by 217 m.
     const ob = eph.oblateness[EARTH]!;
     const dip = 3 * ob.j2 * (ob.radius / R) ** 2 * R;
     expect(Math.abs(R - rMin - dip)).toBeLessThan(0.1 * dip);
-    expect(rMax).toBeLessThan(R + 100);
+    expect(rMax).toBeLessThan(R + 400); // was R + 100 with J2 only
   }, 60_000);
 
   it('measures cost of a century and memory if every step were stored', () => {

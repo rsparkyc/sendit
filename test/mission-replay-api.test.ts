@@ -36,7 +36,7 @@ function canonical(over: Partial<MissionPlan> = {}): MissionPlan {
  */
 const GOLDEN: readonly { model: number; data: string; digest: string }[] = [
   { model: 1, data: '2cb83544', digest: '342786722dea0bca' },
-  { model: 2, data: '2a78461f', digest: 'efe76eec721faaf3' }, // time-dependent IAU poles, Miranda, Moon parented to Earth, outer moons out of planet GMs
+  { model: 2, data: '3563070a', digest: 'e8d2bd945a02c65c' }, // time-dependent IAU poles, Miranda, Moon parented to Earth, outer moons out of planet GMs; stage 2: spacecraft gravity fields to degree 4 (Earth, Moon with tesserals) and J3-J6 zonals (was data 2a78461f / efe76eec721faaf3; the fingerprint now also covers jn, tesseral, prime meridians and Earth's ERA/Delta-T)
 ];
 
 describe('replay hooks and abort', () => {

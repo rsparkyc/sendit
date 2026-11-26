@@ -8,13 +8,20 @@
  *  - the launch code's Earth (src/mission/earth-orientation.ts) against physics;
  *  - the J2000 pole vectors in the body data against the model;
  *  - the field is blind to the pole's sense (Uranus: the satellite ephemeris
- *    uses the spin pole, the IAU the north pole).
+ *    uses the spin pole, the IAU the north pole);
+ *  - the body-fixed frame of the physics (BodyFrame: tabulated pole, exact
+ *    linear prime meridian, tabulated periodic W) against the exact series,
+ *    as a pure function of time, and Earth's against the launch code's frame:
+ *    one Earth rotation (ERA + Delta-T, src/physics/earth-rotation.ts) for
+ *    launch sites, the texture and the tesseral field.
  */
 import { describe, expect, it } from 'vitest';
 import { IAU_ROTATION as DISPLAY_ROTATION, bodyToIcrf as displayBodyToIcrf } from '../src/app/body-rotation';
-import { EARTH_ROTATION, EARTH_ROTATION_IAU, poleAt as launchPoleAt } from '../src/mission/earth-orientation';
+import { EARTH_ROTATION, EARTH_ROTATION_IAU, bodyToIcrf as launchBodyToIcrf, poleAt as launchPoleAt, primeMeridianDeg as launchPrimeMeridianDeg } from '../src/mission/earth-orientation';
+import { EARTH_ROTATION as PHYSICS_EARTH_ROTATION, earthPrimeMeridianDeg } from '../src/physics/earth-rotation';
+import { sharedBodyFrame } from '../src/physics/spacecraft';
 import { addZonalAccelerations, type ZonalHarmonic } from '../src/physics/nbody';
-import { IAU_ROTATION, IAU_ROTATION_SOURCE, PoleTable, bodyToIcrf, poleAt, type IauRotation } from '../src/physics/orientation';
+import { BodyFrame, IAU_ROTATION, IAU_ROTATION_SOURCE, PoleTable, bodyToIcrf, poleAt, type IauRotation } from '../src/physics/orientation';
 import { J2000_BODIES, oblatenessOf } from '../src/physics/solar-system';
 
 const DAY = 86400;
@@ -197,5 +204,67 @@ describe('one orientation for physics, display and launch code', () => {
     addZonalAccelerations(gm, q, z([-pole[0], -pole[1], -pole[2]]), b);
     for (let k = 0; k < 6; k++) expect(Object.is(a[k], b[k])).toBe(true);
     expect(Math.hypot(a[3], a[4], a[5])).toBeGreaterThan(0);
+  });
+});
+
+describe('body-fixed frame for sectoral and tesseral terms (BodyFrame)', () => {
+  /** Rotation angle between two rotation matrices (row-major), rad. */
+  const rotAngle = (a: ArrayLike<number>, b: ArrayLike<number>) => {
+    // trace(a^T b) = 1 + 2 cos(theta)
+    let tr = 0;
+    for (let i = 0; i < 3; i++) for (let k = 0; k < 3; k++) tr += a[3 * k + i] * b[3 * k + i];
+    const c = Math.min(1, Math.max(-1, (tr - 1) / 2));
+    // acos loses precision near 0: use the antisymmetric part.
+    let s2 = 0;
+    for (const [i, j] of [[0, 1], [0, 2], [1, 2]]) {
+      let x = 0;
+      for (let k = 0; k < 3; k++) x += a[3 * k + i] * b[3 * k + j] - a[3 * k + j] * b[3 * k + i];
+      s2 += x * x;
+    }
+    return Math.atan2(Math.sqrt(s2) / 2, c);
+  };
+  // Dense times: every 0.1 d around a few dates, and odd times.
+  const times: number[] = [];
+  for (const t0 of DATES) for (let k = 0; k < 40; k++) times.push(t0 + k * 0.1 * DAY + 37.3);
+
+  it('equals the exact IAU rotation (bodyToIcrf) for every body with a field, within 2e-8 deg', () => {
+    const lines: string[] = [];
+    for (const id of J2_BODIES) {
+      const m = IAU_ROTATION[id];
+      const f = new BodyFrame(m);
+      let worst = 0;
+      for (const t of times) worst = Math.max(worst, rotAngle(f.at(t), bodyToIcrf(m, t)));
+      lines.push(`${id.padEnd(8)} ${(worst / R).toExponential(1)} deg`);
+      // Pole Hermite (< 1e-6 deg for the Moon's fastest term, see above) and W Hermite.
+      expect(worst / R, id).toBeLessThan(id === 'moon' ? 2e-6 : 2e-8);
+    }
+    console.log(`BodyFrame vs exact IAU rotation, worst:\n${lines.join('\n')}`);
+  });
+
+  it('is a pure function of time: the same bits in any query order', () => {
+    const m = IAU_ROTATION.moon;
+    const ref = times.map((t) => new BodyFrame(m).at(t));
+    const f = new BodyFrame(m);
+    const order = times.map((_, i) => i).reverse();
+    for (let k = 0; k < order.length; k += 7) order.splice(k, 0, (k * 13) % times.length);
+    for (const i of order) {
+      const o = f.at(times[i]);
+      for (let k = 0; k < 9; k++) expect(Object.is(o[k], ref[i][k])).toBe(true);
+    }
+  });
+
+  it("Earth: one rotation for physics and launch code (ERA + Delta-T), and the frames agree", () => {
+    // The launch code's model IS the physics definition (re-exported), not a copy.
+    expect(EARTH_ROTATION).toBe(PHYSICS_EARTH_ROTATION);
+    const f = sharedBodyFrame(IAU_ROTATION.earth, 'earth-rotation-angle');
+    let worst = 0;
+    for (const t of times) {
+      expect(Object.is(f.primeMeridian(t), launchPrimeMeridianDeg(EARTH_ROTATION, t))).toBe(true);
+      expect(Object.is(earthPrimeMeridianDeg(t), launchPrimeMeridianDeg(EARTH_ROTATION, t))).toBe(true);
+      worst = Math.max(worst, rotAngle(f.at(t), launchBodyToIcrf(EARTH_ROTATION, t)));
+    }
+    console.log(`Earth physics frame vs launch-code frame: worst ${worst.toExponential(2)} rad (${(worst * 6.378e6 * 1000).toFixed(3)} mm at the surface)`);
+    // Only the pole differs in evaluation (daily Hermite of the linear precession vs direct): far below 1 mm at the surface.
+    expect(worst).toBeLessThan(1e-12);
   });
 });

@@ -54,6 +54,23 @@ Sources:
     (https://ssd.jpl.nasa.gov/sats/phys_par/), parsed here.
   * J4 (Jupiter..Neptune): same satellite-ephemeris headers (J504, J604, J704, J804).
     Radii are only used for rendering / collision, never for the dynamics.
+  * Gravity fields beyond J2/J4 ("jn": J_n for n = 2, 3, ...; "tesseral": rows
+    [n, m, C_nm, S_nm], unnormalized, reference radius j2Radius; FIELDS below):
+      Sun: DE440 J2SUN (J3SUN, J4SUN are zero there).
+      Earth: zonals J2E, J3E, J4E of the DE440 header (the field DE440 itself
+        integrates the Moon with); sectoral/tesseral terms through degree
+        EARTH_DEGREE from EGM2008 (Pavlis et al. 2012, JGR 117:B04406;
+        tide-free, fully normalized, via ICGEM, EGM2008_URL), unnormalized and
+        rescaled to the DE440 GM and radius (C_nm * GM_EGM/GM * (R_EGM/R)^n).
+      Moon: DE440 header J2M..J4M and C21M..S44M (MOON_DEGREE), in the lunar
+        principal-axis frame of DE440 (the IAU lunar frame the physics turns
+        them with approximates the mean-Earth frame; PA and ME differ by
+        ~0.02 deg, a 0.1% rotation of C22).
+      Mars and the giant planets: every zonal J_n (n <= 9) the satellite
+        ephemeris header lists (mar099, jup365, sat441, ura184_part-1,
+        nep098_part-1: keys J402..J409, J502..J509, J602..J609, J702..J706,
+        J802..J806), i.e. the field the moons' ephemerides were integrated
+        with; a key the header does not list is 0.
 
 Only a generic User-Agent is sent; no personal information.
 """
@@ -68,6 +85,8 @@ import urllib.request
 UA = {"User-Agent": "sendit-ephemeris-fetch/1.0"}
 API = "https://ssd.jpl.nasa.gov/api/horizons.api"
 HEADER_URL = "https://ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de440/header.440"
+# EGM2008 (tide-free) as distributed by ICGEM; only the first bytes (degree <= 8) are read.
+EGM2008_URL = "https://icgem.gfz.de/getmodel/gfc/c50128797a9cb62e936337c890e4425f03f0461d7329b09a8cc8561504465340/EGM2008.gfc"
 PCK_URL = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc"
 SAT_URL = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/"
 SAT_PHYS_URL = "https://ssd.jpl.nasa.gov/sats/phys_par/"
@@ -83,6 +102,23 @@ J2_SOURCES = {
     "uranus": ("ura111xl-799.cmt", "J702", "RADIUS", "J704"),
     "neptune": ("nep097.cmt", "J802", "RADIUS", "J804"),
 }
+# Gravity field per body (header, "Gravity fields beyond J2/J4"): source, J_n keys
+# from n = 2, reference-radius key. The reference radius is the J2 one.
+FIELDS = {
+    "sun": ("de440", ["J2SUN"]),
+    "earth": ("de440", ["J2E", "J3E", "J4E"]),
+    "moon": ("de440", ["J2M", "J3M", "J4M"]),
+    "mars": ("mar099.cmt", [f"J40{n}" for n in range(2, 10)]),
+    "jupiter": ("jup365.cmt", [f"J50{n}" for n in range(2, 10)]),
+    "saturn": ("sat441.cmt", [f"J60{n}" for n in range(2, 10)]),
+    "uranus": ("ura184_part-1.cmt", [f"J70{n}" for n in range(2, 7)]),
+    "neptune": ("nep098_part-1.cmt", [f"J80{n}" for n in range(2, 7)]),
+}
+# Sectoral and tesseral terms (the bodies whose rotation the physics follows
+# for them, src/physics/orientation.ts BodyFrame) and their maximum degree.
+# Where the line is drawn and why: README "Force model" and solar-system.ts.
+EARTH_DEGREE = 4
+MOON_DEGREE = 4
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 IAU_JSON = ROOT / "src/physics/data/iau-rotation.json"
 # Output root (default: the repository). `--out DIR` writes the same relative paths under DIR, e.g. to diff first.
@@ -163,6 +199,28 @@ def de440_constants() -> dict:
         if k not in consts:
             sys.exit(f"missing {k} in DE440 header")
     return consts
+
+
+def egm2008_tesseral(max_degree: int, gm: float, radius_km: float) -> list:
+    """[n, m, C_nm, S_nm] (unnormalized, rescaled to gm (km^3/s^2) and radius_km) for 2 <= n <= max_degree, 1 <= m <= n."""
+    req = urllib.request.Request(EGM2008_URL, headers={**UA, "Range": "bytes=0-12000"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        text = r.read().decode()
+    head = dict(re.findall(r"(?m)^(earth_gravity_constant|radius|norm|tide_system)\s+(\S+)", text))
+    if head.get("norm") != "fully_normalized" or head.get("tide_system") != "tide_free":
+        sys.exit(f"EGM2008: unexpected header {head}")
+    gm_egm = float(head["earth_gravity_constant"]) / 1e9  # km^3/s^2
+    r_egm = float(head["radius"]) / 1e3  # km
+    rows = []
+    for m in re.finditer(r"(?m)^gfc\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)", text):
+        n, mm = int(m.group(1)), int(m.group(2))
+        if 2 <= n <= max_degree and mm >= 1:
+            norm = math.sqrt(2 * (2 * n + 1) * math.factorial(n - mm) / math.factorial(n + mm))
+            k = norm * (gm_egm / gm) * (r_egm / radius_km) ** n
+            rows.append([n, mm, float(m.group(3).replace("d", "e")) * k, float(m.group(4).replace("d", "e")) * k])
+    if len(rows) != sum(range(2, max_degree + 1)):
+        sys.exit(f"EGM2008: got {len(rows)} tesseral rows")
+    return rows
 
 
 def cmt_constants(name: str) -> dict:
@@ -479,6 +537,29 @@ def main() -> None:
             ))
     bodies.sort(key=lambda r: [p["id"] for p in planetary].index(r["id"]))
     bodies += moons
+
+    # Gravity fields beyond J2 (header): "jn" from J2 up, "tesseral" rows.
+    for row in bodies:
+        if row["id"] not in FIELDS:
+            continue
+        src, keys = FIELDS[row["id"]]
+        k = c if src == "de440" else cmt(src)
+        jn = [k.get(key, 0.0) for key in keys]
+        while jn and jn[-1] == 0.0:
+            jn.pop()
+        if jn[0] != row["j2"]:
+            sys.exit(f"{row['id']}: field J2 {jn[0]} differs from j2 {row['j2']}")
+        row["jn"] = jn
+        listed = [key for key in keys if key in k]
+        row["fieldSource"] = (f"DE440 header {', '.join(listed)}" if src == "de440" else f"NAIF {src} {', '.join(listed)}") + " (J_n; absent keys are 0)"
+    by_row = {r["id"]: r for r in bodies}
+    earth_row = by_row["earth"]
+    earth_row["tesseral"] = egm2008_tesseral(EARTH_DEGREE, c["GM_EARTH"], earth_row["j2Radius"] / 1000.0)
+    earth_row["fieldSource"] += (f"; tesseral (n <= {EARTH_DEGREE}): EGM2008 tide-free (Pavlis et al. 2012), {EGM2008_URL}, "
+                                 "unnormalized and rescaled to the DE440 GM and RE")
+    moon_row = by_row["moon"]
+    moon_row["tesseral"] = [[n, m, c[f"C{n}{m}M"], c[f"S{n}{m}M"]] for n in range(2, MOON_DEGREE + 1) for m in range(1, n + 1)]
+    moon_row["fieldSource"] += f"; tesseral (n <= {MOON_DEGREE}): DE440 header C{{n}}{{m}}M, S{{n}}{{m}}M (lunar principal-axis frame)"
 
     # Reference states of the full set at sat_jds. A system member: the
     # barycenter (DE441) + its state relative to the barycenter (Horizons,

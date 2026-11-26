@@ -169,6 +169,29 @@ export function sincos(x: number): [number, number] {
   }
 }
 
+/**
+ * sin x into out[o], cos x into out[o + 1], with one reduction and no
+ * allocation (hot paths). Identical bits to sincos(x), sin(x), cos(x).
+ */
+export function sincosInto(x: number, out: Float64Array, o: number): void {
+  const n = reduce(x);
+  const s = kSin(redHi, redLo);
+  const c = kCos(redHi, redLo);
+  if (n === 0) {
+    out[o] = s;
+    out[o + 1] = c;
+  } else if (n === 1) {
+    out[o] = c;
+    out[o + 1] = -s;
+  } else if (n === 2) {
+    out[o] = -s;
+    out[o + 1] = -c;
+  } else {
+    out[o] = -c;
+    out[o + 1] = s;
+  }
+}
+
 const ATAN_HI = [4.63647609000806093515e-1, 7.85398163397448278999e-1, 9.82793723247329054082e-1, 1.57079632679489655800e0];
 const ATAN_LO = [2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17];
 const AT = [

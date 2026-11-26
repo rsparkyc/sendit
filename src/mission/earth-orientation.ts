@@ -16,7 +16,9 @@
  * them means extra sin terms in alpha0, delta0, W and nothing structural).
  *
  * EARTH uses that form with the prime meridian taken from the IERS Earth
- * Rotation Angle in UT1 (EARTH_ROTATION below); the plain IAU W (linear in
+ * Rotation Angle in UT1 (EARTH_ROTATION, defined ONCE in
+ * src/physics/earth-rotation.ts and re-exported here: the physics' Earth
+ * frame for the tesseral gravity field uses the same definition); the plain IAU W (linear in
  * TDB, EARTH_ROTATION_IAU) is 11 s of rotation off at J2000 and 19-33 s off
  * at +-50 y (5-15 km at the surface), too coarse for launch windows.
  *
@@ -38,36 +40,18 @@
  * not with the real Earth.
  */
 import { DEG, sincos } from '../physics/dmath';
-import { IAU_ROTATION } from '../physics/orientation';
+import { DAYS_PER_CENTURY, SECONDS_PER_DAY, primeMeridianDeg, type RotationModel } from '../physics/earth-rotation';
 
-/**
- * Earth's IAU constants, from the one generated source the physics and the
- * display also read (src/physics/data/iau-rotation.json, pck00011): pole
- * alpha0 = 0 - 0.641 T, delta0 = 90 - 0.557 T; W = 190.147 + 360.9856235 d.
- * test/orientation.test.ts checks the launch-code pole against the physics pole.
- */
-const IAU_EARTH = IAU_ROTATION.earth;
-
-export const SECONDS_PER_DAY = 86400;
-export const DAYS_PER_CENTURY = 36525;
-
-/** IAU-style rotation constants (degrees, degrees per century, degrees per day). */
-export interface RotationModel {
-  readonly ra0: number;
-  readonly ra1: number;
-  readonly dec0: number;
-  readonly dec1: number;
-  readonly w0: number;
-  /** deg/day, applied to the rotation time scale (UT1 for Earth, TDB otherwise). */
-  readonly wDot: number;
-  /** Optional deg/century in TDB (Earth: compensates the pole's RA drift so W tracks ERA). */
-  readonly w1?: number;
-  /**
-   * Optional rotation time-scale offset in seconds, (TDB - rotation time) at
-   * TDB t: Earth's Delta-T = TT - UT1. Must be deterministic (tables, +-*\/).
-   */
-  readonly timeOffset?: (t: number) => number;
-}
+export {
+  DAYS_PER_CENTURY,
+  DELTA_T_TABLE,
+  EARTH_ROTATION,
+  EARTH_ROTATION_IAU,
+  SECONDS_PER_DAY,
+  deltaT,
+  primeMeridianDeg,
+  type RotationModel,
+} from '../physics/earth-rotation';
 
 /** Reference ellipsoid for geodetic coordinates. Sphere: flattening 0. */
 export interface Ellipsoid {
@@ -77,90 +61,10 @@ export interface Ellipsoid {
   readonly f: number;
 }
 
-/**
- * Earth, pure IAU WGCCRE 2015 / pck00011.tpc (BODY399_POLE_RA, _POLE_DEC, _PM),
- * W linear in TDB. Kept for comparison: 11 s of rotation off at J2000 and
- * drifting (its W0 and rate are only quoted to ~1e-3 deg and ~1e-7 deg/day).
- */
-export const EARTH_ROTATION_IAU: RotationModel = {
-  ra0: IAU_EARTH.ra[0],
-  ra1: IAU_EARTH.ra[1],
-  dec0: IAU_EARTH.dec[0],
-  dec1: IAU_EARTH.dec[1],
-  w0: IAU_EARTH.pm[0],
-  wDot: IAU_EARTH.pm[1],
-};
-
-/**
- * TT - UT1 (Delta-T), seconds, at 1 January of each year. 1950-2020: IERS /
- * USNO historical values (rounded to 0.01 s; e.g. the Astronomical Almanac
- * table K8 and https://maia.usno.navy.mil/ser7/deltat.data). 2025: ~69.1 s.
- * The future is unpredictable (decadal fluctuations of +-several s); the table
- * holds the 2025 value constant afterwards, which is also what JPL Horizons
- * assumes for future dates (see the fixture residuals).
- */
-export const DELTA_T_TABLE: readonly (readonly [number, number])[] = [
-  [1950, 29.15], [1955, 31.07], [1960, 33.15], [1965, 35.73], [1970, 40.18], [1975, 45.48],
-  [1980, 50.54], [1985, 54.34], [1990, 56.86], [1995, 60.78], [2000, 63.83], [2005, 64.69],
-  [2010, 66.07], [2015, 67.64], [2020, 69.36], [2025, 69.1],
-];
-
-/** Delta-T = TT - UT1 in seconds at TDB t (piecewise linear in the table, flat outside it). */
-export function deltaT(t: number): number {
-  const tab = DELTA_T_TABLE;
-  // Year as a fraction; Jan 1 of year Y is ~ (Y - 2000) Julian years from J2000 minus half a day.
-  const y = 2000 + (t + 43200) / (365.25 * SECONDS_PER_DAY);
-  if (y <= tab[0][0]) return tab[0][1];
-  const last = tab[tab.length - 1];
-  if (y >= last[0]) return last[1];
-  let i = 0;
-  while (tab[i + 1][0] <= y) i++;
-  const [y0, v0] = tab[i];
-  const [y1, v1] = tab[i + 1];
-  return v0 + ((v1 - v0) * (y - y0)) / (y1 - y0);
-}
-
-/**
- * Earth: IAU pole (linear precession of the mean pole) with the prime
- * meridian from the IERS Earth Rotation Angle (IERS Conventions 2010, eq. 5.15):
- *   ERA = 360 deg * (0.7790572732640 + 1.00273781191135448 Du),
- * Du = UT1 days from JD 2451545.0 UT1. In the IAU parametrisation, where W is
- * counted from the node of the equator on the ICRF equator (RA alpha0 + 90),
- * W = ERA - 90 deg - alpha0, hence w0 = 280.46061837504 - 90 and
- * w1 = -ra1 = +0.641 deg/century. Twist difference between this and the
- * CIO-based (non-rotating origin) construction is second order in the pole
- * offset: < 1e-5 rad (<~0.1 km) over +-50 y.
- */
-export const EARTH_ROTATION: RotationModel = {
-  ra0: IAU_EARTH.ra[0],
-  ra1: IAU_EARTH.ra[1],
-  dec0: IAU_EARTH.dec[0],
-  dec1: IAU_EARTH.dec[1],
-  w0: 190.46061837504,
-  wDot: 360.9856122880876, // 360 * 1.00273781191135448
-  w1: -IAU_EARTH.ra[1],
-  timeOffset: deltaT,
-};
-
 /** WGS84 (NIMA TR8350.2). */
 export const WGS84: Ellipsoid = { a: 6378137, f: 1 / 298.257223563 };
 
 export type Mat3 = Float64Array; // row-major 3x3
-
-/** Prime-meridian angle W in degrees, reduced to [0, 360). */
-export function primeMeridianDeg(m: RotationModel, t: number): number {
-  const tr = m.timeOffset ? t - m.timeOffset(t) : t;
-  const d = tr / SECONDS_PER_DAY;
-  // wDot*d is huge (~6e6 deg at 50 y); split off whole turns per day first so
-  // the reduction is done on exact quantities and W keeps ~1e-10 deg.
-  const n = Math.floor(m.wDot / 360);
-  const rem = m.wDot - 360 * n; // exact for the pck rates
-  const nd = n * d;
-  let w = m.w0 + rem * d + 360 * (nd - Math.floor(nd));
-  if (m.w1 !== undefined) w += (m.w1 * t) / (SECONDS_PER_DAY * DAYS_PER_CENTURY);
-  w = w - 360 * Math.floor(w / 360);
-  return w;
-}
 
 /** Rotation body-fixed -> ICRF at time t (row-major). */
 export function bodyToIcrf(m: RotationModel, t: number, out: Mat3 = new Float64Array(9)): Mat3 {

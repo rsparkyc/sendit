@@ -4,12 +4,23 @@
  *
  * State vector: [x, y, z, vx, vy, vz, mass] in the ephemeris' inertial frame.
  *
+ * FORCES: every body as a point mass; each body's gravity field beyond the
+ * point mass (zonal J_n about its time-dependent IAU pole, and for Earth and
+ * the Moon also the sectoral and tesseral C_nm, S_nm in the rotating
+ * body-fixed frame; see gravity-field.ts and the data in solar-system.ts);
+ * the Sun's 1PN term; finite thrust. Every term is evaluated at every force
+ * evaluation, at any distance (the force is a smooth function of position
+ * and time).
+ *
  * Same determinism rule as dop853.ts: only exactly-defined operations (+ - * /,
  * Math.sqrt, Math.abs, Math.min/max, comparisons); no Math transcendental
- * functions (a zonal field's time-dependent pole uses dmath, via PoleTable).
+ * functions (the time-dependent pole and the prime meridian use dmath, via
+ * PoleTable and BodyFrame).
  */
 import { Dop853, type ScaleFn } from './dop853';
-import { PoleTable, polesAt, type IauRotation } from './orientation';
+import { earthPrimeMeridianDeg } from './earth-rotation';
+import { HarmonicField, ZonalSeries, type TesseralTerm } from './gravity-field';
+import { BodyFrame, PoleTable, polesAt, type IauRotation } from './orientation';
 
 export const G0 = 9.80665; // standard gravity, m/s^2 (defines Isp)
 export const STATE_SIZE = 7;
@@ -23,8 +34,10 @@ export interface Ephemeris {
   /** Write position and velocity of one body into out[0..5]. */
   bodyState(body: number, t: number, out: Float64Array): void;
   /**
-   * Optional zonal J2 (and J4) per body (null where none). When present, every
-   * body's zonal field acts on the spacecraft. Absent: point masses (FixedBodies).
+   * Optional gravity field per body beyond the point mass (null where none):
+   * zonal J2 (J4, J_n) and, where given, sectoral and tesseral terms. When
+   * present, every body's field acts on the spacecraft. Absent: point masses
+   * (FixedBodies).
    */
   readonly oblateness?: ArrayLike<BodyOblateness | null>;
   /** Optional: apply this body's (the Sun's) 1PN Schwarzschild term to the spacecraft. */
@@ -34,8 +47,28 @@ export interface Ephemeris {
 export interface BodyOblateness {
   /** Unnormalized J2. */
   readonly j2: number;
-  /** Optional unnormalized J4 (same reference radius). Requires j2 != 0. */
+  /** Optional unnormalized J4 (same reference radius). Requires j2 != 0. Ignored when `jn` is given. */
   readonly j4?: number;
+  /**
+   * Optional unnormalized zonal series J_n for n = 2, 3, ... (jn[0] = J2,
+   * jn[1] = J3, ...), same reference radius. When given it replaces j2/j4
+   * (which must then equal jn[0] and jn[2]). Odd J_n depend on the sense of
+   * the pole: `rotation` must be a prograde body's IAU model (IAU north =
+   * rotational north, the +z axis the coefficients are defined about).
+   */
+  readonly jn?: readonly number[];
+  /**
+   * Optional sectoral and tesseral terms (n, m >= 1, C_nm, S_nm), unnormalized,
+   * same reference radius, in the body-fixed frame of `rotation` (x through
+   * the prime meridian). Requires `rotation`.
+   */
+  readonly tesseral?: readonly TesseralTerm[];
+  /**
+   * Prime meridian of the body-fixed frame: 'iau' (default) the IAU W of
+   * `rotation`; 'earth-rotation-angle' Earth's ERA with Delta-T
+   * (earth-rotation.ts), the launch code's Earth.
+   */
+  readonly primeMeridian?: 'iau' | 'earth-rotation-angle';
   /** Reference radius, m. */
   readonly radius: number;
   /** Spin-axis unit vector in the ephemeris frame. Used when `rotation` is absent. */
@@ -62,6 +95,45 @@ function sharedPoleTable(m: IauRotation): PoleTable {
     POLE_TABLES.set(m, t);
   }
   return t;
+}
+
+/** Likewise one BodyFrame per (rotation model, prime-meridian model): its W table is a pure function of t. */
+const FRAMES = new WeakMap<IauRotation, Map<string, BodyFrame>>();
+export function sharedBodyFrame(m: IauRotation, primeMeridian: 'iau' | 'earth-rotation-angle' = 'iau'): BodyFrame {
+  let byKind = FRAMES.get(m);
+  if (byKind === undefined) {
+    byKind = new Map();
+    FRAMES.set(m, byKind);
+  }
+  let f = byKind.get(primeMeridian);
+  if (f === undefined) {
+    f = new BodyFrame(m, { poleTable: sharedPoleTable(m), primeMeridianDeg: primeMeridian === 'earth-rotation-angle' ? earthPrimeMeridianDeg : undefined });
+    byKind.set(primeMeridian, f);
+  }
+  return f;
+}
+
+/** J_n series of a body's field (jn, or j2/j4). */
+export function zonalCoefficients(ob: BodyOblateness): number[] {
+  if (ob.jn !== undefined) return [...ob.jn];
+  return ob.j4 !== undefined && ob.j4 !== 0 ? [ob.j2, 0, ob.j4] : [ob.j2];
+}
+
+/**
+ * Check that a field's odd zonal and body-fixed terms are oriented by a pole
+ * of the right sense: the coefficients (DE440, EGM2008, the JPL satellite
+ * ephemerides) are defined about the rotational north pole, which is the IAU
+ * north pole only for a prograde rotator (W increasing). Even zonals are blind
+ * to the sense (Uranus: IAU north is its rotational south).
+ */
+export function checkFieldOrientation(id: string, ob: BodyOblateness): void {
+  const jn = zonalCoefficients(ob);
+  const odd = jn.some((j, i) => i % 2 === 1 && j !== 0);
+  const tess = (ob.tesseral ?? []).some((r) => r[2] !== 0 || r[3] !== 0);
+  if (tess && ob.rotation === undefined) throw new Error(`${id}: tesseral terms need a rotation model`);
+  if ((odd || tess) && ob.rotation !== undefined && !(ob.rotation.pm[1] > 0)) {
+    throw new Error(`${id}: odd or body-fixed field terms with a retrograde IAU frame (IAU north is not rotational north)`);
+  }
 }
 
 /** Speed of light, m/s. */
@@ -180,26 +252,41 @@ export function propagate(
   const relBody = ephem.relativity ? ephem.relativity.body : -1;
   const sunState = new Float64Array(6);
 
-  // Zonal bodies only, ascending (the order the terms are summed in). The
-  // constant prefactors are the same left-to-right products the per-call
-  // expressions start with, so they round identically:
-  // -1.5 * j2 * gm * R * R and 0.125 * j4 * gm * R2 * R2.
+  // Bodies with a field, ascending (the order the terms are summed in): a
+  // zonal series about the pole, or (with tesseral terms) the full field in
+  // the body-fixed frame, whose rotation is evaluated once per time.
   const zBody: number[] = [];
-  const zF2: number[] = [];
-  const zF4: number[] = [];
   const zPole: number[] = [];
   const zTable: (PoleTable | null)[] = [];
+  const zSeries: (ZonalSeries | null)[] = [];
+  // J2 (and J4) only: the closed forms, prefactors -1.5 j2 gm R^2 and 0.125 j4 gm R^4.
+  const zF2: number[] = [];
+  const zF4: number[] = [];
+  const zField: (HarmonicField | null)[] = [];
+  const zFrame: (BodyFrame | null)[] = [];
   if (oblateness !== undefined) {
     for (let i = 0; i < nBodies; i++) {
       const ob = oblateness[i];
       if (ob === null || ob === undefined) continue;
+      checkFieldOrientation(`body ${i}`, ob);
       zBody.push(i);
-      zF2.push(-1.5 * ob.j2 * gm[i] * ob.radius * ob.radius);
-      const j4 = ob.j4;
-      const R2 = ob.radius * ob.radius;
-      zF4.push(j4 !== undefined && j4 !== 0 ? 0.125 * j4 * gm[i] * R2 * R2 : 0);
       zPole.push(ob.pole[0], ob.pole[1], ob.pole[2]);
       zTable.push(ob.rotation !== undefined ? sharedPoleTable(ob.rotation) : null);
+      const jn = zonalCoefficients(ob);
+      const tess = (ob.tesseral ?? []).filter((r) => r[2] !== 0 || r[3] !== 0);
+      const R2 = ob.radius * ob.radius;
+      const closed = tess.length === 0 && jn.every((j, n) => n === 0 || n === 2 || j === 0);
+      zF2.push(closed ? -1.5 * jn[0] * gm[i] * ob.radius * ob.radius : 0);
+      zF4.push(closed && jn.length > 2 ? 0.125 * jn[2] * gm[i] * R2 * R2 : 0);
+      if (tess.length > 0) {
+        zSeries.push(null);
+        zField.push(new HarmonicField(jn, tess, ob.radius));
+        zFrame.push(sharedBodyFrame(ob.rotation!, ob.primeMeridian));
+      } else {
+        zSeries.push(closed ? null : new ZonalSeries(jn, ob.radius));
+        zField.push(null);
+        zFrame.push(null);
+      }
     }
   }
   const anyTable = zTable.some((p) => p !== null);
@@ -207,13 +294,14 @@ export function propagate(
   const zTabOff = Int32Array.from(zTable.flatMap((p, q) => (p !== null ? [3 * q] : [])));
   const nZonal = zBody.length;
   const zBodyA = Int32Array.from(zBody);
+  const zPoleA = Float64Array.from(zPole);
   const zF2A = Float64Array.from(zF2);
   const zF4A = Float64Array.from(zF4);
-  const zHasJ4 = Uint8Array.from(zF4, (f, k) => {
-    const j4 = oblateness![zBody[k]]!.j4;
-    return j4 !== undefined && j4 !== 0 ? 1 : 0;
-  });
-  const zPoleA = Float64Array.from(zPole);
+  // 0: closed J2 (J4) form, 1: zonal series, 2: full field in the body frame.
+  const zKind = Uint8Array.from(zField, (f, q) => (f !== null ? 2 : zSeries[q] !== null ? 1 : 0));
+  const anyFrame = zFrame.some((f) => f !== null);
+  const zMat = new Float64Array(9 * nZonal);
+  const fieldAcc = new Float64Array(3);
 
   // Ephemeris answers are functions of t alone, and the integrator asks for
   // the same t twice per step (stage 11 at t + 1.0*h and the FSAL stage at
@@ -222,6 +310,7 @@ export function propagate(
   // distinct calls, as before.
   let posT = NaN;
   let poleT = NaN;
+  let frameT = NaN;
   let sunT = NaN;
   let refT = NaN;
   let refBody = -1;
@@ -256,40 +345,61 @@ export function propagate(
       az += k * dz;
     }
 
-    // Zonal J2 of every body that has one. r = spacecraft - body, s = r.pole:
-    // a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ].
+    // Field of every body that has one (gravity-field.ts), r = spacecraft - body.
     if (anyTable && !Object.is(t, poleT)) {
       polesAt(zTabs, t, zPoleA, zTabOff);
       poleT = t;
     }
+    if (anyFrame && !Object.is(t, frameT)) {
+      for (let q = 0; q < nZonal; q++) {
+        const f = zFrame[q];
+        if (f !== null) f.matrixWithPole(t, zPoleA[3 * q], zPoleA[3 * q + 1], zPoleA[3 * q + 2], zMat, 9 * q);
+      }
+      frameT = t;
+    }
+    fieldAcc[0] = 0;
+    fieldAcc[1] = 0;
+    fieldAcc[2] = 0;
     for (let q = 0; q < nZonal; q++) {
       const i = zBodyA[q];
       const rx = x - bodyPos[3 * i];
       const ry = yy - bodyPos[3 * i + 1];
       const rz = z - bodyPos[3 * i + 2];
-      const px = zPoleA[3 * q];
-      const py = zPoleA[3 * q + 1];
-      const pz = zPoleA[3 * q + 2];
-      const r2 = rx * rx + ry * ry + rz * rz;
-      const sp = rx * px + ry * py + rz * pz;
-      const f = zF2A[q] / (r2 * r2 * Math.sqrt(r2));
-      const c1 = 1 - (5 * sp * sp) / r2;
-      ax += f * (c1 * rx + 2 * sp * px);
-      ay += f * (c1 * ry + 2 * sp * py);
-      az += f * (c1 * rz + 2 * sp * pz);
-      // J4, u = s/r: a += J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
-      if (zHasJ4[q] !== 0) {
-        const r = Math.sqrt(r2);
-        const u = sp / r;
-        const u2 = u * u;
-        const f4 = zF4A[q] / (r2 * r2 * r2 * r);
-        const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
-        const cp = f4 * r * u * (140 * u2 - 60);
-        ax += cr * rx - cp * px;
-        ay += cr * ry - cp * py;
-        az += cr * rz - cp * pz;
+      const kind = zKind[q];
+      if (kind === 0) {
+        // a = -(3/2) J2 GM R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ], s = r.pole;
+        // J4, u = s/r: + J4 GM R^4/(8 r^7) [ (315u^4 - 210u^2 + 15) r - (140u^3 - 60u) r pole ].
+        const px = zPoleA[3 * q];
+        const py = zPoleA[3 * q + 1];
+        const pz = zPoleA[3 * q + 2];
+        const r2 = rx * rx + ry * ry + rz * rz;
+        const sp = rx * px + ry * py + rz * pz;
+        const f = zF2A[q] / (r2 * r2 * Math.sqrt(r2));
+        const c1 = 1 - (5 * sp * sp) / r2;
+        ax += f * (c1 * rx + 2 * sp * px);
+        ay += f * (c1 * ry + 2 * sp * py);
+        az += f * (c1 * rz + 2 * sp * pz);
+        const f4c = zF4A[q];
+        if (f4c !== 0) {
+          const r = Math.sqrt(r2);
+          const u = sp / r;
+          const u2 = u * u;
+          const f4 = f4c / (r2 * r2 * r2 * r);
+          const cr = f4 * (315 * u2 * u2 - 210 * u2 + 15);
+          const cp = f4 * r * u * (140 * u2 - 60);
+          ax += cr * rx - cp * px;
+          ay += cr * ry - cp * py;
+          az += cr * rz - cp * pz;
+        }
+      } else if (kind === 1) {
+        zSeries[q]!.add(gm[i], rx, ry, rz, zPoleA[3 * q], zPoleA[3 * q + 1], zPoleA[3 * q + 2], fieldAcc, 0);
+      } else {
+        zField[q]!.addIcrf(gm[i], rx, ry, rz, zMat, 9 * q, fieldAcc, 0);
       }
     }
+    ax += fieldAcc[0];
+    ay += fieldAcc[1];
+    az += fieldAcc[2];
 
     // Sun 1PN (IERS 2010 eq. 10.12, beta = gamma = 1), relative to the Sun:
     // a = mu/(c^2 r^3) [ (4 mu/r - v^2) r + 4 (r.v) v ]. DOP853 handles the

@@ -212,7 +212,9 @@ describe('propagation golden digests (real ephemeris)', () => {
     const e = state(EARTH, 0);
     const R = 6_778_000;
     const v = Math.sqrt(J2000_BODIES[EARTH].gm / R);
-    expect(runDigest([e[0] + R, e[1], e[2], e[3], e[4] + v, e[5], 1000], 0, 30 * DAY)).toBe('185860:4356716483ef18fc');
+    // Stage 2 (physics model 2) changed all four propagation digests: the spacecraft now feels Earth and
+    // Moon to degree 4 with tesserals and J3-J6 zonals of Mars and the giants (gravity-field.ts).
+    expect(runDigest([e[0] + R, e[1], e[2], e[3], e[4] + v, e[5], 1000], 0, 30 * DAY)).toBe('185860:941c09deca0ef242');
   }, 120_000);
 
   it('LEO backward in time with orbital-frame and inertial burns', () => {
@@ -224,14 +226,14 @@ describe('propagation golden digests (real ephemeris)', () => {
       { tStart: t0 + 3000, duration: 600, thrust: 50e3, isp: 450, direction: [1, 0.1, -0.05], frame: { kind: 'orbital', body: EARTH } },
       { tStart: t0 + 20000, duration: 300, thrust: 20e3, isp: 320, direction: [0.3, -1, 0.2], frame: { kind: 'inertial' } },
     ];
-    expect(runDigest([e[0], e[1] + R, e[2], e[3] - v, e[4], e[5] + 100, 20000], t0, t0 + 3 * DAY, burns)).toBe('8590:63720a5fdf1b83ad');
+    expect(runDigest([e[0], e[1] + R, e[2], e[3] - v, e[4], e[5] + 100, 20000], t0, t0 + 3 * DAY, burns)).toBe('8590:4e1a7b77076d5aed');
   }, 120_000);
 
   it('heliocentric cruise across chunks', () => {
     const e = state(EARTH, -C);
     const vn = Math.hypot(e[3], e[4], e[5]);
     const y0 = [e[0] + (1e9 * e[3]) / vn, e[1] + (1e9 * e[4]) / vn, e[2] + (1e9 * e[5]) / vn, e[3] * (1 + 3000 / vn), e[4] * (1 + 3000 / vn), e[5] * (1 + 3000 / vn), 1000];
-    expect(runDigest(y0, -C, 2.5 * C)).toBe('790:9807a448dbdd46f0');
+    expect(runDigest(y0, -C, 2.5 * C)).toBe('790:fb083765476877f7');
   }, 120_000);
 
   it('Jovian system pass (J2/J4, moons, orbital burn about Jupiter)', () => {
@@ -239,6 +241,6 @@ describe('propagation golden digests (real ephemeris)', () => {
     const j = state(JUPITER, t0);
     const y0 = [j[0] + 3e9, j[1] - 1e9, j[2] + 2e8, j[3] - 9000, j[4] + 2500, j[5], 2000];
     const burns: Burn[] = [{ tStart: t0 + 2 * DAY, duration: 900, thrust: 4e3, isp: 320, direction: [-1, 0, 0.2], frame: { kind: 'orbital', body: JUPITER } }];
-    expect(runDigest(y0, t0, t0 + 12 * DAY, burns, 1e-11)).toBe('2050:3de1a5ee296fd335');
+    expect(runDigest(y0, t0, t0 + 12 * DAY, burns, 1e-11)).toBe('2110:275ab32b13fb98c3');
   }, 120_000);
 });

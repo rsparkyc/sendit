@@ -88,7 +88,9 @@
  * trig): their results differ between JS engines.
  */
 
-import { PoleTable, type IauRotation } from './orientation';
+import { earthPrimeMeridianDeg } from './earth-rotation';
+import { HarmonicField, ZonalSeries, type TesseralTerm } from './gravity-field';
+import { BodyFrame, PoleTable, type IauRotation } from './orientation';
 
 /** Speed of light, m/s (exact, SI definition). */
 export const C_LIGHT = 299792458;
@@ -96,13 +98,26 @@ const C2 = C_LIGHT * C_LIGHT;
 /** Fixed-point iterations for the implicit half-kick. Fixed for reproducibility. */
 export const PN_ITERATIONS = 2;
 
-/** Zonal J2 (and optionally J4) of `body`, acting on each body in `targets` (and the reaction on `body`). */
+/**
+ * Gravity field of `body` beyond the point mass, acting on each body in
+ * `targets` (and the reaction on `body`): zonal J2 (and J4), or a zonal series
+ * `jn`, and optionally sectoral/tesseral terms in the rotating body-fixed frame.
+ */
 export interface ZonalHarmonic {
   body: number;
   /** Unnormalized J2 (dimensionless), referred to `radius`. Must be nonzero if j4 is given. */
   j2: number;
-  /** Unnormalized J4, referred to `radius`. Omitted or 0: no J4 term. */
+  /** Unnormalized J4, referred to `radius`. Omitted or 0: no J4 term. Ignored when `jn` is given. */
   j4?: number;
+  /**
+   * Unnormalized zonal series J_n for n = 2, 3, ... (jn[0] = J2), replacing
+   * j2/j4 when given. Odd J_n are odd in the pole (see gravity-field.ts).
+   */
+  jn?: readonly number[];
+  /** Sectoral/tesseral terms (n, m >= 1, C, S), body-fixed frame of `rotation` (required). */
+  tesseral?: readonly TesseralTerm[];
+  /** Prime meridian for `tesseral`: the IAU W of `rotation` (default) or Earth's ERA. */
+  primeMeridian?: 'iau' | 'earth-rotation-angle';
   /** Reference (equatorial) radius, m. */
   radius: number;
   /** Unit vector along the body's spin axis, in the integration frame (ICRF). Used when `rotation` is absent. */
@@ -190,25 +205,89 @@ export function accelerations(n: number, gm: ArrayLike<number>, q: ArrayLike<num
   }
 }
 
+/** Evaluators of a term's field (zonal series or full field), built once per term object. */
+const FIELD_CACHE = new WeakMap<ZonalHarmonic, { zonal: ZonalSeries | null; full: HarmonicField | null }>();
+function fieldOf(Z: ZonalHarmonic): { zonal: ZonalSeries | null; full: HarmonicField | null } {
+  let f = FIELD_CACHE.get(Z);
+  if (f === undefined) {
+    const tess = (Z.tesseral ?? []).filter((r) => r[2] !== 0 || r[3] !== 0);
+    const jn = Z.jn ?? [Z.j2];
+    if (tess.length > 0) {
+      if (Z.rotation === undefined) throw new Error('zonal term: tesseral terms need a rotation model');
+      f = { zonal: null, full: new HarmonicField(jn, tess, Z.radius) };
+    } else {
+      f = { zonal: Z.jn !== undefined ? new ZonalSeries(jn, Z.radius) : null, full: null };
+    }
+    FIELD_CACHE.set(Z, f);
+  }
+  return f;
+}
+
+/** Does this term need the body-fixed frame (sectoral/tesseral terms)? */
+export function needsBodyFrame(Z: ZonalHarmonic): boolean {
+  return fieldOf(Z).full !== null;
+}
+
 /**
- * Add zonal J2 accelerations. For target o of body e, r = q_o - q_e, s = r.pole:
+ * Add the field accelerations. For target o of body e, r = q_o - q_e, s = r.pole:
  *   a_o = -(3/2) J2 GM_e R^2 / r^5 [ (1 - 5 s^2/r^2) r + 2 s pole ]
  * and the reaction a_e = -(GM_o/GM_e) a_o. This is minus the gradient of the
  * pair potential GM_e GM_o J2 R^2 (3 s^2/r^2 - 1) / (2 r^3) (see conservedEnergy).
  * With J4, u = s/r, the pair potential adds GM_e GM_o J4 R^4 (35 u^4 - 30 u^2 + 3) / (8 r^5),
  * whose (minus) gradient on o is
  *   a_o += (J4 GM_e R^4 / (8 r^7)) [ (315 u^4 - 210 u^2 + 15) r - (140 u^3 - 60 u) r pole ].
+ * A term with a zonal series `jn` uses the general zonal formula of
+ * gravity-field.ts (ZonalSeries); one with sectoral/tesseral terms the full
+ * field in the body-fixed frame (HarmonicField), whose body-fixed -> ICRF
+ * matrix is frames[9z..9z+8] (required for such terms). The reaction is
+ * always -(GM_o/GM_e) a_o (the torque on the body is not modelled: its
+ * orientation is prescribed by the IAU model).
  * `poles`, if given, holds the pole of term z at poles[3z..3z+2] (overriding Z.pole).
- * Every term is even in the pole (s pole, s^2, u pole, u^2): a pole and its
- * opposite give bit-identical accelerations.
+ * The J2/J4 form is even in the pole (s pole, s^2, u pole, u^2): a pole and
+ * its opposite give bit-identical accelerations. Odd J_n are not.
  */
-export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number>, zonal: readonly ZonalHarmonic[], out: Float64Array, poles?: ArrayLike<number>): void {
+export function addZonalAccelerations(
+  gm: ArrayLike<number>,
+  q: ArrayLike<number>,
+  zonal: readonly ZonalHarmonic[],
+  out: Float64Array,
+  poles?: ArrayLike<number>,
+  frames?: Float64Array,
+): void {
+  const acc = ZONAL_TMP;
   for (let z = 0; z < zonal.length; z++) {
     const Z = zonal[z];
     const e = Z.body;
     const px = poles !== undefined ? poles[3 * z] : Z.pole[0];
     const py = poles !== undefined ? poles[3 * z + 1] : Z.pole[1];
     const pz = poles !== undefined ? poles[3 * z + 2] : Z.pole[2];
+    if (Z.jn !== undefined || Z.tesseral !== undefined) {
+      const f = fieldOf(Z);
+      for (let t = 0; t < Z.targets.length; t++) {
+        const o = Z.targets[t];
+        const x = q[3 * o] - q[3 * e];
+        const y = q[3 * o + 1] - q[3 * e + 1];
+        const zz = q[3 * o + 2] - q[3 * e + 2];
+        acc[0] = 0;
+        acc[1] = 0;
+        acc[2] = 0;
+        if (f.full !== null) {
+          if (frames === undefined) throw new Error('addZonalAccelerations: a tesseral term needs its body frame');
+          f.full.addIcrf(1, x, y, zz, frames, 9 * z, acc, 0);
+        } else {
+          f.zonal!.add(1, x, y, zz, px, py, pz, acc, 0);
+        }
+        const ge = gm[e];
+        const go = gm[o];
+        out[3 * o] += ge * acc[0];
+        out[3 * o + 1] += ge * acc[1];
+        out[3 * o + 2] += ge * acc[2];
+        out[3 * e] -= go * acc[0];
+        out[3 * e + 1] -= go * acc[1];
+        out[3 * e + 2] -= go * acc[2];
+      }
+      continue;
+    }
     const R2 = Z.radius * Z.radius;
     const k = 1.5 * Z.j2 * R2;
     const j4 = Z.j4 ?? 0;
@@ -248,6 +327,7 @@ export function addZonalAccelerations(gm: ArrayLike<number>, q: ArrayLike<number
     }
   }
 }
+const ZONAL_TMP = new Float64Array(3);
 
 /**
  * Sun 1PN acceleration (IERS Conventions 2010 eq. 10.12, beta = gamma = 1) on
@@ -326,6 +406,10 @@ export class NBodyIntegrator {
   private readonly poleTables: (PoleTable | null)[];
   /** Current pole of every zonal term (3 per term), or undefined if all are fixed. */
   private readonly poles: Float64Array | undefined;
+  /** Per zonal term: its body frame (terms with sectoral/tesseral parts), or null. */
+  private readonly bodyFrames: (BodyFrame | null)[];
+  /** Body-fixed -> ICRF matrix of every term (9 per term), or undefined if no term needs one. */
+  private readonly frames: Float64Array | undefined;
   /** Stage times: c[i] = a_1 + ... + a_{i+1} as a fraction of h, the last exactly 1. */
   private readonly stageC: Float64Array;
 
@@ -367,6 +451,15 @@ export class NBodyIntegrator {
     this.vt = new Float64Array(3 * n);
     this.poleTables = this.zonal.map((Z) => (Z.rotation !== undefined ? new PoleTable(Z.rotation, Z.poleSpacing) : null));
     this.poles = this.poleTables.some((p) => p !== null) ? new Float64Array(3 * this.zonal.length) : undefined;
+    this.bodyFrames = this.zonal.map((Z, z) =>
+      needsBodyFrame(Z)
+        ? new BodyFrame(Z.rotation!, {
+            poleTable: this.poleTables[z]!,
+            primeMeridianDeg: Z.primeMeridian === 'earth-rotation-angle' ? earthPrimeMeridianDeg : undefined,
+          })
+        : null,
+    );
+    this.frames = this.bodyFrames.some((f) => f !== null) ? new Float64Array(9 * this.zonal.length) : undefined;
     if (this.poles !== undefined) {
       this.zonal.forEach((Z, z) => {
         if (this.poleTables[z] === null) this.poles!.set(Z.pole, 3 * z);
@@ -395,7 +488,15 @@ export class NBodyIntegrator {
           if (tab !== null) tab.at(time, poles, 3 * z);
         }
       }
-      addZonalAccelerations(this.gm, this.q, this.zonal, this.acc, poles);
+      const frames = this.frames;
+      if (frames !== undefined) {
+        const fr = this.bodyFrames;
+        for (let z = 0; z < fr.length; z++) {
+          const f = fr[z];
+          if (f !== null) f.matrixWithPole(time, poles![3 * z], poles![3 * z + 1], poles![3 * z + 2], frames, 9 * z);
+        }
+      }
+      addZonalAccelerations(this.gm, this.q, this.zonal, this.acc, poles, frames);
     }
   }
 
