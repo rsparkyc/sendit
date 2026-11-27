@@ -367,11 +367,19 @@ html.touch .scrub-ticks .span.burn { pointer-events: none; }
 .tl-zoom { display: flex; gap: 3px; align-items: center; }
 .tl-zoom .btn { min-width: 26px; }
 .tl-presets { max-width: 7.5em; }
-/* Phones and the side layout: one row (zoom in / out live in the Fit menu and in pinch); the MET sits above the track. */
-#hud[data-mode="sheet"] .scrubber, #hud[data-mode="side"] .scrubber { position: relative; flex-wrap: nowrap; gap: 4px; padding-top: 14px; }
+/* Phones, tablets and the side layout: one row (zoom in / out live in the Fit menu and in pinch). The MET is a
+   control in the row's flow, never laid over it: on touch it is a 44 px tap target, which as an absolutely placed
+   strip above the track reached down over the Fit menu. Where the row is narrow (portrait phones) the readout wraps
+   onto two lines inside its 44 px box (a row of its own would cost the map 30 px) and the ⤢ button goes (the Fit
+   menu has "Whole flight"). */
+#hud[data-mode="sheet"] .scrubber, #hud[data-mode="side"] .scrubber { position: relative; flex-wrap: nowrap; gap: 4px; }
 #hud[data-mode="sheet"] .tl-zin, #hud[data-mode="sheet"] .tl-zout, #hud[data-mode="side"] .tl-zin, #hud[data-mode="side"] .tl-zout { display: none; }
 #hud[data-mode="sheet"] .tl-presets, #hud[data-mode="side"] .tl-presets { max-width: 5.5em; min-height: 44px; }
-#hud[data-mode="sheet"] .scrub-met, #hud[data-mode="side"] .scrub-met { position: absolute; right: 10px; top: 0; min-width: 0; font-size: 11px; }
+#hud[data-mode="sheet"] .scrub-met, #hud[data-mode="side"] .scrub-met { flex: none; min-width: 0; font-size: 11px; white-space: nowrap; }
+@media (max-width: 599px) {
+  #hud[data-mode="sheet"] .tl-fit { display: none; }
+  #hud[data-mode="sheet"] .scrub-met { max-width: 8em; white-space: normal; line-height: 1.2; text-align: right; padding: 0 2px; }
+}
 
 /* Map markers. */
 .label.marker .text { font-size: 11px; color: #cfe0ff; }

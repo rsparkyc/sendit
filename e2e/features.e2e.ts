@@ -412,7 +412,9 @@ test.describe('phone', () => {
     expect(win[1] - win[0]).toBeLessThan(1200);
     await expect(page.locator('.scrub-overview')).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/p2-timeline-zoomed-phone.png` });
-    await page.getByRole('button', { name: 'Fit the whole flight' }).tap();
+    // Portrait phones have no ⤢ button (room for the time readout in the row): the Fit menu's "Whole flight".
+    await expect(page.getByRole('button', { name: 'Fit the whole flight' })).toBeHidden();
+    await page.locator('.tl-presets').selectOption('all');
     await expect(page.locator('.scrub-overview')).toBeHidden();
     // Sheet: drag the grip to a height between the snap points; it stays there.
     const g = (await page.locator('.sheet-grip').boundingBox())!;

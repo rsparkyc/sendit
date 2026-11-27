@@ -73,6 +73,14 @@ async function audit(page: Page) {
       const a = boxes[i].r, b = boxes[j].r;
       if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps.push(`${boxes[i].s} / ${boxes[j].s}`);
     }
+    // The panels alone missed controls drawn over each other inside one panel (the timeline's MET readout, placed
+    // absolutely with a 44 px touch height, covered the Fit menu). So also check the items of each control row.
+    const rows = ['.scrubber > :not(.tl-zoom)', '.scrubber .tl-zoom > *'];
+    const items = [...document.querySelectorAll(rows.join(', '))].filter(vis).map((e) => ({ s: `${e.tagName.toLowerCase()}.${(e as HTMLElement).className}`, r: e.getBoundingClientRect() }));
+    for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+      const a = items[i].r, b = items[j].r;
+      if (a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1) overlaps.push(`${items[i].s} [${Math.round(a.left)},${Math.round(a.top)} ${Math.round(a.width)}x${Math.round(a.height)}] / ${items[j].s} [${Math.round(b.left)},${Math.round(b.top)} ${Math.round(b.width)}x${Math.round(b.height)}]`);
+    }
     return {
       mode: document.documentElement.dataset.mode,
       docW: document.documentElement.scrollWidth,
