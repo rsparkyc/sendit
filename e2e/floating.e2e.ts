@@ -385,12 +385,40 @@ test.describe('tablet landscape: a pop-out tap is never lost', () => {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await cdp.detach();
   };
+  /** Show a tab in the side column (tap it only if not shown; reopen the column) and assert it, with a diagnostic. */
+  const showSide = async (page: Page, name: string) => {
+    const tab = page.getByRole('tab', { name, exact: true });
+    if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.tap();
+    const show = page.getByRole('button', { name: 'Show panels' });
+    if (await show.isVisible()) await show.tap();
+    const state = () => page.evaluate(() => JSON.stringify({ sideCollapsed: (document.getElementById('hud') as HTMLElement).dataset.sideCollapsed, selected: document.querySelector('.sheet [role="tab"][aria-selected="true"]')?.textContent }));
+    await expect(tab, await state()).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#hud'), await state()).toHaveAttribute('data-side-collapsed', 'false');
+  };
+  /** Hold trusted clicks back (a slow browser); replay() later delivers one (detail 1) at the tap point, or to the original target. */
+  const holdClicks = (page: Page) => page.evaluate(() => {
+    const w = window as any;
+    w.__held = [];
+    window.addEventListener('click', (e) => {
+      if (!e.isTrusted || e.detail === 0) return; // pointer clicks only: keyboard clicks pass
+      w.__held.push({ x: e.clientX, y: e.clientY, target: e.target });
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }, true);
+  });
+  const replay = (page: Page, where: 'point' | 'target') => page.evaluate((wh) => {
+    const h = (window as any).__held.shift();
+    if (!h) return 'no click was held';
+    const t = (wh === 'point' ? document.elementFromPoint(h.x, h.y) : h.target) as HTMLElement;
+    t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, detail: 1, clientX: h.x, clientY: h.y }));
+    return `${t.tagName}.${t.className} ${t.getAttribute('aria-label') ?? t.textContent}`;
+  }, where);
   const centre = async (page: Page, tab: string) => { const b = (await button(page, tab).boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 
   test('a touch tap whose click the browser drops still pops out, exactly once', async ({ page }) => {
     const errors = watch(page);
     await fresh(page);
-    await page.getByRole('tab', { name: 'Events' }).tap();
+    await showSide(page, 'Events');
     // Simulate the browser not sending the click (as seen on CI): a capture listener on window, ahead of the app's.
     await page.evaluate(() => {
       (window as any).__dropped = 0;
@@ -408,29 +436,72 @@ test.describe('tablet landscape: a pop-out tap is never lost', () => {
   test('a late click after a pop-out tap lands on the next button under the finger and does nothing', async ({ page }) => {
     const errors = watch(page);
     await fresh(page);
-    await page.getByRole('tab', { name: 'Events' }).tap();
+    await showSide(page, 'Events');
     // Hold the tap's own click back, as a slow browser would, then deliver a click where the finger was.
-    await page.evaluate(() => {
-      window.addEventListener('click', (e) => { if (e.isTrusted) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
-    });
+    await holdClicks(page);
     const c = await centre(page, 'Events');
     await cdpTap(page, c.x, c.y);
     await expect(win(page, 'events')).toBeVisible({ timeout: 3000 });
-    const under = await page.evaluate(({ x, y }) => {
-      const e = document.elementFromPoint(x, y) as HTMLElement;
-      const u = e.closest('.undock') as HTMLElement | null;
-      if (u) u.click(); // the late click, synthesised (not trusted, so the holding listener lets it through)
-      return u?.getAttribute('aria-label') ?? e.className;
-    }, c);
-    await page.waitForTimeout(600);
+    // 1.5 s later, the click arrives where the finger was: on the next tab's pop-out button by now.
+    await page.waitForTimeout(1500);
+    const under = await replay(page, 'point');
+    await page.waitForTimeout(300);
     expect(await page.locator('.float-win').evaluateAll((ws) => ws.map((w) => (w as HTMLElement).dataset.tab)), `late click on ${under}; ${await log(page)}`).toEqual(['events']);
+    expect(errors).toEqual([]);
+  });
+
+  test('a tab tap whose click arrives 1.5 s late does not act twice (the column stays open on that tab)', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    await showSide(page, 'Nodes');
+    await holdClicks(page);
+    const t = (await page.getByRole('tab', { name: 'Events', exact: true }).boundingBox())!;
+    await cdpTap(page, t.x + t.width / 2, t.y + t.height / 2);
+    await expect(page.getByRole('tab', { name: 'Events', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await page.waitForTimeout(1500);
+    expect(await replay(page, 'target')).toContain('tab');
+    await page.waitForTimeout(300);
+    await expect(page.getByRole('tab', { name: 'Events', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#hud')).toHaveAttribute('data-side-collapsed', 'false');
+    await expect(page.locator('.sheet-body .panel.events')).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('a pop-out tap whose click arrives 1.5 s late on the same button does not act again', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    await showSide(page, 'Events');
+    await holdClicks(page);
+    const c = await centre(page, 'Events');
+    await cdpTap(page, c.x, c.y);
+    await expect(win(page, 'events')).toBeVisible({ timeout: 3000 });
+    await page.waitForTimeout(1500);
+    expect(await replay(page, 'target')).toContain('undock');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.float-win')).toHaveCount(1);
+    expect(await page.evaluate(() => (window as any).sendit.layout.undockLog.filter((l: string) => / events via /.test(l))), await log(page)).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('keyboard Enter right after a touch tap acts at once (no pointerdown in between)', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    await showSide(page, 'Nodes');
+    await holdClicks(page); // the tap's click never comes: the blocker stays armed
+    const t = (await page.getByRole('tab', { name: 'Events', exact: true }).boundingBox())!;
+    await cdpTap(page, t.x + t.width / 2, t.y + t.height / 2);
+    await expect(page.getByRole('tab', { name: 'Events', exact: true })).toHaveAttribute('aria-selected', 'true');
+    // Enter on another button (keyboard click: detail 0) is never swallowed.
+    await page.getByRole('button', { name: 'Pop out Events into a floating window' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(win(page, 'events')).toBeVisible({ timeout: 3000 });
     expect(errors).toEqual([]);
   });
 
   test('popping out one tab does not pop out the next one, whose button lands under the finger', async ({ page }) => {
     const errors = watch(page);
     await fresh(page);
-    await page.getByRole('tab', { name: 'Events' }).tap();
+    await showSide(page, 'Events');
     await button(page, 'Events').tap();
     await expect(win(page, 'events')).toBeVisible();
     // The column now shows another tab, whose pop-out button sits where the finger was: it must not fire.
