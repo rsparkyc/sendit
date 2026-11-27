@@ -160,9 +160,10 @@ jobs:
           done
           aws cloudformation get-template --stack-name "$LEADERBOARD_STACK" --template-stage Original \
             --query TemplateBody --output text > "$RUNNER_TEMP/deployed-leaderboard.yaml"
-          if ! diff -q <(sed -e 's/[[:space:]]*$//' "$RUNNER_TEMP/deployed-leaderboard.yaml") <(sed -e 's/[[:space:]]*$//' infra/leaderboard.yaml) >/dev/null; then
+          # -B: the CLI's text output adds a trailing blank line, and blank lines carry no meaning here.
+          if ! diff -qB <(sed -e 's/[[:space:]]*$//' "$RUNNER_TEMP/deployed-leaderboard.yaml") <(sed -e 's/[[:space:]]*$//' infra/leaderboard.yaml) >/dev/null; then
             echo "::error::infra/leaderboard.yaml differs from the deployed template. Deploy it by hand once (README, 'Deploy by hand'); automatic deploys only swap the bundle."
-            diff <(sed -e 's/[[:space:]]*$//' "$RUNNER_TEMP/deployed-leaderboard.yaml") <(sed -e 's/[[:space:]]*$//' infra/leaderboard.yaml) | head -50 || true
+            diff -B <(sed -e 's/[[:space:]]*$//' "$RUNNER_TEMP/deployed-leaderboard.yaml") <(sed -e 's/[[:space:]]*$//' infra/leaderboard.yaml) | head -50 || true
             exit 1
           fi
 

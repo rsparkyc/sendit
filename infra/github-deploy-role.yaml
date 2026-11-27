@@ -14,6 +14,15 @@ Parameters:
     Type: String
     Description: GitHub repository allowed to assume the role, as owner/name.
     AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  SubjectRepository:
+    Type: String
+    Default: ''
+    Description: >-
+      The repository part of the token's subject when it differs from owner/name. Repositories
+      using GitHub's immutable subjects carry numeric ids, as owner@<id>/name@<id>; copy it from
+      sub_claim_prefix in `gh api repos/<owner>/<name>/actions/oidc/customization/sub`, without
+      the leading "repo:". Empty means owner/name.
+    AllowedPattern: '^$|^[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$'
   DeployEnvironment:
     Type: String
     Default: production
@@ -49,6 +58,7 @@ Rules:
 
 Conditions:
   MakeProvider: !Equals [!Ref CreateOidcProvider, 'true']
+  PlainSubject: !Equals [!Ref SubjectRepository, '']
 
 Resources:
   GitHubOidcProvider:
@@ -83,7 +93,10 @@ Resources:
                 # setup), so the subject names both the environment and the branch. A pull request
                 # (fork or not) has subject repo:<owner>/<name>:pull_request and can never match;
                 # a job on any other branch, or outside the environment, cannot either.
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${Repository}:environment:${DeployEnvironment}:ref:refs/heads/main'
+                token.actions.githubusercontent.com:sub: !If
+                  - PlainSubject
+                  - !Sub 'repo:${Repository}:environment:${DeployEnvironment}:ref:refs/heads/main'
+                  - !Sub 'repo:${SubjectRepository}:environment:${DeployEnvironment}:ref:refs/heads/main'
       Policies:
         - PolicyName: sendit-deploy
           PolicyDocument:
