@@ -508,7 +508,7 @@ export class Timeline {
       const w = (dur / (w1 - w0)) * 100;
       if (x0 > 100 || x0 + w < 0) return;
       const burnTip = `Burn ${i + 1}${staged ? ` · fired by ${row?.name ?? ss.tag} (${ss.tag})` : ''} · ${fmtTime(n.burn.start, 0)} to ${fmtTime(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}`;
-      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, role: 'button', tabIndex: -1 });
+      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, ...(touchUi() ? {} : { role: 'button', tabIndex: -1 }) });
       sp.setAttribute('aria-label', burnTip);
       sp.dataset.tip = burnTip;
       sp.dataset.times = String(t0);
@@ -559,4 +559,9 @@ export class Timeline {
     }
     this.ticks.replaceChildren(...out);
   }
+}
+
+/** Touch layouts: burn bars are not tap targets (too thin; the node mark at their centre is). */
+function touchUi(): boolean {
+  return document.documentElement.classList.contains('touch');
 }

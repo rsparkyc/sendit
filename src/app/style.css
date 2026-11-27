@@ -348,7 +348,20 @@ html.touch .scrub-overview { height: 16px; }
 /* Marks explain themselves: hover (mouse) or tap shows .tl-tip; the hit area reaches up above the strip, clear of the handle. */
 .scrub-ticks [data-tip] { pointer-events: auto; cursor: pointer; touch-action: none; }
 .scrub-ticks [data-tip]::before { content: ''; position: absolute; left: -5px; right: -5px; top: -10px; bottom: -1px; }
-html.touch .scrub-ticks .tick[data-tip]::before { left: -14px; right: -14px; top: -18px; }
+/* Touch: each mark's own box is a 40 px tap target (reaching up from the strip, clear of the handle),
+   transparent, with the visible glyph drawn at its foot. Burn bars are not tap targets on touch. */
+html.touch .scrub-ticks .tick[data-tip] { width: 40px; height: 40px; top: -32px; margin-left: -20px; background: none; box-shadow: none; border-radius: 0; transform: none; }
+html.touch .scrub-ticks .tick[data-tip]::before { display: none; }
+html.touch .scrub-ticks .tick[data-tip]::after { content: ''; position: absolute; inset: auto; left: 50%; bottom: 0; width: 3px; height: 8px; transform: translateX(-50%); background: #9fc6ff; border-radius: 1px; clip-path: none; box-shadow: none; pointer-events: none; }
+html.touch .scrub-ticks .tick.node[data-tip]::after { background: #ff8a3d; height: 10px; bottom: -1px; }
+html.touch .scrub-ticks .tick.end[data-tip]::after { background: #ff4d4d; height: 12px; bottom: -2px; }
+html.touch .scrub-ticks .tick.failure[data-tip]::after { background: #ff4d4d; width: 7px; height: 7px; }
+html.touch .scrub-ticks .tick.event[data-tip]::after, html.touch .scrub-ticks .tick.closest[data-tip]::after { width: 6px; height: 6px; bottom: 1px; transform: translateX(-50%) rotate(45deg); border-radius: 0; }
+html.touch .scrub-ticks .tick.closest[data-tip]::after { background: #ffd36b; }
+html.touch .scrub-ticks .tick.pnode[data-tip]::after { width: 8px; height: 7px; background: #c9a2ff; border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+html.touch .scrub-ticks .tick.pnode.dn[data-tip]::after { clip-path: polygon(0 0, 100% 0, 50% 100%); }
+html.touch .scrub-ticks .tick.many[data-tip]::after { width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 0 1.5px #fff; }
+html.touch .scrub-ticks .span.burn { pointer-events: none; }
 .tl-tip { position: fixed; z-index: 1500; max-width: min(340px, calc(100vw - 12px)); padding: 6px 8px; background: var(--panel-solid); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); font: 12px/1.4 var(--sans, system-ui); white-space: pre-line; pointer-events: none; }
 .tl-tip[hidden] { display: none; }
 .tl-zoom { display: flex; gap: 3px; align-items: center; }
