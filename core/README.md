@@ -108,6 +108,38 @@ line, the inputs (in hex) and the first differing values.
   mismatch had to be tracked down in the port itself: transcribing each
   expression with its parentheses was enough.
 
+### Layer one of phase two (n-body integrator, chunk builder)
+
+Proven natively and as WebAssembly (scalar and SIMD128), zero mismatches:
+the integrator over nine configurations (60,780 values: every step's state
+with its compensation terms and the total acceleration; Newtonian, leapfrog,
+zonal backward, tesseral/Jn/J4 terms, with and without 1PN, resumed from a
+checkpoint in both directions, and 64-day steps), and the chunks
+(5,435,339 values: 16 chunks built from the checkpoint asset in shuffled
+order, chunks -4..3 built lazily from the epoch, checkpoints -4..4 against
+the asset). Mutation check (`python3 scripts/mutation-check.py nbody.rs
+chunk.rs`): 9 of 14 mutants caught (Kahan q and v updates, kick
+coefficient order, the explicit 1PN kick, the PN iteration count, Householder
+vtv order, reciprocal back substitution, the fit's dot-product order); four
+are equivalent (reversed stage order of a symmetric scheme, exact halving and
+doubling) and one is not observable (the implicit half-kick's argument to the
+1PN term); the script gives the reasons. core/data is regenerated and diffed
+by scripts/test.sh.
+
+## TypeScript behaviours reproduced deliberately
+
+- nbody.ts `fieldOf`: a zonal term whose `tesseral` list is present but
+  empty (or holds only zero terms) and which has no `jn` builds neither a
+  zonal series nor a full field, and the TypeScript then fails when the term
+  is used. The Rust panics at the same point (`field_of` in src/nbody.rs)
+  rather than inventing a fallback; no production term has that shape.
+- The Earth rotation model (src/physics/earth-rotation.ts) carries no
+  `ra0`/`ra1`/`dec0`/`dec1`; the TypeScript reads the pole from the IAU Earth
+  model where needed. The Rust takes those four numbers from the generated
+  `earthRotation` record of core/data/mission-data.json (written by
+  ts/gen-data.vec.ts from the TypeScript's own tables), never from a
+  hand-copied constant.
+
 ## Benchmarks (Apple M-series, aarch64, Node 22.22.3)
 
 Each block was measured in one sitting, with the 1-minute load average next to

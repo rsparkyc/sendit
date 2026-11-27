@@ -26,6 +26,9 @@ pub struct Layout {
     pub sys_start: Vec<usize>,
     pub sys_moons: Vec<usize>,
     pub system_of: Vec<i32>,
+    /// Per body: sample intervals per segment, and steps between samples (the chunk builder's).
+    pub samples: Vec<usize>,
+    pub sample_stride: Vec<usize>,
 }
 
 /// pairPlan: bodies of equal segment length evaluated two at a time (b has the lower degree; -1 alone).
@@ -204,6 +207,8 @@ pub struct ChebEphemeris {
     sys_need: Vec<bool>,
     /// Use the f64x2 evaluation for positions() where available (same per-lane arithmetic).
     pub simd: bool,
+    /// Builds missing chunks on demand (chunk.rs); None: chunks must be added from outside.
+    pub builder: Option<crate::chunk::ChunkBuilder>,
 }
 
 impl ChebEphemeris {
@@ -211,12 +216,48 @@ impl ChebEphemeris {
         let (pair_a, pair_b) = pair_plan(&layout);
         let n = layout.count;
         let ns = layout.sys_planet.len();
-        ChebEphemeris { layout, gm, t0, chunks: HashMap::new(), pair_a, pair_b, tmp_p: vec![0.0; 3 * n], tmp_v: vec![0.0; 3 * n], need: vec![false; n], sys_need: vec![false; ns], simd: false }
+        ChebEphemeris { layout, gm, t0, chunks: HashMap::new(), pair_a, pair_b, tmp_p: vec![0.0; 3 * n], tmp_v: vec![0.0; 3 * n], need: vec![false; n], sys_need: vec![false; ns], simd: false, builder: None }
     }
 
     pub fn add_chunk(&mut self, k: i64, coeffs: Vec<f64>) {
         assert_eq!(coeffs.len(), self.layout.chunk_length, "chunk size does not match layout");
         self.chunks.insert(k, coeffs);
+    }
+
+    /// Coefficients of chunk k, if present.
+    pub fn get_chunk(&self, k: i64) -> Option<&Vec<f64>> {
+        self.chunks.get(&k)
+    }
+
+    /// Drop chunks (checkpoints are kept, so they rebuild bit-identically).
+    pub fn evict(&mut self, ks: &[i64]) -> usize {
+        ks.iter().filter(|k| self.chunks.remove(k).is_some()).count()
+    }
+
+    /// Indices of the chunks present, ascending.
+    pub fn built_chunks(&self) -> Vec<i64> {
+        let mut v: Vec<i64> = self.chunks.keys().copied().collect();
+        v.sort();
+        v
+    }
+
+    /// Make chunk k present, building it (and any chunks between it and the
+    /// nearest checkpoint) with the builder: ChebyshevEphemeris.extendTo.
+    pub fn ensure_chunk(&mut self, k: i64) {
+        if self.chunks.contains_key(&k) {
+            return;
+        }
+        let b = self.builder.as_mut().unwrap_or_else(|| panic!("chunk {k} not loaded and no chunk builder"));
+        b.extend_to(k, &mut self.chunks);
+    }
+
+    /// Build every chunk covering [ta, tb] (ensure()).
+    pub fn ensure(&mut self, ta: f64, tb: f64) {
+        let ka = self.chunk_index(ta);
+        let kb = self.chunk_index(tb);
+        for k in ka.min(kb)..=ka.max(kb) {
+            self.ensure_chunk(k);
+        }
     }
 
     pub fn has_chunk(&self, k: i64) -> bool {

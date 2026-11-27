@@ -23,7 +23,7 @@ pub struct Report {
 }
 
 impl Report {
-    fn new(section: &str) -> Self {
+    pub fn new(section: &str) -> Self {
         Report { section: section.into(), checked: 0, mismatches: 0, first: Vec::new() }
     }
     #[inline]
