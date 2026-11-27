@@ -7,10 +7,11 @@
  *  - 'wide'  (>= 1200 x 600, desktop): one docked column on the right, wide
  *    enough that values do not wrap (27 % of the window, 360-460 px, resizable),
  *    with the same tabs as the other modes at its top, here as section links
- *    over one scrolling column ordered by how often a panel is touched while
- *    flying: Nodes (list and the selected node's editor) first, then Mission and
- *    Start (set once; each collapses by its header to a one-line summary,
- *    remembered), Events, Results, Orbit, View. The tab of the section at the
+ *    over one scrolling column. Tabs and column follow one list, TABS (so the
+ *    two orders cannot drift): Nodes (list and the selected node's editor)
+ *    first, then Mission, Start and Vehicle (set once; each collapses by its
+ *    header to a one-line summary, remembered), Events, Results, Orbit, View;
+ *    within a tab, panels keep the order main.ts adds them in. The tab of the section at the
  *    top of the column is highlighted as it scrolls. The orbit at the cursor is
  *    also a one-line strip above the timeline, next to the map. The dock
  *    collapses to a rail of tab buttons. Selecting a node scrolls to Nodes.
@@ -21,27 +22,48 @@
  *    live in a bottom sheet with tabs and three heights (peek: tabs only,
  *    half, full), dragged by its grip or set by tapping a tab.
  *
+ * Floating windows (desktop and landscape tablets, not phones: floatAllowed):
+ * the first panel of each tab has an undock button that moves the tab's
+ * panels (the same nodes) into a window over the map (float-window.ts); its
+ * tab stays in the strip, marked floating, and brings the window to front.
+ * Which tabs float, and each window's place, size, collapse and opacity, are
+ * remembered per mode; phones dock everything without forgetting them.
+ *
  * In every mode a compact status bar (time, play / warp, outcome, the one
  * number that matters now) and the timeline stay visible. The 3D view always
  * covers the whole window; `freeRect` is the part no panel covers, and the
  * camera centres its focus there (so a dock or the sheet never hides it).
  */
 import { el } from './dom';
+import { DEFAULT_OPACITY, defaultRect, emptyFloats, floatAllowed, parseFloats, type FloatModes } from './float-geom';
+import { FloatWindow } from './float-window';
 
-export type TabId = 'mission' | 'start' | 'nodes' | 'events' | 'orbit' | 'results' | 'view';
+export type TabId = 'nodes' | 'mission' | 'start' | 'vehicle' | 'events' | 'results' | 'orbit' | 'view';
 export type Mode = 'wide' | 'side' | 'sheet';
 export type SheetState = 'peek' | 'half' | 'full';
 export type Dock = 'left' | 'right' | 'bottom';
 
+/**
+ * The one order of the panels: the tab strip in every mode and, in wide mode,
+ * the scrolling column (orderEntries). What is touched while tuning a burn
+ * first, what is set once next, then the rest.
+ */
 export const TABS: readonly { id: TabId; label: string; icon: string }[] = [
+  { id: 'nodes', label: 'Nodes', icon: '△' },
   { id: 'mission', label: 'Mission', icon: '◎' },
   { id: 'start', label: 'Start', icon: '⇡' },
-  { id: 'nodes', label: 'Nodes', icon: '△' },
+  { id: 'vehicle', label: 'Vehicle', icon: '▥' },
   { id: 'events', label: 'Events', icon: '☰' },
-  { id: 'orbit', label: 'Orbit', icon: '◯' },
   { id: 'results', label: 'Results', icon: '★' },
+  { id: 'orbit', label: 'Orbit', icon: '◯' },
   { id: 'view', label: 'View', icon: '◐' },
 ];
+const TAB_IDS = TABS.map((t) => t.id);
+
+/** Panels in display order: by their tab's place in TABS, then in the order they were added (pure). */
+export function orderEntries<T extends { tab: TabId; order: number }>(entries: readonly T[]): T[] {
+  return [...entries].sort((a, b) => TAB_IDS.indexOf(a.tab) - TAB_IDS.indexOf(b.tab) || a.order - b.order);
+}
 
 /** Mode for a viewport (pure; exported for tests). */
 export function modeFor(w: number, h: number): Mode {
@@ -65,8 +87,6 @@ export interface FreeRect {
 }
 
 const STORE_KEY = 'sendit.layout.v1';
-/** Wide mode's column order: what is touched while tuning a burn first, what is set once next, then the rest. */
-const WIDE_RANK: Record<TabId, number> = { nodes: 0, mission: 1, start: 2, events: 3, results: 4, orbit: 5, view: 6 };
 export const DOCK_MIN = 220;
 export const DOCK_MAX = 520;
 const clampWidth = (w: number) => Math.round(Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.min(w, (typeof window !== 'undefined' ? window.innerWidth : 2000) * 0.4))));
@@ -85,6 +105,12 @@ export class Layout {
   private readonly tabRow = el('div', { className: 'tabrow' });
   private readonly sheetBody = el('div', { className: 'sheet-body' });
   private readonly tabButtons = new Map<TabId, HTMLButtonElement>();
+  /** Floating windows sit here (one stacking context above the docks). */
+  private readonly floatLayer = el('div', { className: 'floats' });
+  private readonly windows = new Map<string, FloatWindow>();
+  private floats: FloatModes = emptyFloats();
+  private zTop = 0;
+  private floatShown: 'wide' | 'side' | null = null;
   private readonly entries: Entry[] = [];
   private readonly listeners = new Set<() => void>();
   mode: Mode = 'wide';
@@ -108,6 +134,8 @@ export class Layout {
         this.collapsed = { ...this.collapsed, ...(saved.collapsed ?? {}) };
         for (const k of ['left', 'right'] as const) if (typeof saved.widths?.[k] === 'number') this.widths[k] = clampWidth(saved.widths[k]);
         if (Array.isArray(saved.panels)) this.panelCollapsed = new Set(saved.panels.filter((x: unknown) => typeof x === 'string'));
+        this.floats = parseFloats(saved.floats, TAB_IDS);
+        for (const m of Object.values(this.floats)) for (const f of Object.values(m)) this.zTop = Math.max(this.zTop, f.z);
       }
       else if (window.innerHeight < 520 && window.innerWidth > window.innerHeight) this.collapsed.side = true; // landscape phone: map first
     } catch {
@@ -127,9 +155,11 @@ export class Layout {
     for (const t of TABS) {
       const b = el('button', { className: 'tab', type: 'button', role: 'tab', id: `tab-${t.id}` },
         el('span', { className: 'tab-icon', ariaHidden: 'true', textContent: t.icon }),
-        el('span', { className: 'tab-label', textContent: t.label }));
+        el('span', { className: 'tab-label', textContent: t.label }),
+        el('span', { className: 'tab-float', ariaHidden: 'true', textContent: '⧉' }));
       b.setAttribute('aria-controls', 'sheet-body');
       b.onclick = () => this.pressTab(t.id);
+      b.ondblclick = () => { if (this.isFloating(t.id)) this.dock(t.id); };
       b.onkeydown = (e) => {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
         e.preventDefault();
@@ -158,14 +188,14 @@ export class Layout {
       if (this.mode !== 'wide' || this.scrolling) return;
       const top = this.rightBody.getBoundingClientRect().top + 8;
       let cur: Entry | null = null;
-      for (const e of [...this.entries].sort((a, b) => WIDE_RANK[a.tab] - WIDE_RANK[b.tab] || a.order - b.order)) {
-        if (e.dock === 'bottom') continue;
+      for (const e of orderEntries(this.entries)) {
+        if (e.el.parentElement !== this.rightBody) continue;
         if (e.el.getBoundingClientRect().top <= top) cur = e;
       }
       const t = cur?.tab ?? 'nodes';
       if (t !== this.tab) { this.tab = t; this.apply(); }
     }, { passive: true });
-    root.append(this.topbar, this.left, this.right, this.bottom, this.sheet);
+    root.append(this.topbar, this.left, this.right, this.bottom, this.sheet, this.floatLayer);
     this.wireGrip();
 
     const onResize = () => this.update();
@@ -195,6 +225,14 @@ export class Layout {
         this.emit();
       });
     }
+    // Undock: shown on the first panel of each tab (place()); it floats the whole tab.
+    if (head) {
+      const label = TABS.find((t) => t.id === tab)!.label;
+      const u = el('button', { className: 'btn small undock', type: 'button', textContent: '⧉', title: `Undock ${label} into a floating window` });
+      u.setAttribute('aria-label', `Undock ${label} into a floating window`);
+      u.onclick = () => this.undock(tab);
+      head.parentElement!.append(u);
+    }
     this.entries.sort((a, b) => a.order - b.order);
     this.place();
   }
@@ -205,8 +243,20 @@ export class Layout {
     return () => this.listeners.delete(f);
   }
 
-  /** Bring a tab forward (sheet / side modes; in wide mode, scroll its first panel into view). */
+  /** Bring a tab forward (sheet / side modes; in wide mode, scroll its first panel into view; floating: its window to front). */
   showTab(tab: TabId, open = true): void {
+    const w = this.windowOf(tab);
+    if (w) {
+      this.front(tab);
+      if (open && w.state.collapsed) {
+        w.state.collapsed = false;
+        w.render();
+        w.clamp();
+        this.persist();
+      }
+      w.flash();
+      return;
+    }
     this.tab = tab;
     if (this.mode === 'sheet' && open && this.sheetState === 'peek') this.sheetState = 'half';
     if (this.mode === 'side' && open) this.collapsed.side = false;
@@ -239,6 +289,10 @@ export class Layout {
   }
 
   private pressTab(tab: TabId): void {
+    if (this.isFloating(tab)) {
+      this.showTab(tab);
+      return;
+    }
     if (this.mode === 'sheet' && tab === this.tab && this.sheetState !== 'peek') {
       this.setSheet('peek');
       return;
@@ -254,7 +308,7 @@ export class Layout {
 
   private persist(): void {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ tab: this.tab, collapsed: this.collapsed, widths: this.widths, panels: [...this.panelCollapsed] }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({ tab: this.tab, collapsed: this.collapsed, widths: this.widths, panels: [...this.panelCollapsed], floats: this.floats }));
     } catch {
       /* not persistent */
     }
@@ -265,8 +319,91 @@ export class Layout {
     if (m !== this.mode || !this.root.dataset.mode) {
       this.mode = m;
       this.place();
-    }
+    } else if (this.floatMode() !== this.floatShown) this.place();
+    for (const w of this.windows.values()) w.clamp();
     this.apply();
+  }
+
+  /** The mode whose floating windows are shown, or null (phones: everything docked). */
+  private floatMode(): 'wide' | 'side' | null {
+    const m = this.mode;
+    return floatAllowed(m, window.innerWidth, window.innerHeight) ? m : null;
+  }
+
+  /** Is this tab in a floating window now? */
+  isFloating(tab: TabId): boolean {
+    return this.windowOf(tab) !== null;
+  }
+
+  private windowOf(tab: TabId): FloatWindow | null {
+    const fm = this.floatMode();
+    return fm ? this.windows.get(`${fm}:${tab}`) ?? null : null;
+  }
+
+  /** Move a tab's panels into a floating window over the map. */
+  undock(tab: TabId): void {
+    const fm = this.floatMode();
+    if (!fm || this.floats[fm][tab]) return;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const f = this.freeRect();
+    const k = Object.keys(this.floats[fm]).length;
+    this.floats[fm][tab] = { ...defaultRect(tab, k, { left: f.left, top: f.top, right: W - f.right, bottom: H - f.bottom }), collapsed: false, opacity: DEFAULT_OPACITY, z: ++this.zTop };
+    this.place();
+    this.persist();
+    this.apply();
+    const w = this.windowOf(tab);
+    if (w) {
+      w.clamp();
+      w.root.focus({ preventScroll: true });
+      w.flash();
+    }
+  }
+
+  /** Put a floating tab back in the dock (and show it there). */
+  dock(tab: TabId): void {
+    const fm = this.floatMode();
+    if (!fm || !this.floats[fm][tab]) return;
+    delete this.floats[fm][tab];
+    this.place();
+    this.showTab(tab);
+    this.tabButtons.get(tab)?.focus({ preventScroll: true });
+  }
+
+  private front(tab: TabId): void {
+    const w = this.windowOf(tab);
+    if (!w || w.state.z === this.zTop) return;
+    w.state.z = ++this.zTop;
+    w.render();
+    this.persist();
+  }
+
+  /** Create / remove windows to match the floating tabs of the current mode. */
+  private syncWindows(): void {
+    const fm = this.floatMode();
+    this.floatShown = fm;
+    const want = new Set(fm ? Object.keys(this.floats[fm]).map((t) => `${fm}:${t}`) : []);
+    for (const [k, w] of this.windows) {
+      if (!want.has(k)) {
+        w.root.remove();
+        this.windows.delete(k);
+      }
+    }
+    if (!fm) return;
+    for (const [tab, st] of Object.entries(this.floats[fm])) {
+      const k = `${fm}:${tab}`;
+      if (this.windows.has(k)) continue;
+      const id = tab as TabId;
+      const w = new FloatWindow(tab, TABS.find((t) => t.id === tab)!.label, st, {
+        changed: () => this.persist(),
+        dock: () => this.dock(id),
+        front: () => this.front(id),
+        escape: () => this.tabButtons.get(id)?.focus(),
+      });
+      this.windows.set(k, w);
+      this.floatLayer.append(w.root);
+      w.clamp();
+    }
   }
 
   /** Put each panel into the container of the current mode. */
@@ -274,11 +411,19 @@ export class Layout {
     // One column in wide mode: the tab row heads the right dock (the left dock is not used).
     if (this.mode === 'wide') { if (this.tabRow.parentElement !== this.right || this.tabRow.nextElementSibling !== this.rightBody) this.right.insertBefore(this.tabRow, this.rightBody); }
     else if (this.tabRow.parentElement !== this.sheet) this.sheet.insertBefore(this.tabRow, this.sheetBody);
-    const list = this.mode === 'wide' ? [...this.entries].sort((a, b) => WIDE_RANK[a.tab] - WIDE_RANK[b.tab] || a.order - b.order) : this.entries;
-    for (const e of list) {
-      const target = this.mode === 'wide' ? (e.dock === 'bottom' ? this.bottomExtra : this.rightBody) : this.sheetBody;
+    this.syncWindows();
+    const active = document.activeElement as HTMLElement | null;
+    const seen = new Set<TabId>();
+    for (const e of orderEntries(this.entries)) {
+      const w = this.windowOf(e.tab);
+      const target = w ? w.body : this.mode === 'wide' ? (e.dock === 'bottom' ? this.bottomExtra : this.rightBody) : this.sheetBody;
       if (e.el.parentElement !== target || target.lastElementChild !== e.el) target.append(e.el);
+      const u = e.el.querySelector(':scope > .sec-h > .undock') as HTMLElement | null;
+      if (u) u.hidden = seen.has(e.tab);
+      seen.add(e.tab);
     }
+    // Moving a node drops its focus: give it back (typing is never interrupted).
+    if (active && active !== document.activeElement && active.isConnected && !active.closest('[hidden]')) active.focus({ preventScroll: true });
   }
 
   private apply(): void {
@@ -299,9 +444,18 @@ export class Layout {
     r.dataset.sheetCustom = String(this.mode === 'sheet' && this.sheetPx !== null);
     document.documentElement.dataset.mode = this.mode;
     const tabbed = this.mode !== 'wide';
-    for (const e of this.entries) e.el.hidden = tabbed && e.tab !== this.tab;
+    // The column never shows a floating tab: pick the first docked one (none docked: the column is a rail).
+    if (this.isFloating(this.tab)) this.tab = TAB_IDS.find((t) => !this.isFloating(t)) ?? this.tab;
+    const allFloat = TAB_IDS.every((t) => this.isFloating(t));
+    r.dataset.float = String(this.floatMode() !== null);
+    r.dataset.allFloating = String(allFloat);
+    if (allFloat) r.dataset[this.mode === 'wide' ? 'rightCollapsed' : 'sideCollapsed'] = 'true';
+    for (const e of this.entries) e.el.hidden = tabbed && !this.isFloating(e.tab) && e.tab !== this.tab;
     for (const [id, b] of this.tabButtons) {
-      const on = id === this.tab && (this.mode === 'sheet' ? this.sheetState !== 'peek' : this.mode === 'side' ? !this.collapsed.side : !this.collapsed.right);
+      const fl = this.isFloating(id);
+      b.classList.toggle('floating', fl);
+      b.title = fl ? 'Floating window: click to bring it to front, double-click to dock it back' : '';
+      const on = !fl && id === this.tab && (this.mode === 'sheet' ? this.sheetState !== 'peek' : this.mode === 'side' ? !this.collapsed.side : !this.collapsed.right);
       b.setAttribute('aria-selected', String(id === this.tab));
       b.classList.toggle('active', on);
       b.tabIndex = id === this.tab ? 0 : -1;
@@ -316,7 +470,7 @@ export class Layout {
       b.setAttribute('aria-expanded', String(!c));
     }
     const st = this.tabRow.querySelector('.side-toggle') as HTMLButtonElement;
-    const hid = this.mode === 'wide' ? this.collapsed.right : this.collapsed.side;
+    const hid = (this.mode === 'wide' ? this.collapsed.right : this.collapsed.side) || allFloat;
     st.textContent = hid ? '‹' : '›';
     st.ariaLabel = hid ? 'Show panels' : 'Hide panels';
     st.setAttribute('aria-expanded', String(!hid));
