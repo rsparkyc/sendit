@@ -379,6 +379,54 @@ test.describe('tablet landscape: a pop-out tap is never lost', () => {
   const button = (page: Page, tab: string) => page.getByRole('button', { name: `Pop out ${tab} into a floating window` });
   const log = (page: Page) => page.evaluate(() => JSON.stringify((window as any).sendit.layout.undockLog));
 
+  const cdpTap = async (page: Page, x: number, y: number) => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+  };
+  const centre = async (page: Page, tab: string) => { const b = (await button(page, tab).boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+
+  test('a touch tap whose click the browser drops still pops out, exactly once', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    await page.getByRole('tab', { name: 'Events' }).tap();
+    // Simulate the browser not sending the click (as seen on CI): a capture listener on window, ahead of the app's.
+    await page.evaluate(() => {
+      (window as any).__dropped = 0;
+      window.addEventListener('click', (e) => { (window as any).__dropped++; e.stopImmediatePropagation(); e.preventDefault(); }, true);
+    });
+    const c = await centre(page, 'Events');
+    await cdpTap(page, c.x, c.y);
+    await expect(win(page, 'events'), await log(page)).toBeVisible({ timeout: 3000 });
+    await page.waitForTimeout(600);
+    expect(await page.evaluate(() => (window as any).sendit.layout.undockLog.filter((l: string) => / events via .*: floated/.test(l)).length)).toBe(1);
+    await expect(page.locator('.float-win')).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
+
+  test('a late click after a pop-out tap lands on the next button under the finger and does nothing', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    await page.getByRole('tab', { name: 'Events' }).tap();
+    // Hold the tap's own click back, as a slow browser would, then deliver a click where the finger was.
+    await page.evaluate(() => {
+      window.addEventListener('click', (e) => { if (e.isTrusted) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+    });
+    const c = await centre(page, 'Events');
+    await cdpTap(page, c.x, c.y);
+    await expect(win(page, 'events')).toBeVisible({ timeout: 3000 });
+    const under = await page.evaluate(({ x, y }) => {
+      const e = document.elementFromPoint(x, y) as HTMLElement;
+      const u = e.closest('.undock') as HTMLElement | null;
+      if (u) u.click(); // the late click, synthesised (not trusted, so the holding listener lets it through)
+      return u?.getAttribute('aria-label') ?? e.className;
+    }, c);
+    await page.waitForTimeout(600);
+    expect(await page.locator('.float-win').evaluateAll((ws) => ws.map((w) => (w as HTMLElement).dataset.tab)), `late click on ${under}; ${await log(page)}`).toEqual(['events']);
+    expect(errors).toEqual([]);
+  });
+
   test('popping out one tab does not pop out the next one, whose button lands under the finger', async ({ page }) => {
     const errors = watch(page);
     await fresh(page);

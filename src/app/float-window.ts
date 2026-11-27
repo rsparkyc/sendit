@@ -12,6 +12,7 @@
  * text keeps full opacity, with a blur behind it so it stays readable.
  */
 import { el } from './dom';
+import { onTap } from './tap';
 import { DEFAULT_OPACITY, FLOAT_MIN_H, FLOAT_MIN_W, OPACITY_MIN, clampRect, type FloatState } from './float-geom';
 
 export interface FloatHooks {
@@ -63,13 +64,13 @@ export class FloatWindow {
       this.render();
     });
     this.opacityIn.addEventListener('change', () => this.hooks.changed());
-    this.collapseBtn.onclick = () => {
+    onTap(this.collapseBtn, () => {
       this.state.collapsed = !this.state.collapsed;
       this.render();
       this.clamp();
       this.hooks.changed();
-    };
-    dock.onclick = () => this.hooks.dock();
+    });
+    onTap(dock, () => this.hooks.dock());
     this.wireDrag();
     grip.addEventListener('keydown', (e) => {
       const d = this.arrow(e);

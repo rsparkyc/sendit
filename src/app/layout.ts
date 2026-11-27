@@ -35,6 +35,7 @@
  * camera centres its focus there (so a dock or the sheet never hides it).
  */
 import { el } from './dom';
+import { onTap } from './tap';
 import { DEFAULT_OPACITY, defaultRect, emptyFloats, floatAllowed, parseFloats, type FloatModes } from './float-geom';
 import { FloatWindow } from './float-window';
 
@@ -158,7 +159,7 @@ export class Layout {
         el('span', { className: 'tab-label', textContent: t.label }),
         el('span', { className: 'tab-float', ariaHidden: 'true', textContent: '⧉' }));
       b.setAttribute('aria-controls', 'sheet-body');
-      b.onclick = () => this.pressTab(t.id);
+      onTap(b, () => this.pressTab(t.id));
       b.ondblclick = () => { if (this.isFloating(t.id)) this.dock(t.id); };
       b.onkeydown = (e) => {
         if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -172,12 +173,12 @@ export class Layout {
       this.tabBar.append(b);
     }
     const sideToggle = el('button', { className: 'btn side-toggle', type: 'button' });
-    sideToggle.onclick = () => {
+    onTap(sideToggle, () => {
       const k = this.mode === 'wide' ? 'right' : 'side';
       this.collapsed[k] = !this.collapsed[k];
       this.persist();
       this.apply();
-    };
+    });
     this.sheetBody.id = 'sheet-body';
     this.sheetBody.setAttribute('role', 'tabpanel');
     this.tabRow.append(this.tabBar, sideToggle);
@@ -230,9 +231,9 @@ export class Layout {
       const label = TABS.find((t) => t.id === tab)!.label;
       const u = el('button', { className: 'btn small undock', type: 'button', textContent: '⧉', title: `Pop out ${label} into a floating window` });
       u.setAttribute('aria-label', `Pop out ${label} into a floating window`);
-      u.onclick = () => this.undock(tab, 'click');
-      // Click only (not pointerup): acting on pointerup moves the next tab's button under the finger before the
-      // browser's click, which then lands on it and pops that tab out too (a ghost tap; e2e/floating.e2e.ts).
+      // Touch taps act on pointerup and swallow the click that may follow (tap.ts): the browser may drop that
+      // click, or deliver it late onto the next tab's button, which lands under the finger once this tab floats.
+      onTap(u, (e) => this.undock(tab, e.type));
       head.parentElement!.append(u);
     }
     this.entries.sort((a, b) => a.order - b.order);
