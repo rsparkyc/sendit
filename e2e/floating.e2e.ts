@@ -80,7 +80,7 @@ test.describe('desktop', () => {
     // Type into an Orbit-tab-independent input first: undocking keeps the panel's state (same nodes).
     const orbitPanel = page.locator('.panel.orbit');
     const orbitEl = await orbitPanel.elementHandle();
-    await page.getByRole('button', { name: 'Undock Orbit into a floating window' }).click();
+    await page.getByRole('button', { name: 'Pop out Orbit into a floating window' }).click();
     const w = win(page, 'orbit');
     await expect(w).toBeVisible();
     await expect(w).toHaveAttribute('role', 'region');
@@ -124,7 +124,7 @@ test.describe('desktop', () => {
     expect(await w.evaluate((e) => getComputedStyle(e).backgroundColor)).toMatch(/0\.4\)$/);
     expect(await w.locator('.fw-body').evaluate((e) => getComputedStyle(e).opacity)).toBe('1');
     // A second window, opaque, to look at.
-    await page.getByRole('button', { name: 'Undock Nodes into a floating window' }).click();
+    await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).click();
     await win(page, 'nodes').getByRole('slider').fill('100');
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${SHOTS}/desktop-two-windows.png` });
@@ -168,7 +168,7 @@ test.describe('desktop', () => {
     await fresh(page);
     const freeBefore = await page.evaluate(() => (window as any).sendit.layout.freeRect().right);
     for (const name of ['Nodes', 'Mission', 'Start', 'Vehicle', 'Events', 'Results', 'Orbit', 'View']) {
-      await page.getByRole('button', { name: `Undock ${name} into a floating window` }).click();
+      await page.getByRole('button', { name: `Pop out ${name} into a floating window` }).click();
     }
     await expect(page.locator('.float-win')).toHaveCount(8);
     expect((await box(page, '.dock.right')).width).toBeLessThan(80);
@@ -191,7 +191,7 @@ test.describe('desktop', () => {
     const t = await page.evaluate(() => { const p = (window as any).sendit.store.get().plan; return p.duration * 0.05; });
     const p = await page.evaluate((tm) => (window as any).sendit.screenAt(tm, true), t);
     expect(p, 'trajectory point on screen').not.toBeNull();
-    await page.getByRole('button', { name: 'Undock Nodes into a floating window' }).click();
+    await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).click();
     // Put the window's body over that trajectory point and make it short, so its content scrolls.
     await page.evaluate(({ x, y }) => {
       const L = (window as any).sendit.layout;
@@ -242,7 +242,7 @@ test.describe('desktop', () => {
   test('windows stay in the viewport when the browser window shrinks', async ({ page }) => {
     const errors = watch(page);
     await fresh(page);
-    await page.getByRole('button', { name: 'Undock Events into a floating window' }).click();
+    await page.getByRole('button', { name: 'Pop out Events into a floating window' }).click();
     await page.evaluate(() => {
       const w = [...(window as any).sendit.layout.windows.values()][0];
       Object.assign(w.state, { x: 1000, y: 500, w: 400, h: 380 });
@@ -271,9 +271,9 @@ test.describe('desktop', () => {
     await page.evaluate(() => (window as any).sendit.editor.addNode(3000, { kind: 'orbital', body: 'earth' }, [100, 0, 0]));
     await settled(page);
     await page.evaluate(() => (window as any).sendit.store.set({ selectedNode: null }));
-    await page.getByRole('button', { name: 'Undock Nodes into a floating window' }).click();
+    await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).click();
     await win(page, 'nodes').getByRole('button', { name: 'Collapse the Nodes window' }).click();
-    await page.getByRole('button', { name: 'Undock Orbit into a floating window' }).click();
+    await page.getByRole('button', { name: 'Pop out Orbit into a floating window' }).click();
     const z = async (t: string) => Number(await win(page, t).evaluate((e) => (e as HTMLElement).style.zIndex));
     expect(await z('orbit')).toBeGreaterThan(await z('nodes'));
     const scroll0 = await page.locator('.dock.right .dock-body').evaluate((e) => e.scrollTop);
@@ -302,7 +302,7 @@ test.describe('tablet landscape', () => {
     const tabs = await page.locator('.sheet [role="tab"] .tab-label').allTextContents();
     expect(tabs).toEqual(['Nodes', 'Mission', 'Start', 'Vehicle', 'Events', 'Results', 'Orbit', 'View']);
     await page.getByRole('tab', { name: 'Orbit' }).tap();
-    await page.getByRole('button', { name: 'Undock Orbit into a floating window' }).tap();
+    await page.getByRole('button', { name: 'Pop out Orbit into a floating window' }).tap();
     await expect(win(page, 'orbit')).toBeVisible();
     await expect(page.locator('.sheet-body .panel.orbit')).toHaveCount(0);
     // Touch drag by the title bar.
@@ -316,9 +316,9 @@ test.describe('tablet landscape', () => {
     const b1 = await box(page, '.float-win[data-tab="orbit"]');
     expect(b1.x - b0.x).toBeCloseTo(90, -1);
     expect(b1.y - b0.y).toBeCloseTo(60, -1);
-    await page.getByRole('button', { name: 'Undock Nodes into a floating window' }).tap().catch(async () => {
+    await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).tap().catch(async () => {
       await page.getByRole('tab', { name: 'Nodes' }).tap();
-      await page.getByRole('button', { name: 'Undock Nodes into a floating window' }).tap();
+      await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).tap();
     });
     await win(page, 'nodes').getByRole('slider').fill('55');
     await page.waitForTimeout(300);

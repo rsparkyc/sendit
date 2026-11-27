@@ -76,10 +76,19 @@ const fmtKg = fmtMass;
 function numInput(title: string, step: string, onCommit: (v: number) => void, cls = ''): HTMLInputElement {
   const i = el('input', { type: 'text', title, className: `num ${cls}`, inputMode: 'decimal', enterKeyHint: 'done', spellcheck: false, autocomplete: 'off' });
   i.dataset.step = step;
+  // Enter commits and blurs, and the blur fires `change` again with whatever the commit left in the field (a
+  // clamped value, say): committing that a second time would clear the commit's note ("kept within ..."). So a
+  // value just committed is not committed again until the field is focused anew.
+  let committed: string | null = null;
   const commit = () => {
+    if (i.value === committed) return;
     const v = parseDecimal(i.value);
-    if (i.value.trim() !== '' && Number.isFinite(v)) onCommit(v);
+    if (i.value.trim() !== '' && Number.isFinite(v)) {
+      onCommit(v);
+      committed = i.value;
+    }
   };
+  i.addEventListener('focus', () => (committed = null));
   i.addEventListener('change', commit);
   i.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {

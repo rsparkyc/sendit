@@ -101,11 +101,11 @@ test.describe('desktop', () => {
       await pro.getByRole('button', { name: 'Prograde: +10 m/s', exact: true }).click();
     }
     expect(await dv()).toBeCloseTo(-550, 9);
-    await page.getByRole('button', { name: /^Undo/ }).click();
+    await page.getByRole('button', { name: /^Undo\b/ }).click();
     expect(await dv()).toBeCloseTo(-600, 6);
-    await page.getByRole('button', { name: /^Undo/ }).click();
+    await page.getByRole('button', { name: /^Undo\b/ }).click();
     expect(await dv()).toBeCloseTo(600, 6);
-    await page.getByRole('button', { name: /^Redo/ }).click();
+    await page.getByRole('button', { name: /^Redo\b/ }).click();
     expect(await dv()).toBeCloseTo(-600, 6);
 
     // Delete from the list row, then undo with Ctrl+Z (the canvas has focus, not a text field).
@@ -129,12 +129,12 @@ test.describe('desktop', () => {
     await page.evaluate(() => (window as any).sendit.store.set({ selectedNode: 0 }));
     await page.getByRole('button', { name: /^Delete this node/ }).click();
     expect(await nodeCount(page)).toBe(0);
-    await page.getByRole('button', { name: /^Undo/ }).click();
+    await page.getByRole('button', { name: /^Undo\b/ }).click();
     await page.evaluate(() => (window as any).sendit.store.set({ selectedNode: 0 }));
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await page.keyboard.press('Delete');
     expect(await nodeCount(page)).toBe(0);
-    await page.getByRole('button', { name: /^Undo/ }).click();
+    await page.getByRole('button', { name: /^Undo\b/ }).click();
     expect(await nodeCount(page)).toBe(1);
 
     // Disable and Enable look alike and sit in the same place on the row.
@@ -147,9 +147,9 @@ test.describe('desktop', () => {
     await page.locator('.panel.nodes').screenshot({ path: `${SHOTS}/4-disabled-1280.png` });
     await en.click();
     expect(await nodeCount(page)).toBe(1);
-    await page.getByRole('button', { name: /^Undo/ }).click(); // undo enable
+    await page.getByRole('button', { name: /^Undo\b/ }).click(); // undo enable
     expect(await nodeCount(page)).toBe(0);
-    await page.getByRole('button', { name: /^Undo/ }).click(); // undo disable
+    await page.getByRole('button', { name: /^Undo\b/ }).click(); // undo disable
     expect(await nodeCount(page)).toBe(1);
     expect(await page.evaluate(() => (window as any).sendit.store.get().parked.length)).toBe(0);
     expect(errors).toEqual([]);
@@ -182,7 +182,7 @@ test.describe('desktop', () => {
     // N adds there.
     await page.keyboard.press('n');
     expect(await nodeCount(page)).toBe(2);
-    await page.getByRole('button', { name: /^Undo/ }).click();
+    await page.getByRole('button', { name: /^Undo\b/ }).click();
     expect(await nodeCount(page)).toBe(1);
 
     // Double click on another trajectory point: the spacecraft is focused at that time, still no new node.
@@ -359,7 +359,7 @@ test.describe('phone', () => {
     await del.tap();
     expect(await nodeCount(page)).toBe(0);
     await page.screenshot({ path: `${SHOTS}/p2-deleted-390.png` });
-    const undo = page.getByRole('button', { name: /^Undo/ });
+    const undo = page.getByRole('button', { name: /^Undo\b/ });
     await undo.scrollIntoViewIfNeeded();
     await undo.tap();
     expect(await nodeCount(page)).toBe(1);

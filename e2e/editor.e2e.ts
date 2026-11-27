@@ -124,14 +124,31 @@ test('launch from a site: inclination follows azimuth, range safety is enforced'
   await settled(page);
   expect(parseFloat((await inc.textContent())!)).toBeCloseTo(51.6, 1);
   await page.screenshot({ path: `${SHOTS}/1-launch-inclination.png` });
-  // Outside the corridor: plan validation (mission layer) refuses the launch, the editor says so and does not fly it.
+  // Typed outside the corridor: the editor keeps the nearest limit and says so; nothing is refused.
+  const azField = page.locator('input[title^="Inertial launch azimuth"]');
   await enter(page, 'input[title^="Inertial launch azimuth"]', '200');
-  await expect(page.locator('.launch-box .error')).toContainText('outside');
+  await expect(page.locator('section.start > .sec-body > .error')).toContainText('Azimuth kept within');
+  expect(await page.locator('section.start .error').allTextContents(), 'no refusal').not.toContainEqual(expect.stringContaining('outside'));
+  const kept = await page.evaluate(() => (window as any).sendit.store.get().plan.start.params[1] as number);
+  expect(kept).toBeLessThan(200);
+  expect(kept).toBeGreaterThan(90);
+  await expect(azField).toHaveValue(String(+kept.toFixed(4)));
+  await settled(page);
+  expect(parseFloat((await inc.textContent())!)).toBeGreaterThan(28.4); // inclination still follows the (kept) azimuth
+  // A plan that arrives with an out-of-corridor azimuth (a stored or shared plan, not typed): plan validation
+  // (mission layer) refuses the launch, the editor says so, does not fly it and does not change it silently.
+  await page.evaluate(() => {
+    const w = (window as any).sendit;
+    const plan = structuredClone(w.store.get().plan);
+    plan.start.params[1] = 200;
+    w.store.set({ plan });
+  });
+  await expect(page.locator('.launch-box .error', { hasText: 'outside' })).toBeVisible();
   const flown = await page.evaluate(() => {
     const s = (window as any).sendit.store.get();
-    return { replayIsCurrent: s.replay?.plan === s.plan, status: s.replayStatus };
+    return { replayIsCurrent: s.replay?.plan === s.plan, status: s.replayStatus, az: s.plan.start.params[1] };
   });
-  expect(flown).toEqual({ replayIsCurrent: false, status: 'idle' });
+  expect(flown).toEqual({ replayIsCurrent: false, status: 'idle', az: 200 });
   await page.screenshot({ path: `${SHOTS}/1b-range-safety.png` });
 });
 

@@ -228,8 +228,8 @@ export class Layout {
     // Undock: shown on the first panel of each tab (place()); it floats the whole tab.
     if (head) {
       const label = TABS.find((t) => t.id === tab)!.label;
-      const u = el('button', { className: 'btn small undock', type: 'button', textContent: '⧉', title: `Undock ${label} into a floating window` });
-      u.setAttribute('aria-label', `Undock ${label} into a floating window`);
+      const u = el('button', { className: 'btn small undock', type: 'button', textContent: '⧉', title: `Pop out ${label} into a floating window` });
+      u.setAttribute('aria-label', `Pop out ${label} into a floating window`);
       u.onclick = () => this.undock(tab);
       head.parentElement!.append(u);
     }
