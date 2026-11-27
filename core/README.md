@@ -36,10 +36,10 @@ composition with Kahan-compensated q and v, the generalised Stormer-Verlet
 harmonic pair forces with their reactions, the stage-time construction
 `(t0 + n h) + c_i h`, and `exportState`/`importState`. The proof would be the
 checkpoint asset's bytes (`src/physics/data/checkpoints-1950-2100.bin`) and the
-chunk coefficients of chunks -3..2, compared bit for bit. Also not ported:
-the mission layer (plan, ascent, events, replay, objectives), so the pinned
-mission replays (`src/fixtures/model2-replay.ts`, `staged-replay.ts`) are not
-yet reproduced.
+chunk coefficients of chunks -3..2, compared bit for bit. (Phase one's status; the integrator, the chunk builder, the plan codec,
+launch, ascent, events and replay have since been ported, see the layer
+sections below, and the pinned mission replays are reproduced. Still not
+ported: objectives, conformance, scoring and the campaign rules.)
 
 ## Running
 
@@ -107,6 +107,135 @@ line, the inputs (in hex) and the first differing values.
   boundary times include -2C - h/7), and a record count was off. No arithmetic
   mismatch had to be tracked down in the port itself: transcribing each
   expression with its parentheses was enough.
+
+### Layer one of phase two (n-body integrator, chunk builder)
+
+Proven natively and as WebAssembly (scalar and SIMD128), zero mismatches:
+the integrator over nine configurations (60,780 values: every step's state
+with its compensation terms and the total acceleration; Newtonian, leapfrog,
+zonal backward, tesseral/Jn/J4 terms, with and without 1PN, resumed from a
+checkpoint in both directions, and 64-day steps), and the chunks
+(5,435,339 values: 16 chunks built from the checkpoint asset in shuffled
+order, chunks -4..3 built lazily from the epoch, checkpoints -4..4 against
+the asset). Mutation check (`python3 scripts/mutation-check.py nbody.rs
+chunk.rs`): 9 of 14 mutants caught (Kahan q and v updates, kick
+coefficient order, the explicit 1PN kick, the PN iteration count, Householder
+vtv order, reciprocal back substitution, the fit's dot-product order); four
+are equivalent (reversed stage order of a symmetric scheme, exact halving and
+doubling) and one is not observable (the implicit half-kick's argument to the
+1PN term); the script gives the reasons. core/data is regenerated and diffed
+by scripts/test.sh.
+
+### Layer two: Earth orientation and launch states (`src/mission/launch.rs`)
+
+Ported: earth-orientation.ts (bodyToIcrf, poleAt, spinRate,
+geodeticToBodyFixed, siteIcrf with EARTH_ROTATION) and the replay path of
+launch.ts (azimuthAllowed, siteFrame, launchPlane, launchGeometry,
+launchState in j2-mean / two-body / default modes with its refusals,
+directInjectionState). The planning helpers (Math.atan2, Math.asin) are not
+ported. Earth's barycentric state is a callback (`earth_state(t, out)`); the
+vectors (core/ts/export-launch.vec.ts) record what a fake ephemeris returned
+and the time it was asked for, since the Chebyshev evaluation is proven on its
+own. 298,740 values over every site x 29 azimuths (corridor limits, one ulp
+and 1e-9 deg outside, wrapped by +-360, NaN) x parking altitudes (limits, 0,
+-0, negative, NaN) x epochs 1949-2101, 10,500 dense valid launches and 20,000
+geodetic points: 0 mismatches natively, scalar and SIMD wasm. Mutation check
+(`python3 scripts/mutation-check.py launch.rs geodetic "earth pole" "site frame" "pad velocity"`):
+10 of 12 caught; `e + geo` reordered is equivalent (commutative), and the
+j2-mean radius term `(eps / 6) s2c2u` reassociated is practically not
+observable (absorbed by `1 + x`, ~2e-4 chance per launch; the same change in
+the radial speed is caught). The bench binary has a `mission` mode so this
+code is in the native no-FMA scan.
+
+### Layer two: the analytic ascent model (`src/mission/ascent.rs`)
+
+Ported: ascent.ts computeAscent and computeDirectAscent (gravity turn with
+level hold, midpoint steps, kick bisection, staging, impulsive
+circularisation, per-stage accounting with the ascent charged in the upper
+stage's propellant, refusals with their messages, and the errors exactLn /
+exactExp throw), canShutDown, canRestart, massAbove. The vehicle catalogue is
+data (core/data/mission-data.json, generated). direct-planning.ts is not on
+the replay path (planning helpers only) and is not ported. Vectors
+(core/ts/export-ascent.vec.ts): every catalogue vehicle and the solid
+Minotaur V, flag variants, hot / weak / single-stage stacks and 400 random
+stacks x every site x azimuths x parking altitudes / C3 and injection
+altitude grids, the Moon's airless constants, synthetic geometries; every
+refusal path occurs. 52,780 values, 0 mismatches natively, scalar and SIMD
+wasm. Mutation check (`python3 scripts/mutation-check.py ascent.rs`): 10 of
+12 caught; the two left are exact rescalings by 0.5 (equivalent, argued in
+the script). Native: computeAscent (Falcon 9, 250 km) 3.3 ms,
+computeDirectAscent 3.0 ms (`cargo run --release --bin bench mission`).
+
+### Layer two: events and replay (`src/mission/events.rs`, `src/mission/replay.rs`)
+
+Ported: events.ts (EventFinder: node sampling, extremum and threshold
+bisection, half-open brackets, event order, terminal impact / atmosphere)
+and replay.ts (validation, version check, state / parking / vehicle /
+direct starts, ascent issues, staged propagation with separations, burn
+accounting, stage reports, the abort-free Stop outcomes impact, atmosphere,
+step-limit and event-limit, physics-error with the JavaScript message,
+finish() and the digest). The finder reads body states inside the step
+through a new `StepView::body_state` accessor. Not ported: the
+`resolveLaunch` option (a TypeScript callback; replay without it) and the
+abort hooks (`signal`, `shouldStop`); `on_start` / `on_step` observers are.
+
+Vectors (core/ts/export-replay.vec.ts, on the real ephemeris with the
+shipped checkpoint asset; the Rust builds its chunks from the same asset):
+the pinned model-2 and staged fixtures (with the sandbox sphere list the app
+tests use, recorded as input), all 77 campaign reference plans with their
+mission options, perturbed Earth-Moon variants (burns shifted 60 s, the
+first burn halved, a retrograde deorbit burn, with and without
+stopOnAtmosphere, a watched-body list with spheres, step and event budgets,
+separations moved, version mismatch with and without allowVersionMismatch,
+a bad sphere, an unknown body), and format-1 state starts (LEO with inertial
+and orbital burns, a degenerate orbital frame: physics-error, starts inside
+the Earth and inside its atmosphere). Outcomes covered: completed,
+atmosphere, impact, event-limit, step-limit, invalid-plan,
+version-mismatch, physics-error. Compared: outcome, reason, digest, every
+event (kind, body, t, distance, altitude, speed, relative state, mass,
+sphere), burn and stage reports, launch insertion, ascent totals, final
+state, steps, and dense-output samples seen by on_step. **243 replays,
+700,573 values, 0 mismatches natively, scalar and SIMD wasm. The pinned
+digests `4ca023ac13053da6` (model 2) and `e0410b5de464b677` (staged) are
+reproduced.**
+
+Mutation check (`python3 scripts/mutation-check.py events.rs replay.rs`):
+6 of 11 caught (speed sum order, bisection capped at 30, burn accounting
+window, burn delta-v as a difference of logs, separation mass, the staged
+digest). The 5 left are not observable by construction: every root is
+bisected to float resolution, so the result does not depend on how the
+midpoint is formed, which nodes bracketed it, or a cap above the ~45
+iterations a step needs; the bracket and same-time ordering conventions only
+matter for exact zeros and simultaneous events (reasons in the script).
+
+Replay timings (chunks warm, median of 5, Apple M-series):
+
+| Plan (steps) | TypeScript (V8), load 3.5 | Rust native, load 5.0 |
+|---|---|---|
+| computeAscent, Falcon 9 to 250 km | 5.1 ms | 3.4 ms |
+| model-2 fixture, no spheres (323) | 30.3 ms | 15.2 ms |
+| staged fixture, no spheres (53) | 9.7 ms | 5.3 ms |
+| lunar free return, Cape (106) | 14.8 ms | 7.9 ms |
+| Venus flyby, Cape (294) | 38.9 ms | 18.0 ms |
+
+(`BENCH=1 vitest run --config core/ts/vitest.config.ts core/ts/bench-replay.vec.ts`
+writes the TypeScript numbers to fixtures/generated/bench-ts.txt;
+`cargo run --release --bin bench mission` prints the Rust ones.) The whole
+replay section takes 9.4 s native and 12.0 s as wasm in Node.
+
+## TypeScript behaviours reproduced deliberately
+
+- nbody.ts `fieldOf`: a zonal term whose `tesseral` list is present but
+  empty (or holds only zero terms) and which has no `jn` builds neither a
+  zonal series nor a full field, and the TypeScript then fails when the term
+  is used. The Rust panics at the same point (`field_of` in src/nbody.rs)
+  rather than inventing a fallback; no production term has that shape.
+- The Earth rotation model (src/physics/earth-rotation.ts) carries no
+  `ra0`/`ra1`/`dec0`/`dec1`; the TypeScript reads the pole from the IAU Earth
+  model where needed. The Rust takes those four numbers from the generated
+  `earthRotation` record of core/data/mission-data.json (written by
+  ts/gen-data.vec.ts from the TypeScript's own tables), never from a
+  hand-copied constant.
 
 ## Benchmarks (Apple M-series, aarch64, Node 22.22.3)
 

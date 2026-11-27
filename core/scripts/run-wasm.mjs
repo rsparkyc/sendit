@@ -8,7 +8,7 @@
 // Default module: core/target/wasm/wasm32-unknown-unknown/release/sendit_core.wasm
 // (build with core/scripts/build.sh). --simd enables the f64x2 positions() path
 // (requires a module built with +simd128).
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const core = fileURLToPath(new URL('..', import.meta.url));
@@ -67,7 +67,19 @@ if (mode === 'parity') {
   const sections = [
     [0, 'dmath.txt'], [1, 'dop853.txt'], [2, 'gravity.txt'], [3, 'orientation.txt'], [4, 'ephem.txt'],
     [5, null], [6, 'deriv.txt'], [7, 'prop.txt'], [8, 'corrector.txt'], [9, 'deriv-rel.txt'],
+    [10, 'nbody.txt'], [11, 'chunks.txt'], [12, 'plan.txt'], [13, 'launch.txt'], [14, 'ascent.txt'], [15, 'replay.txt'],
   ];
+  // Section 11 reads the checkpoint asset and the chunk bins through add_file.
+  const addFile = (name, b) => {
+    const n = new TextEncoder().encode(name);
+    const np = put(n);
+    const p = put(b);
+    X.add_file(np, n.length, p, b.length);
+    X.dealloc(np, n.length);
+    X.dealloc(p, b.length);
+  };
+  addFile('checkpoints-1950-2100.bin', readFileSync(core + '../src/physics/data/checkpoints-1950-2100.bin'));
+  for (const f of readdirSync(fx)) if (/^chunkA?_-?\d+\.bin$/.test(f)) addFile(f, readFileSync(fx + f));
   let bad = 0;
   for (const [id, file] of sections) {
     const b = file ? readFileSync(fx + file) : new Uint8Array(1);

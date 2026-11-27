@@ -4,6 +4,11 @@
 # From the repository root: sh core/scripts/test.sh
 set -eu
 cd "$(dirname "$0")/.."
+# Data drift: core/data (embedded by the crate) must equal a fresh generation
+# from the TypeScript and JSON sources.
+(cd .. && node_modules/.bin/vitest run --config core/ts/vitest.config.ts core/ts/gen-data.vec.ts >/dev/null)
+git diff --exit-code -- data
+test -z "$(git status --porcelain -- data)" || { git status --porcelain -- data; echo "core/data: untracked generated files"; exit 1; }
 sh scripts/check-no-fma.sh
 cargo test -j 4 --release
 sh scripts/build.sh
