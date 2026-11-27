@@ -1,7 +1,8 @@
 /** Surface-fixed frames with the real rotation models. */
 import { describe, expect, it } from 'vitest';
-import { computeFrame, frameKey, newFrameState, parseFrameKey, toFrame, type BodySnapshot } from './frames';
-import { bodyOrientation } from './orientation';
+import { computeFrame, ECLIPTIC_AXES, frameKey, newFrameState, parseFrameKey, toFrame, type BodySnapshot } from './frames';
+import { OrbitCamera } from './camera';
+import { bodyOrientation, displayPole } from './orientation';
 import { BODIES, bodyIndex } from './physics';
 
 const E = bodyIndex('earth');
@@ -62,5 +63,70 @@ describe('surface frame', () => {
     expect(frameKey({ kind: 'surface', center: E }, (i) => ids[i])).toBe('fix:earth');
     expect(parseFrameKey('fix:mars', bodyIndex)).toEqual({ kind: 'surface', center: bodyIndex('mars') });
     expect(bodyOrientation(bodyIndex('mars'), t0, new Float64Array(9))).toBeCloseTo((350.89198226 * Math.PI) / 180 / 86400, 9);
+  });
+});
+
+describe('body-centred inertial frame: north up', () => {
+  const epoch = 8.5e8; // plan epoch, 2026
+  const pole = (b: number, out: Float64Array) => displayPole(b, epoch, out);
+  /** Screen up in ICRF: the camera's up is frame +z (OrbitCamera elevation is about frame z), mapped back through the axes. */
+  function screenUp(center: number, t: number): number[] {
+    const fs = computeFrame({ kind: 'inertial', center }, { ...snap(t), pole }, newFrameState());
+    const a = fs.axes;
+    const cam = new OrbitCamera();
+    cam.update(0, [0, 0, 0], 1);
+    // Default view: the camera's up projected on the view plane points to +z_frame (it never rolls).
+    const d = [cam.target[0] - cam.position[0], cam.target[1] - cam.position[1], cam.target[2] - cam.position[2]];
+    const dl = Math.hypot(...d);
+    const u = [0, 0, 1].map((z, k) => z - (d[2] / dl) * (d[k] / dl));
+    const ul = Math.hypot(...u);
+    expect(u[2] / ul).toBeGreaterThan(0.8);
+    return [a[6], a[7], a[8]];
+  }
+
+  it("Earth-centred: frame z (screen up) is Earth's north pole, fixed during playback", () => {
+    const M = new Float64Array(9);
+    bodyOrientation(E, epoch, M);
+    for (const t of [epoch, epoch + 30 * 86400]) {
+      const up = screenUp(E, t);
+      expect(up[0]).toBeCloseTo(M[2], 12);
+      expect(up[1]).toBeCloseTo(M[5], 12);
+      expect(up[2]).toBeCloseTo(M[8], 12);
+    }
+    // The pole points near ICRF +z (not the ecliptic pole, 23.4 deg away).
+    expect(M[8]).toBeGreaterThan(0.9999);
+  });
+
+  it('axes are orthonormal and right-handed for every body with a pole', () => {
+    for (let b = 0; b < n; b++) {
+      const fs = computeFrame({ kind: 'inertial', center: b }, { ...snap(epoch), pole }, newFrameState());
+      const a = fs.axes;
+      const det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) + a[2] * (a[3] * a[7] - a[4] * a[6]);
+      expect(det).toBeCloseTo(1, 12);
+      for (let r = 0; r < 3; r++) expect(Math.hypot(a[3 * r], a[3 * r + 1], a[3 * r + 2])).toBeCloseTo(1, 12);
+    }
+  });
+
+  it('Sun-centred and barycentric frames keep ecliptic north up', () => {
+    const S = bodyIndex('sun');
+    expect(displayPole(S, epoch, new Float64Array(3))).toBe(false);
+    for (const spec of [{ kind: 'inertial', center: S }, { kind: 'barycentric' }] as const) {
+      const fs = computeFrame(spec, { ...snap(epoch), pole }, newFrameState());
+      for (let k = 0; k < 9; k++) expect(fs.axes[k]).toBeCloseTo(ECLIPTIC_AXES[k], 15);
+    }
+  });
+
+  it('retrograde and extreme poles are used as given by the IAU', () => {
+    const eclZ = (id: string) => {
+      const p = new Float64Array(3);
+      expect(displayPole(bodyIndex(id), epoch, p)).toBe(true);
+      return ECLIPTIC_AXES[6] * p[0] + ECLIPTIC_AXES[7] * p[1] + ECLIPTIC_AXES[8] * p[2];
+    };
+    // IAU planetary "north" is the pole on the north side of the invariable plane: Venus (spins retrograde) is ecliptic-north up,
+    // Uranus's pole lies almost in the ecliptic (about 8 deg north). Pluto uses the right-hand (positive) pole, about 23 deg south of the ecliptic.
+    expect(eclZ('venus')).toBeGreaterThan(0.99);
+    expect(eclZ('uranus')).toBeGreaterThan(0.1);
+    expect(eclZ('uranus')).toBeLessThan(0.2);
+    expect(eclZ('pluto')).toBeLessThan(-0.3);
   });
 });

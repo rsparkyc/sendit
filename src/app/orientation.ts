@@ -26,3 +26,27 @@ export const hasSurfaceFrame = (body: number): boolean => {
   const id = BODIES[body]?.id;
   return id === 'earth' || (!!id && !!IAU_ROTATION[id]);
 };
+
+const POLE_CACHE = new Map<string, Float64Array | null>();
+const POLE_M = new Float64Array(9);
+
+/**
+ * North pole (unit, ICRF) used as screen "up" in a body-centred inertial frame,
+ * taken at a fixed epoch (the plan epoch) so the view does not drift during
+ * playback; the pole moves negligibly over a mission. The IAU north pole as
+ * given (Venus, Uranus and Pluto point to the ecliptic south). False for the
+ * Sun (Sun-centred views keep ecliptic north) and bodies without a rotation model.
+ */
+export function displayPole(body: number, epoch: number, out: Float64Array): boolean {
+  const key = `${body}:${epoch}`;
+  let p = POLE_CACHE.get(key);
+  if (p === undefined) {
+    p = null;
+    if (BODIES[body]?.id !== 'sun' && Number.isFinite(bodyOrientation(body, epoch, POLE_M))) p = Float64Array.of(POLE_M[2], POLE_M[5], POLE_M[8]);
+    if (POLE_CACHE.size > 256) POLE_CACHE.clear();
+    POLE_CACHE.set(key, p);
+  }
+  if (!p) return false;
+  out.set(p);
+  return true;
+}

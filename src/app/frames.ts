@@ -9,12 +9,17 @@
  * (in a rotating frame the picture holds still while the axes turn).
  *
  *  - barycentric: origin at the barycentre of the listed bodies, ecliptic J2000 axes.
- *  - inertial:    origin at one body, ecliptic J2000 axes (non-rotating).
+ *  - inertial:    origin at one body, non-rotating; z along the body's north
+ *                 rotation pole (from BodySnapshot.pole, taken at a fixed
+ *                 epoch so the axes do not turn), x along the ascending node of
+ *                 the body's equator on the ecliptic, y = z × x. Without a
+ *                 pole (no rotation model, or the Sun) the axes are ecliptic.
  *  - rotating:    origin at `center`; x toward `secondary`; z along the
  *                 secondary's orbital angular momentum about the centre; y = z × x.
  *
- * Inertial frames use ecliptic axes only so that "up" on screen is ecliptic
- * north; that is a fixed rotation and changes nothing physical.
+ * The axes of inertial frames only choose what is "up" on screen (frame z):
+ * ecliptic north for the barycentre and the Sun, the body's north pole for a
+ * body-centred frame. That is a fixed rotation and changes nothing physical.
  */
 
 export type FrameSpec =
@@ -64,9 +69,33 @@ export interface BodySnapshot {
   /** Time and orientation provider, needed only by surface frames. */
   readonly t?: number;
   readonly orient?: Orientation;
+  /**
+   * Display pole for body-centred inertial frames: writes the body's north
+   * pole (unit, ICRF) into out and returns true, or false to use ecliptic
+   * axes. Must not depend on the snapshot time, or the frame would turn.
+   */
+  readonly pole?: (body: number, out: Float64Array) => boolean;
 }
 
 const ORIENT_TMP = new Float64Array(9);
+const POLE_TMP = new Float64Array(3);
+
+/** Rows of pole-up axes: z = pole, x = ecliptic north × pole (the equator's ascending node on the ecliptic), y = z × x. False if degenerate. */
+export function poleAxes(p: ArrayLike<number>, out: Float64Array): boolean {
+  const n = ECLIPTIC_AXES;
+  const ez0 = n[6], ez1 = n[7], ez2 = n[8];
+  const pl = Math.hypot(p[0], p[1], p[2]);
+  if (!(pl > 0)) return false;
+  const z0 = p[0] / pl, z1 = p[1] / pl, z2 = p[2] / pl;
+  let x0 = ez1 * z2 - ez2 * z1, x1 = ez2 * z0 - ez0 * z2, x2 = ez0 * z1 - ez1 * z0;
+  const xl = Math.hypot(x0, x1, x2);
+  if (!(xl > 1e-9)) return false;
+  x0 /= xl; x1 /= xl; x2 /= xl;
+  out[0] = x0; out[1] = x1; out[2] = x2;
+  out[3] = z1 * x2 - z2 * x1; out[4] = z2 * x0 - z0 * x2; out[5] = z0 * x1 - z1 * x0;
+  out[6] = z0; out[7] = z1; out[8] = z2;
+  return true;
+}
 
 export function computeFrame(spec: FrameSpec, s: BodySnapshot, out: FrameState): FrameState {
   const { origin, originVel, axes, omega } = out;
@@ -96,7 +125,7 @@ export function computeFrame(spec: FrameSpec, s: BodySnapshot, out: FrameState):
     originVel[k] = s.vel[3 * c + k];
   }
   if (spec.kind === 'inertial') {
-    axes.set(ECLIPTIC_AXES);
+    if (!(s.pole && s.pole(c, POLE_TMP) && poleAxes(POLE_TMP, axes))) axes.set(ECLIPTIC_AXES);
     return out;
   }
   if (spec.kind === 'surface') {
