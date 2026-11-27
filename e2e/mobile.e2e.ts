@@ -176,11 +176,36 @@ test('planner by touch: compute, tap a cell, drag across the chart, nothing wide
   await pl.getByRole('button', { name: 'Compute porkchop' }).tap();
   await expect(pl.locator('.pl-status')).toContainText('transfers in', { timeout: 60_000 });
   const canvas = pl.locator('.pl-canvas');
-  await canvas.scrollIntoViewIfNeeded();
-  // A point on the chart that is not under the sticky header.
-  const box = (await canvas.boundingBox())!;
-  const pts = [0.3, 0.4, 0.5, 0.6].map((f) => ({ x: box.x + box.width * f, y: box.y + box.height * 0.5 }));
-  expect(await page.evaluate((ps) => ps.every((p) => document.elementFromPoint(p.x, p.y)?.classList.contains('pl-canvas')), pts), 'drag path on the chart').toBe(true);
+  // The drag path comes from where the chart actually is on screen, not from fixed fractions of its box: with
+  // Linux fonts the planner lays out taller and its sticky header or the sheet's edge covered the old points.
+  // Centre the chart in its scroll container, clip its rect to every scrolling ancestor and the viewport, then take
+  // the first horizontal line (from the middle outwards) on which every point hits the chart itself.
+  await canvas.evaluate((e) => e.scrollIntoView({ block: 'center', inline: 'nearest' }));
+  await page.waitForTimeout(100);
+  const path = await page.evaluate(() => {
+    const c = document.querySelector('.planner .pl-canvas') as HTMLElement;
+    const r = c.getBoundingClientRect();
+    let x0 = Math.max(r.left, 0), x1 = Math.min(r.right, innerWidth), y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, innerHeight);
+    const clips: string[] = [];
+    for (let e = c.parentElement; e; e = e.parentElement) {
+      const st = getComputedStyle(e);
+      if (!/(auto|scroll|hidden|clip)/.test(st.overflow + st.overflowX + st.overflowY)) continue;
+      const q = e.getBoundingClientRect();
+      x0 = Math.max(x0, q.left); x1 = Math.min(x1, q.right); y0 = Math.max(y0, q.top); y1 = Math.min(y1, q.bottom);
+      clips.push(`${e.className || e.tagName} ${Math.round(q.top)}..${Math.round(q.bottom)}`);
+    }
+    const fr = [0.3, 0.4, 0.5, 0.6];
+    const line = (y: number) => fr.map((f) => ({ x: x0 + (x1 - x0) * f, y }));
+    const onChart = (ps: { x: number; y: number }[]) => ps.every((p) => document.elementFromPoint(p.x, p.y) === c);
+    const mid = (y0 + y1) / 2;
+    for (let d = 0; d <= (y1 - y0) / 2 - 4; d += 6) {
+      for (const y of [mid + d, mid - d]) if (onChart(line(y))) return { pts: line(y), info: '' };
+    }
+    const hits = line(mid).map((p) => { const h = document.elementFromPoint(p.x, p.y); return h ? `${h.tagName}.${h.className}` : 'null'; });
+    return { pts: null, info: `canvas ${JSON.stringify(r)}; visible x ${Math.round(x0)}..${Math.round(x1)} y ${Math.round(y0)}..${Math.round(y1)}; clips [${clips.join('; ')}]; viewport ${innerWidth}x${innerHeight}; at the middle line: ${hits.join(', ')}` };
+  });
+  expect(path.pts, `drag path on the chart: ${path.info}`).not.toBeNull();
+  const pts = path.pts!;
   await page.touchscreen.tap(pts[1].x, pts[1].y);
   await expect(pl.locator('.pl-readout')).toContainText(/Selected transfer|No transfer/);
   await gesture(page, [pts]);
