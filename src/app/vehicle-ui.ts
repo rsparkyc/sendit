@@ -24,6 +24,7 @@ import { stageChip } from './palette';
 import { PARKING_BAND, VEHICLES, azimuthAllowed, catalogueStages, launchPlane, launchSite, planAscent, planErrors, vehicleStages, type AscentResult, type MissionPlan, type Spacecraft } from './mission-layer';
 import { launchOf, missionById, withLaunch, withLaunchRule } from './missions';
 import { BODY_DATA } from './physics';
+import { clampToIntervals, corridorIntervals, corridorLabel } from './launch-limits';
 import type { AppState } from './store';
 import { bodyRadius, distanceMode, fromSurface, onDistanceMode } from './units';
 const fromSurfaceKm = (m: number) => fromSurface(m, 'earth');
@@ -281,11 +282,13 @@ export class LaunchFeedback {
     // Chart sweeps (worker).
     const [lo, hi] = this.band();
     const n = 25;
-    this.request('alt', plan, Array.from({ length: n }, (_, i) => Math.round(lo + ((hi - lo) * i) / (n - 1))));
+    // While a chart is dragged the other chart keeps its curve (resampled on release): the worker would
+    // otherwise restart that sweep every frame and the chart would flicker empty.
+    if (this.dragging?.kind !== 'az') this.request('alt', plan, Array.from({ length: n }, (_, i) => Math.round(lo + ((hi - lo) * i) / (n - 1))));
     const site = launchSite(st.site);
     const [a0, a1] = this.azRange(site);
     const m = 37;
-    this.request('az', plan, Array.from({ length: m }, (_, i) => Math.round((a0 + ((a1 - a0) * i) / (m - 1)) * 100) / 100));
+    if (this.dragging?.kind !== 'alt') this.request('az', plan, Array.from({ length: m }, (_, i) => Math.round((a0 + ((a1 - a0) * i) / (m - 1)) * 100) / 100));
     this.draw('alt');
     this.draw('az');
   }
@@ -396,16 +399,14 @@ export class LaunchFeedback {
     const l = launchOf(this.ctx.store.get().plan);
     if (kind === 'az' && l) {
       const site = launchSite(l.site);
-      let run: number | null = null;
-      const steps = 120;
-      for (let i = 0; i <= steps; i++) {
-        const x = x0 + ((x1 - x0) * i) / steps;
-        const ok = azimuthAllowed(site, ((x % 360) + 360) % 360);
-        if (!ok && run === null) run = x;
-        if ((ok || i === steps) && run !== null) {
-          parts.push(`<rect class="out" x="${X(run).toFixed(1)}" y="${mt}" width="${(X(x) - X(run)).toFixed(1)}" height="${H - mt - mb}"><title>Outside ${esc(site.name)}'s range-safety corridor</title></rect>`);
-          run = null;
-        }
+      // Forbidden = the drawn range minus the corridor's intervals (exact edges, so the marker can sit on them).
+      const tip = `Outside ${esc(site.name)}'s launch corridor (${corridorLabel(site)}): not allowed`;
+      let from = x0;
+      for (const [a, b] of [...corridorIntervals(site, x0, x1), [Infinity, Infinity] as const]) {
+        const to = Math.min(a, x1);
+        if (to > from) parts.push(`<rect class="out" x="${X(from).toFixed(1)}" y="${mt}" width="${(X(to) - X(from)).toFixed(1)}" height="${H - mt - mb}" style="cursor:not-allowed"><title>${tip}</title></rect>`);
+        from = Math.max(from, b);
+        if (from >= x1) break;
       }
       for (let i = 0; i < 5; i++) {
         const x = x0 + ((x1 - x0) * (i + 0.5)) / 5;
@@ -458,6 +459,14 @@ export class LaunchFeedback {
     return p.ok ? `${xs}: ≈ ${fmtDv(interp(S, x))} left on the upper stage${this.dragging ? ' · release to set' : ''}` : `${xs}: cannot reach orbit (${esc(p.reason)})`;
   }
 
+  /**
+   * Chart input: press, drag (mouse, pen or touch), release. The value is clamped to what is allowed
+   * (azimuth: the site's corridor, where a drag that runs into the red stops at the edge on its side and a
+   * press inside the red snaps to the nearest edge; altitude: the parking band) and written to the plan
+   * live, at most once per animation frame, inside one gesture with a coalescing history key: the drag is
+   * one undo step, and the replay client flies only the newest plan (stale runs skipped or cancelled).
+   * A cancelled pointer (the browser took a touch for a scroll) restores the plan from before the press.
+   */
   private wireChart(box: HTMLElement, kind: 'alt' | 'az'): void {
     const valueAt = (clientX: number) => {
       const svg = box.querySelector('svg');
@@ -469,30 +478,66 @@ export class LaunchFeedback {
       const f = Math.max(0, Math.min(1, (u - ml) / (W - ml - mr)));
       return S.xs[0] + f * (S.xs.at(-1)! - S.xs[0]);
     };
+    /** Allowed chart value under clientX; `from`: this drag's previous (allowed) value. */
+    const allowedAt = (clientX: number, from?: number): number => {
+      const x = valueAt(clientX);
+      const l = launchOf(this.ctx.store.get().plan);
+      if (!Number.isFinite(x) || !l) return NaN;
+      if (kind === 'alt') {
+        const [lo, hi] = this.band();
+        return Math.max(lo, Math.min(hi, Math.round(x / 1000) * 1000));
+      }
+      const S = this.series.az;
+      const ivs = corridorIntervals(launchSite(l.site), S.xs[0] - 360, S.xs.at(-1)! + 360);
+      // Round to 0.1° first, then clamp: the limit itself is reached exactly.
+      return clampToIntervals(Math.round(x * 10) / 10, ivs, from);
+    };
+    const key = `launch-${kind}`;
+    let before: MissionPlan | null = null;
+    let frame = 0;
+    const commit = () => {
+      frame = 0;
+      const d = this.dragging;
+      const l = launchOf(this.ctx.store.get().plan);
+      if (d?.kind !== kind || !l || !Number.isFinite(d.x)) return;
+      if (kind === 'alt') { if (d.x !== l.altitudeM) this.ctx.editor.setLaunch({ ...l, altitudeM: d.x }, key); }
+      else {
+        const az = ((d.x % 360) + 360) % 360;
+        if (Math.abs(az - l.azimuthDeg) > 1e-9) this.ctx.editor.setLaunch({ ...l, azimuthDeg: az }, key);
+      }
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(commit); };
     box.style.touchAction = 'pan-y';
     box.addEventListener('pointerdown', (e) => {
-      if (!(e.target as Element).closest('svg')) return;
+      if (!(e.target as Element).closest('svg') || this.dragging) return;
       try { box.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
-      this.dragging = { kind, x: valueAt(e.clientX) };
+      before = this.ctx.store.get().plan;
+      this.ctx.editor.sealHistory();
+      this.ctx.editor.gesture(true);
+      this.dragging = { kind, x: allowedAt(e.clientX) };
       this.draw(kind);
+      schedule();
     });
     box.addEventListener('pointermove', (e) => {
-      if (this.dragging?.kind !== kind) return;
-      this.dragging.x = valueAt(e.clientX);
-      this.draw(kind);
-    });
-    const done = (commit: boolean) => {
       const d = this.dragging;
       if (d?.kind !== kind) return;
-      this.dragging = null;
-      const l = launchOf(this.ctx.store.get().plan);
-      if (commit && l && Number.isFinite(d.x)) {
-        if (kind === 'alt') {
-          const [lo, hi] = this.band();
-          this.ctx.editor.setLaunch({ ...l, altitudeM: Math.max(lo, Math.min(hi, Math.round(d.x / 1000) * 1000)) });
-        } else this.ctx.editor.setLaunch({ ...l, azimuthDeg: Math.round((((d.x % 360) + 360) % 360) * 10) / 10 });
-      }
+      const x = allowedAt(e.clientX, Number.isFinite(d.x) ? d.x : undefined);
+      if (x === d.x) return;
+      d.x = x;
       this.draw(kind);
+      schedule();
+    });
+    const done = (keep: boolean) => {
+      const d = this.dragging;
+      if (d?.kind !== kind) return;
+      if (frame) cancelAnimationFrame(frame);
+      if (keep) commit();
+      this.dragging = null;
+      this.ctx.editor.gesture(false);
+      this.ctx.editor.sealHistory();
+      if (!keep && this.ctx.store.get().plan !== before) this.ctx.editor.undo();
+      before = null;
+      this.update(); // the other chart resamples now that the value has settled
     };
     box.addEventListener('pointerup', () => done(true));
     box.addEventListener('pointercancel', () => done(false));
