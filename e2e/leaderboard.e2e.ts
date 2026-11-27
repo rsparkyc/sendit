@@ -24,7 +24,7 @@ const SHOTS = 'test-results/leaderboard';
 const ROOT = resolve(import.meta.dirname, '..');
 const OUT = resolve(import.meta.dirname, '.dist-node/leaderboard');
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'leaderboard flows run in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 test.describe.configure({ mode: 'serial' });
 
 type Handler = (method: string, url: string, headers: Record<string, string>, body: string | undefined) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
@@ -76,6 +76,7 @@ async function settled(page: Page): Promise<void> {
 async function solvedLunarFlyby(page: Page): Promise<void> {
   await page.goto(`${BASE}/`);
   await page.evaluate(() => localStorage.clear());
+  await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
   await page.goto(`${BASE}/`);
   await settled(page);
   await page.evaluate(() => {
@@ -102,11 +103,14 @@ test.describe('phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3, userAgent: devices['iPhone 13'].userAgent });
 
   test('touch only: lunar flyby planned, tuned, completed, submitted and found on the board', async ({ page }) => {
+    test.skip(test.info().project.name !== 'chromium', 'drives touch through CDP Input.dispatchTouchEvent (Chromium only); the WebKit touch flow is mobile.e2e.ts');
+
     const errors = watch(page);
     const h = harness.makeLeaderboard(checkpoints);
     await serve(page, h);
     await page.goto(`${BASE}/`);
     await page.evaluate(() => localStorage.clear());
+    await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
     await page.goto(`${BASE}/`);
     await settled(page);
     const t0 = Date.now();

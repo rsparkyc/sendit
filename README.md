@@ -315,7 +315,11 @@ pnpm typecheck
 pnpm dev         # Vite dev server
 pnpm build       # static site in dist/
 pnpm preview     # serve dist/ locally
+pnpm test:browsers  # Playwright: Chromium, WebKit, Firefox
 ```
+
+Which UI tests run on which engine, what Playwright's WebKit does not prove about iOS Safari, and a
+ten-minute manual script for real phones: [docs/mobile-testing.md](docs/mobile-testing.md).
 
 ## Hosting
 

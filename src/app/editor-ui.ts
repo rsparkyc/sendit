@@ -17,6 +17,7 @@ import { el, esc, fillBodySelect, formatMet, parseDuration, section, setText, se
 import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import type { Editor } from './editor';
 import { Tuner } from './tuner';
+import { parseDecimal } from './decimal';
 import { tooShort, objectiveBodies } from './status';
 import { bandFromCentre, bodyRadius, convertText, distanceMode, fromCentre, fromSurface, onDistanceMode } from './units';
 import { eventLabel, listEvents, type ListedEvent } from './events-view';
@@ -73,7 +74,7 @@ function numInput(title: string, step: string, onCommit: (v: number) => void, cl
   const i = el('input', { type: 'text', title, className: `num ${cls}`, inputMode: 'decimal', enterKeyHint: 'done', spellcheck: false, autocomplete: 'off' });
   i.dataset.step = step;
   const commit = () => {
-    const v = Number(i.value);
+    const v = parseDecimal(i.value);
     if (i.value.trim() !== '' && Number.isFinite(v)) onCommit(v);
   };
   i.addEventListener('change', commit);
@@ -643,7 +644,7 @@ export class NodesPanel {
       },
       nudge: (d) => { const i = sel(); if (i !== null) ctx.editor.nudgeDv(i, axis as 0 | 1 | 2, d); },
       commit: (text) => {
-        const v = Number(text);
+        const v = parseDecimal(text);
         const i = sel();
         if (text.trim() === '' || !Number.isFinite(v) || i === null) return 'Enter a number in m/s';
         const n = nodesOf(ctx.store.get().plan)[i]?.node;

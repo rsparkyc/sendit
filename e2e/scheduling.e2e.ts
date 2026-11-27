@@ -12,7 +12,7 @@ const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/scheduling';
 const YEAR = 365.25 * 86400;
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'timing flows run in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 test.describe.configure({ mode: 'serial' });
 
 const errors: string[] = [];
@@ -24,6 +24,7 @@ async function open(page: Page): Promise<void> {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(`${BASE}/`);
   await page.evaluate(() => localStorage.clear());
+  await page.waitForFunction(() => (window as any).sendit?.store.get().replay != null, null, { timeout: 120_000 }); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
   await page.goto(`${BASE}/`);
   await page.waitForFunction(() => {
     const s = (window as any).sendit?.store.get();

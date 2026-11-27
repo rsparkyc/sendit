@@ -18,7 +18,7 @@ import { expect, test, type Page } from '@playwright/test';
 const BASE = 'http://localhost:4173';
 const SHOTS = process.env.PLANET_SHOTS ?? 'test-results/planets';
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'rendering checks run in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 test.describe.configure({ mode: 'serial' });
 
 const errors: string[] = [];

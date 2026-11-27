@@ -12,7 +12,7 @@ import { solveGeo } from './geo';
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/editor';
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'editor flows run in Chromium (determinism is covered on all engines by determinism.e2e.ts)');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 test.describe.configure({ mode: 'serial' });
 
 interface Snapshot {
@@ -61,6 +61,7 @@ async function fresh(page: Page): Promise<void> {
   watch(page);
   await page.goto(`${BASE}/`);
   await page.evaluate(() => localStorage.clear());
+  await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
   await page.goto(`${BASE}/`);
   await settled(page);
 }

@@ -18,6 +18,7 @@
  *    Tap or drag a chart to set the value (committed on release).
  */
 import { el, esc, section, setText } from './dom';
+import { parseDecimal } from './decimal';
 import type { UiContext } from './editor-ui';
 import { PARKING_BAND, VEHICLES, azimuthAllowed, catalogueStages, launchPlane, launchSite, planAscent, planErrors, vehicleStages, type AscentResult, type MissionPlan, type Spacecraft } from './mission-layer';
 import { launchOf, missionById } from './missions';
@@ -38,7 +39,7 @@ function numField(title: string, value: number, onCommit: (v: number) => void, c
   const i = el('input', { type: 'text', title, className: `num ${cls}`, inputMode: 'decimal', enterKeyHint: 'done', spellcheck: false, autocomplete: 'off', value: String(value) });
   i.setAttribute('aria-label', title);
   const commit = () => {
-    const v = Number(i.value);
+    const v = parseDecimal(i.value);
     if (i.value.trim() !== '' && Number.isFinite(v) && v > 0) onCommit(v);
   };
   i.addEventListener('change', commit);
