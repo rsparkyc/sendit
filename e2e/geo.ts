@@ -79,3 +79,31 @@ export async function solveGeo(page: Page, durationDays?: number): Promise<numbe
   await typeNode(page, nodes[1].t, nodes[1].dv);
   return page.evaluate(() => (window as any).sendit.nodesOf().map((x: { stage: number }) => x.stage));
 }
+
+/**
+ * Drag the solved plan's separation marker later on the timeline, to a time that keeps the plan valid: half way
+ * between where it is and the start of the satellite's burn (the second burn span). Dropping it inside that burn
+ * gives a plan with errors ("still firing at separations[0]"), which the app never replays. The points come from
+ * the drawn marker and span, checked with elementFromPoint. Returns the separation time before the drag.
+ */
+export async function dragSeparationLater(page: Page): Promise<number> {
+  await page.locator('.tick.sep').scrollIntoViewIfNeeded();
+  const pts = await page.evaluate(() => {
+    const tk = document.querySelector('.tick.sep') as HTMLElement;
+    const burn = document.querySelectorAll('.span.burn')[1] as HTMLElement | undefined;
+    const a = tk.getBoundingClientRect();
+    const x0 = a.left + a.width / 2, y = a.top + a.height / 2;
+    const top = document.elementFromPoint(x0, y);
+    return { x0, y, x1: burn ? burn.getBoundingClientRect().left : NaN, onTop: !!top && (top === tk || tk.contains(top)), top: top?.className ?? null, seps: JSON.stringify((window as any).sendit.store.get().plan.separations) };
+  });
+  const msg = `separation drag points ${JSON.stringify(pts)}`;
+  expect(pts.onTop, msg).toBe(true);
+  expect(pts.x1 - pts.x0, msg).toBeGreaterThan(8); // room to move past the 3 px drag threshold
+  const before = await page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time as number);
+  const x = (pts.x0 + pts.x1) / 2;
+  await page.mouse.move(pts.x0, pts.y);
+  await page.mouse.down();
+  await page.mouse.move(x, pts.y, { steps: 5 });
+  await page.mouse.up();
+  return before;
+}

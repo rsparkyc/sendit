@@ -16,7 +16,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { solveGeo } from './geo';
+import { dragSeparationLater, solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/vehicles';
@@ -38,10 +38,18 @@ function watch(page: Page): string[] {
 }
 
 async function settled(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const s = (window as any).sendit?.store.get();
-    return s && s.replay && s.replay.plan === s.plan && s.replayStatus === 'idle' && s.replay.preview === null && s.loadingTarget === null;
+  // Settled: the replay is of the current plan, complete (no preview), nothing loading. A plan with errors is never
+  // replayed (the app shows "Plan has errors"), so stop waiting and say why instead of timing out.
+  const h = await page.waitForFunction(() => {
+    const sd = (window as any).sendit;
+    const s = sd?.store.get();
+    if (!s) return false;
+    const errs: string[] = sd.planErrors?.() ?? [];
+    if (errs.length) return { errors: errs };
+    return s.replay && s.replay.plan === s.plan && s.replayStatus === 'idle' && s.replay.preview === null && s.loadingTarget === null ? { errors: [] as string[] } : false;
   }, null, { timeout: 120_000 });
+  const { errors } = (await h.jsonValue()) as { errors: string[] };
+  if (errors.length) throw new Error(`settled: the plan has errors, so it is never replayed:\n${errors.join('\n')}`);
 }
 
 async function fresh(page: Page, mission?: string): Promise<void> {
@@ -243,11 +251,8 @@ test.describe('geostationary on the vehicle, to the leaderboard', () => {
     await settled(page);
     expect(await page.evaluate(() => (window as any).sendit.store.get().replay.result.digest)).toBe(flown.digest);
     // Drag the separation on the timeline: it moves (one undo step), then undo.
-    const tk = (await page.locator('.tick.sep').boundingBox())!;
-    await page.mouse.move(tk.x + tk.width / 2, tk.y + tk.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(tk.x + tk.width / 2 + 30, tk.y + tk.height / 2, { steps: 5 });
-    await page.mouse.up();
+    await dragSeparationLater(page);
+    await settled(page); // the moved separation is a valid plan: it is replayed and settles
     const moved = await page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time);
     expect(moved).toBeGreaterThan(flown.stages.find((s: any) => s.separatedAt !== null && !s.droppedInAscent).separatedAt);
     await page.getByRole('button', { name: /Undo the last plan edit/ }).click();

@@ -12,7 +12,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { BINDINGS, comboCap } from '../src/app/shortcuts';
-import { solveGeo } from './geo';
+import { dragSeparationLater, solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/shortcuts';
@@ -20,10 +20,18 @@ const SHOTS = 'test-results/shortcuts';
 test.skip(({ browserName }) => browserName !== 'chromium', 'UI checks run in Chromium');
 
 async function settled(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const s = (window as any).sendit?.store.get();
-    return s && s.replay && s.replay.plan === s.plan && s.replayStatus === 'idle' && s.replay.preview === null && s.loadingTarget === null;
+  // Settled: the replay is of the current plan, complete (no preview), nothing loading. A plan with errors is never
+  // replayed (the app shows "Plan has errors"), so stop waiting and say why instead of timing out.
+  const h = await page.waitForFunction(() => {
+    const sd = (window as any).sendit;
+    const s = sd?.store.get();
+    if (!s) return false;
+    const errs: string[] = sd.planErrors?.() ?? [];
+    if (errs.length) return { errors: errs };
+    return s.replay && s.replay.plan === s.plan && s.replayStatus === 'idle' && s.replay.preview === null && s.loadingTarget === null ? { errors: [] as string[] } : false;
   }, null, { timeout: 120_000 });
+  const { errors } = (await h.jsonValue()) as { errors: string[] };
+  if (errors.length) throw new Error(`settled: the plan has errors, so it is never replayed:\n${errors.join('\n')}`);
 }
 
 async function fresh(page: Page): Promise<void> {
@@ -330,12 +338,9 @@ test.describe('timeline marks: separation marker', () => {
     await settled(page);
     await solveGeo(page);
     await expect(page.locator('.tick.sep')).toHaveCount(1);
-    const before = await page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time);
-    const tk = (await page.locator('.tick.sep').boundingBox())!;
-    await page.mouse.move(tk.x + tk.width / 2, tk.y + tk.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(tk.x + tk.width / 2 + 30, tk.y + tk.height / 2, { steps: 5 });
-    await page.mouse.up();
+    const before = await dragSeparationLater(page);
+    // The moved separation is a valid plan, so it is replayed and settles.
+    await settled(page);
     // As vehicles.e2e.ts checks it: the plan's separation time moved (one edit).
     expect(await page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time)).toBeGreaterThan(before);
   });
