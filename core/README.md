@@ -166,6 +166,63 @@ wasm. Mutation check (`python3 scripts/mutation-check.py ascent.rs`): 10 of
 the script). Native: computeAscent (Falcon 9, 250 km) 3.3 ms,
 computeDirectAscent 3.0 ms (`cargo run --release --bin bench mission`).
 
+### Layer two: events and replay (`src/mission/events.rs`, `src/mission/replay.rs`)
+
+Ported: events.ts (EventFinder: node sampling, extremum and threshold
+bisection, half-open brackets, event order, terminal impact / atmosphere)
+and replay.ts (validation, version check, state / parking / vehicle /
+direct starts, ascent issues, staged propagation with separations, burn
+accounting, stage reports, the abort-free Stop outcomes impact, atmosphere,
+step-limit and event-limit, physics-error with the JavaScript message,
+finish() and the digest). The finder reads body states inside the step
+through a new `StepView::body_state` accessor. Not ported: the
+`resolveLaunch` option (a TypeScript callback; replay without it) and the
+abort hooks (`signal`, `shouldStop`); `on_start` / `on_step` observers are.
+
+Vectors (core/ts/export-replay.vec.ts, on the real ephemeris with the
+shipped checkpoint asset; the Rust builds its chunks from the same asset):
+the pinned model-2 and staged fixtures (with the sandbox sphere list the app
+tests use, recorded as input), all 77 campaign reference plans with their
+mission options, perturbed Earth-Moon variants (burns shifted 60 s, the
+first burn halved, a retrograde deorbit burn, with and without
+stopOnAtmosphere, a watched-body list with spheres, step and event budgets,
+separations moved, version mismatch with and without allowVersionMismatch,
+a bad sphere, an unknown body), and format-1 state starts (LEO with inertial
+and orbital burns, a degenerate orbital frame: physics-error, starts inside
+the Earth and inside its atmosphere). Outcomes covered: completed,
+atmosphere, impact, event-limit, step-limit, invalid-plan,
+version-mismatch, physics-error. Compared: outcome, reason, digest, every
+event (kind, body, t, distance, altitude, speed, relative state, mass,
+sphere), burn and stage reports, launch insertion, ascent totals, final
+state, steps, and dense-output samples seen by on_step. **243 replays,
+700,573 values, 0 mismatches natively, scalar and SIMD wasm. The pinned
+digests `4ca023ac13053da6` (model 2) and `e0410b5de464b677` (staged) are
+reproduced.**
+
+Mutation check (`python3 scripts/mutation-check.py events.rs replay.rs`):
+6 of 11 caught (speed sum order, bisection capped at 30, burn accounting
+window, burn delta-v as a difference of logs, separation mass, the staged
+digest). The 5 left are not observable by construction: every root is
+bisected to float resolution, so the result does not depend on how the
+midpoint is formed, which nodes bracketed it, or a cap above the ~45
+iterations a step needs; the bracket and same-time ordering conventions only
+matter for exact zeros and simultaneous events (reasons in the script).
+
+Replay timings (chunks warm, median of 5, Apple M-series):
+
+| Plan (steps) | TypeScript (V8), load 3.5 | Rust native, load 5.0 |
+|---|---|---|
+| computeAscent, Falcon 9 to 250 km | 5.1 ms | 3.4 ms |
+| model-2 fixture, no spheres (323) | 30.3 ms | 15.2 ms |
+| staged fixture, no spheres (53) | 9.7 ms | 5.3 ms |
+| lunar free return, Cape (106) | 14.8 ms | 7.9 ms |
+| Venus flyby, Cape (294) | 38.9 ms | 18.0 ms |
+
+(`BENCH=1 vitest run --config core/ts/vitest.config.ts core/ts/bench-replay.vec.ts`
+writes the TypeScript numbers to fixtures/generated/bench-ts.txt;
+`cargo run --release --bin bench mission` prints the Rust ones.) The whole
+replay section takes 9.4 s native and 12.0 s as wasm in Node.
+
 ## TypeScript behaviours reproduced deliberately
 
 - nbody.ts `fieldOf`: a zonal term whose `tesseral` list is present but

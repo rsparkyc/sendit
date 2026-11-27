@@ -128,6 +128,30 @@ MUTATIONS = [
      'need -= ve * ln(mass / dry)?;', 'need -= ve * (ln(mass)? - ln(dry)?);'),
     ('ascent: non-throttleable flag ignored', 'src/mission/ascent.rs',
      "!s.engines.iter().any(|e| e.throttleable == Some(false))", 'true'),
+    # Layer two: events and replay.
+    ('events: interior node time as tPrev + h * (i / NODES)', 'src/mission/events.rs',
+     't_prev + (h * i as f64) / NODES as f64', 't_prev + h * (i as f64 / NODES as f64)'),
+    ('events: minimum bracket made open at b (b > 0)', 'src/mission/events.rs',
+     'let is_min = a < 0.0 && b >= 0.0;', 'let is_min = a < 0.0 && b > 0.0;'),
+    ('events: bisection midpoint as (lo + hi) * 0.5', 'src/mission/events.rs',
+     'let mid = lo + (hi - lo) * 0.5;', 'let mid = (lo + hi) * 0.5;'),
+    ('events: bisection capped at 60 iterations', 'src/mission/events.rs',
+     'pub const BISECT_MAX: usize = 80;', 'pub const BISECT_MAX: usize = 60;'),
+    ('events: bisection capped at 30 iterations', 'src/mission/events.rs',
+     'pub const BISECT_MAX: usize = 80;', 'pub const BISECT_MAX: usize = 30;'),
+    ('events: speed summed z first', 'src/mission/events.rs',
+     'let speed = (r[3] * r[3] + r[4] * r[4] + r[5] * r[5]).sqrt();', 'let speed = (r[5] * r[5] + r[4] * r[4] + r[3] * r[3]).sqrt();'),
+    ('events: same-time events not ordered by kind', 'src/mission/events.rs',
+     'let d = x.kind.order() - y.kind.order();', 'let d = 0;'),
+    ('replay: burn accounting window end exclusive', 'src/mission/replay.rs',
+     't <= burns[bi].t_start + burns[bi].duration && m != m_prev', 't < burns[bi].t_start + burns[bi].duration && m != m_prev'),
+    ('replay: burn delta-v as ln(m0) - ln(m1)', 'src/mission/replay.rs',
+     'let ln = exact_ln(m_start[i] / m_end[i]).expect("exactLn of a burn\'s mass ratio");',
+     'let ln = exact_ln(m_start[i]).unwrap() - exact_ln(m_end[i]).unwrap();'),
+    ('replay: separation keeps the dropped stage\'s dry mass', 'src/mission/replay.rs',
+     'y_start[6] = mass_above(&stages, active as isize);', 'y_start[6] = cutoff(active);'),
+    ('replay: staged digest omits the stage reports', 'src/mission/replay.rs',
+     'h.f64(s.propellant_used).f64(s.propellant_left).f64(s.delta_v).f64(s.separated_at.unwrap_or(f64::NAN));', 'let _ = s;'),
     ('ascent: climb term as (rP - R) / (R rP)', 'src/mission/ascent.rs',
      'let climb = (v_ins * v_ins + 2.0 * mu * (1.0 / r_ - 1.0 / r_p)).sqrt() - v_ins;', 'let climb = (v_ins * v_ins + 2.0 * mu * ((r_p - r_) / (r_ * r_p))).sqrt() - v_ins;'),
 ]
@@ -191,6 +215,19 @@ EXPECTED_INVISIBLE = {
     # the cutoff reciprocal) are caught.
     'ascent: midpoint half-step as 0.5 * (dt * vdot)',
     'ascent: direct energy distributed: 0.5 x^2 + 0.5 y^2',
+    # NOT OBSERVABLE BY CONSTRUCTION (events). Every root is bisected to float
+    # resolution (the loop stops when the midpoint is no longer strictly
+    # inside the bracket), so the result is the first float at which the
+    # predicate fails: the same whatever arithmetic forms the midpoint, and
+    # whatever node pair supplied the bracket. Steps are < 2^45 ulps of t, so
+    # the loop never reaches 60 iterations (30 IS caught). The half-open
+    # bracket and the kind order only matter for g exactly 0 at a node or two
+    # events at the same float time, which no trajectory in the corpus has.
+    'events: interior node time as tPrev + h * (i / NODES)',
+    'events: minimum bracket made open at b (b > 0)',
+    'events: bisection midpoint as (lo + hi) * 0.5',
+    'events: bisection capped at 60 iterations',
+    'events: same-time events not ordered by kind',
 }
 
 

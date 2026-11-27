@@ -131,3 +131,8 @@ fn ascent() {
     let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
     check(sendit_core::parity4::ascent(&read("ascent.txt"), &d));
 }
+#[test]
+fn replay() {
+    let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
+    check(sendit_core::parity4::replay(&read("replay.txt"), &d, &asset()));
+}

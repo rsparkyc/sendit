@@ -134,6 +134,22 @@ fn bench_mission() {
         black_box(ascent::compute_direct_ascent(&stack, earth.gm, earth.reference_radius, black_box(-2e6), 200e3, geom, &d.ascent_earth).unwrap());
     });
     println!("computeDirectAscent (Falcon 9, C3 -2 km2/s2): {}", st.fmt("ms", 2));
+    // Whole replays of named plans from replay.txt (no spheres, default options).
+    let asset = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).unwrap();
+    let w = sendit_core::data::world();
+    let (eph, fm) = sendit_core::data::ephemeris(&w, Some(&asset), Some(&d.checkpoint_version)).unwrap();
+    let mut world = sendit_core::mission::replay::MissionWorld { eph, fm, d: &d };
+    let text = std::fs::read_to_string(dir().join("replay.txt")).unwrap();
+    for name in ["model2-nospheres", "staged", "lunar-free-return/cape-canaveral", "venus-flyby/cape-canaveral"] {
+        let line = text.lines().find(|l| l.starts_with(&format!("replay {name} "))).unwrap();
+        let p = plan::decode_plan(line.split(' ').nth(2).unwrap(), &d).unwrap();
+        let o = sendit_core::mission::replay::ReplayOptions::default();
+        let first = sendit_core::mission::replay::replay(&p, &mut world, &o, None, None);
+        let st = wall(5, 1, || {
+            black_box(sendit_core::mission::replay::replay(&p, &mut world, &o, None, None).digest);
+        });
+        println!("replay {name} ({} steps, chunks warm): {}", first.steps, st.fmt("ms", 1));
+    }
     black_box(plan::decode_plan(black_box("x"), &d).is_ok());
 }
 

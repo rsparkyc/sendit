@@ -88,7 +88,7 @@ pub extern "C" fn set_simd(on: i32) {
 /// (u32::MAX if nothing was compared). The summary is in report_ptr/report_len.
 /// Sections: 0 dmath, 1 dop853, 2 gravity, 3 orientation, 4 ephem, 5 golden eval,
 /// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative, 10 n-body integrator,
-/// 11 chunks (needs add_file: the checkpoint asset and the chunk bins), 12 plan codec, 13 launch, 14 ascent.
+/// 11 chunks (needs add_file: the checkpoint asset and the chunk bins), 12 plan codec, 13 launch, 14 ascent, 15 replay (needs the checkpoint asset).
 #[unsafe(no_mangle)]
 pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
     let t = text(ptr, len);
@@ -101,6 +101,10 @@ pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
         12 => crate::parity3::plan_codec(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON)),
         13 => crate::parity3::launch(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON)),
         14 => crate::parity4::ascent(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON)),
+        15 => {
+            let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+            crate::parity4::replay(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON), &asset)
+        }
         11 => {
             let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
             crate::parity2::chunks(t, &crate::data::world(), &asset, file)
