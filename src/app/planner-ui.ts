@@ -31,6 +31,7 @@ import { argMin, cellAt, colourRange, contour, contourLevels, field, monthTicks,
 import type { FromPlanner, StageReport } from './protocol';
 import type { AppState, Store } from './store';
 import { calendarToTdb, DAY, formatCalendar, tdbToCalendar } from './time';
+import { missionDeadline, suggestDates, transferBodies } from './porkchop-dates';
 import { defaultInclination, launchOpportunities, PASS_SIDES, type LaunchOpportunity } from './transfer';
 
 const DEG = 180 / Math.PI;
@@ -491,6 +492,7 @@ export class PlannerOverlay {
   // Transfer tab.
   private readonly depSel = el('select', { className: 'pl-input', title: 'Departure body' });
   private readonly arrSel = el('select', { className: 'pl-input', title: 'Arrival body' });
+  // Filled from the mission when the planner opens (suggestDates).
   private readonly depFrom = dateInput('Earliest departure', '2026-09-01');
   private readonly depTo = dateInput('Latest departure', '2026-12-31');
   private readonly arrFrom = dateInput('Earliest arrival', '2027-06-01');
@@ -514,6 +516,8 @@ export class PlannerOverlay {
   private readonly zoomResetBtn = button('Reset zoom', () => void this.zoomReset());
   private readonly zoomNote = el('div', { className: 'hint pl-zoomnote', role: 'status' });
   private departure: { index: number; tArr: number; body: string } | null = null;
+  /** Mission, liftoff and start the transfer dates were last suggested for (re-suggested on open when it changes). */
+  private suggestedFor = '';
   // Target tab.
   private readonly tBurn = el('select', { className: 'pl-input', title: 'Burn to correct' });
   private readonly tBody = el('select', { className: 'pl-input', title: 'Flyby body' });
@@ -538,6 +542,9 @@ export class PlannerOverlay {
     this.tBody.value = 'moon';
     for (const q of QUANTITIES) this.qSel.append(el('option', { value: q.id, textContent: `${q.label} (${q.unit})` }));
     this.qSel.onchange = () => this.chart.quantity(this.qSel.value as Quantity);
+    // Other bodies, other timescales: new dates for the pair.
+    this.depSel.addEventListener('change', () => this.suggestDates(false));
+    this.arrSel.addEventListener('change', () => this.suggestDates(false));
     for (const sel of [this.sideSel, this.tSide]) for (const s of PASS_SIDES) sel.append(el('option', { value: s.value, textContent: s.label }));
 
     const close = button('Close planner', () => this.close(), 'pl-close');
@@ -576,6 +583,12 @@ export class PlannerOverlay {
   open(tab = 'transfer', node: number | null = null): void {
     this.root.style.display = '';
     this.refreshTarget();
+    const s = this.store.get();
+    const key = `${s.missionId}|${s.plan.epoch}|${s.plan.start.kind === 'state' ? s.plan.start.center : 'launch'}`;
+    if (key !== this.suggestedFor) {
+      this.suggestedFor = key;
+      this.suggestDates(true);
+    }
     if (node !== null) this.tBurn.value = String(node);
     this.tab(tab);
     this.chart.draw();
@@ -618,7 +631,7 @@ export class PlannerOverlay {
       el('div', { className: 'pl-pair' }, field2('Depart from', this.depFrom), field2('to', this.depTo)),
       el('div', { className: 'pl-pair' }, field2('Arrive from', this.arrFrom), field2('to', this.arrTo)),
       field2('Show', this.qSel),
-      el('div', { className: 'pl-row' }, button('Compute porkchop', () => void this.compute(), 'primary'), button('Select minimum', () => this.pickMin())),
+      el('div', { className: 'pl-row' }, button('Compute porkchop', () => void this.compute(), 'primary'), button('Select minimum', () => this.pickMin()), button('Suggest dates', () => this.suggestDates(true))),
       this.status);
     const legend = el('div', { className: 'hint' }, 'Colour: viridis, dark = low (better). White lines: contours of the shown quantity. Orange dashed: 180° transfer angle, Type I below, Type II above. Faded cells are above the colour range. Tap or drag on the chart to read values; release to select. Zoom: drag a box with the mouse, or turn on Zoom box and drag with a finger; each zoom recomputes the grid over the new dates.');
     this.useBox.append(
@@ -654,6 +667,41 @@ export class PlannerOverlay {
     this.depTo.value = dayStr(r[1]);
     this.arrFrom.value = dayStr(r[2]);
     this.arrTo.value = dayStr(r[3]);
+  }
+
+  /**
+   * Fill the date ranges from the mission profile and the current time
+   * (porkchop-dates.ts): departures from liftoff, or from the view time when
+   * that is later and still inside the mission, around the next window, with
+   * arrivals by the mission's time limit. `fromMission` also sets the bodies.
+   */
+  private suggestDates(fromMission: boolean): void {
+    const s = this.store.get();
+    const def = missionById(s.missionId)?.def ?? null;
+    if (fromMission) {
+      const tb = transferBodies(BODIES, def, s.plan);
+      if (tb.departure) this.depSel.value = tb.departure;
+      if (tb.arrival) this.arrSel.value = tb.arrival;
+    }
+    const deadline = missionDeadline(def, s.plan.epoch);
+    const fromNow = s.t > s.plan.epoch && s.t < deadline;
+    const earliest = fromNow ? s.t : s.plan.epoch;
+    const sug = suggestDates(BODIES, this.depSel.value, this.arrSel.value, earliest, deadline);
+    if (!sug) {
+      this.status.textContent = 'No suggested dates: the porkchop is Sun-centred, so choose two different planets (or their moons).';
+      return;
+    }
+    const [a, b, c, d] = sug.range;
+    const end = (t: number) => dayStr(t + DAY - 1);
+    this.depFrom.value = dayStr(a);
+    this.depTo.value = end(b);
+    this.arrFrom.value = dayStr(c);
+    this.arrTo.value = end(d);
+    const name = (id: string) => BODIES.find((x) => x.id === id)?.name ?? id;
+    const from = fromNow ? 'the current time' : 'liftoff';
+    this.status.textContent = sug.window !== null
+      ? `Dates suggested from ${from}${Number.isFinite(deadline) ? ' and the mission time limit' : ''}: the best ${name(this.depSel.value)} → ${name(this.arrSel.value)} window departs around ${dayStr(sug.window)} (about ${Math.round(sug.tof / DAY)} d flight, two-body estimate). Compute to see it.`
+      : `No ${name(this.depSel.value)} → ${name(this.arrSel.value)} transfer arrives within the mission time limit; dates start at ${from}.`;
   }
 
   /** Zoom to a box: whole days (the date inputs show days and stay in sync), never below the floor. */
