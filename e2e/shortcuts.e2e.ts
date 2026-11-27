@@ -87,8 +87,9 @@ test.describe('J / K time keys', () => {
       return { d, held };
     };
     const SLACK = 0.1; // real seconds: about two frames at 30 fps at each end together, plus timer granularity
-    const near = (d: number, held: number, what: string) => {
-      const lo = r * Math.max(0.1, held - SLACK) * 0.85;
+    // `room`: how far the cursor could move before the end of the range stops it (J runs back into the start).
+    const near = (d: number, held: number, what: string, room = Infinity) => {
+      const lo = Math.min(r * Math.max(0.1, held - SLACK) * 0.85, room * 0.999);
       const hi = r * Math.max(0.1, held + SLACK) * 1.15;
       expect(Math.abs(d), `${what}: moved ${d.toFixed(1)} s in ${held.toFixed(3)} s held at ${r.toFixed(1)} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`).toBeGreaterThan(lo);
       expect(Math.abs(d), `${what}: moved ${d.toFixed(1)} s in ${held.toFixed(3)} s held at ${r.toFixed(1)} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`).toBeLessThan(hi);
@@ -98,10 +99,12 @@ test.describe('J / K time keys', () => {
     console.log(`hold K: ${h.d.toFixed(0)} s in ${h.held.toFixed(3)} s held at ${r.toFixed(0)} s/s`);
     expect(h.d).toBeGreaterThan(0);
     near(h.d, h.held, 'hold K');
-    // Hold J: back.
+    // Hold J: back. The cursor started at the beginning of the flight, so J can only undo what K did: on a slow
+    // runner J is held longer than K was and stops at the start (seen on CI: exactly K's distance).
+    const room = h.d;
     h = await hold('j', 1000);
     expect(h.d).toBeLessThan(0);
-    near(h.d, h.held, 'hold J');
+    near(h.d, h.held, 'hold J', room);
     // Tap: at least a tenth of a second's worth (the top-up), more only if the press itself lasted longer.
     let t0 = await T(page);
     await page.keyboard.press('k');

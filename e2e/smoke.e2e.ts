@@ -27,7 +27,13 @@ function watch(page: Page): string[] {
 
 const REQUIRE_WEBGL = process.env.REQUIRE_WEBGL === '1';
 const hasWebGL = async (page: Page) => {
-  const ok = await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'));
+  // Asked a few times: under Xvfb the first context of a fresh Firefox sometimes fails while its GPU process
+  // is still starting (seen on CI: one page without WebGL, the next two with it).
+  let ok = false;
+  for (let i = 0; i < 5 && !ok; i++) {
+    ok = await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'));
+    if (!ok) await page.waitForTimeout(1000);
+  }
   if (!ok && REQUIRE_WEBGL) throw new Error('REQUIRE_WEBGL=1 but this engine has no WebGL here (headed Firefox under Xvfb should have it)');
   return ok;
 };
