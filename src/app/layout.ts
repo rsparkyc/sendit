@@ -230,7 +230,9 @@ export class Layout {
       const label = TABS.find((t) => t.id === tab)!.label;
       const u = el('button', { className: 'btn small undock', type: 'button', textContent: '⧉', title: `Pop out ${label} into a floating window` });
       u.setAttribute('aria-label', `Pop out ${label} into a floating window`);
-      u.onclick = () => this.undock(tab);
+      u.onclick = () => this.undock(tab, 'click');
+      // Click only (not pointerup): acting on pointerup moves the next tab's button under the finger before the
+      // browser's click, which then lands on it and pops that tab out too (a ghost tap; e2e/floating.e2e.ts).
       head.parentElement!.append(u);
     }
     this.entries.sort((a, b) => a.order - b.order);
@@ -340,16 +342,32 @@ export class Layout {
     return fm ? this.windows.get(`${fm}:${tab}`) ?? null : null;
   }
 
-  /** Move a tab's panels into a floating window over the map. */
-  undock(tab: TabId): void {
+  /** Last pop-out requests and what came of them (diagnostics for tests; a few entries). */
+  readonly undockLog: string[] = [];
+
+  /** Move a tab's panels into a floating window over the map (idempotent). */
+  undock(tab: TabId, via = 'call'): void {
     const fm = this.floatMode();
-    if (!fm || this.floats[fm][tab]) return;
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    const f = this.freeRect();
-    const k = Object.keys(this.floats[fm]).length;
-    this.floats[fm][tab] = { ...defaultRect(tab, k, { left: f.left, top: f.top, right: W - f.right, bottom: H - f.bottom }), collapsed: false, opacity: DEFAULT_OPACITY, z: ++this.zTop };
-    this.place();
+    const note = (what: string) => {
+      this.undockLog.push(`${Math.round(performance.now())} ${tab} via ${via}: ${what}`);
+      if (this.undockLog.length > 20) this.undockLog.shift();
+    };
+    if (!fm) return note(`no floating in mode ${this.mode} at ${window.innerWidth}x${window.innerHeight}`);
+    if (this.floats[fm][tab] && this.windowOf(tab)) return note('already floating');
+    if (!this.floats[fm][tab]) {
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const f = this.freeRect();
+      const k = Object.keys(this.floats[fm]).length;
+      this.floats[fm][tab] = { ...defaultRect(tab, k, { left: f.left, top: f.top, right: W - f.right, bottom: H - f.bottom }), collapsed: false, opacity: DEFAULT_OPACITY, z: ++this.zTop };
+    }
+    try {
+      this.place();
+    } catch (e) {
+      note(`error ${e}`);
+      throw e;
+    }
+    note(this.windowOf(tab) ? 'floated' : 'no window made');
     this.persist();
     this.apply();
     const w = this.windowOf(tab);

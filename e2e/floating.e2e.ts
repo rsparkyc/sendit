@@ -338,6 +338,8 @@ test.describe('tablet landscape', () => {
         floats: [...document.querySelectorAll('.float-win')].map((w) => (w as HTMLElement).dataset.tab),
         button: r ? { x: r.x, y: r.y, w: r.width, h: r.height, hidden: b!.hidden } : null,
         topAtButton: top ? `${top.tagName}.${top.className}` : null,
+        undockLog: L.undockLog,
+        buttonEvents: (window as any).__undockEvents ?? [],
       });
     });
     const onTop = await page.evaluate(() => {
@@ -348,15 +350,78 @@ test.describe('tablet landscape', () => {
       return !!top && b.contains(top);
     });
     expect(onTop, `pop-out button reachable: ${await diag()}`).toBe(true);
+    // Probe: every pointer / touch / click event on the button, and whether it is still the same node at click time.
+    await page.evaluate(() => {
+      const log: string[] = ((window as any).__undockEvents = []);
+      const b0 = document.querySelector('.panel.nodes .undock');
+      for (const t of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend', 'touchcancel', 'click']) {
+        document.addEventListener(t, (e) => {
+          const el = e.target as Element;
+          if (!el.closest?.('.undock')) return;
+          log.push(`${Math.round(performance.now())} ${t} ${(e as PointerEvent).pointerType ?? ''} same node: ${el.closest('.undock') === b0}`);
+        }, true);
+      }
+    });
     await pop.tap();
     try {
       await expect(win(page, 'nodes')).toBeVisible({ timeout: 10_000 });
     } catch (e) {
-      throw new Error(`no Nodes window after the tap: ${await diag()}\n${e}`);
+      throw new Error(`no Nodes window after the tap: ${await diag()}\npage errors: ${JSON.stringify(errors)}\n${e}`);
     }
     await win(page, 'nodes').getByRole('slider').fill('55');
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${SHOTS}/tablet-landscape.png` });
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe('tablet landscape: a pop-out tap is never lost', () => {
+  test.use({ viewport: { width: 1180, height: 820 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, userAgent: devices['iPad Mini'].userAgent });
+  const button = (page: Page, tab: string) => page.getByRole('button', { name: `Pop out ${tab} into a floating window` });
+  const log = (page: Page) => page.evaluate(() => JSON.stringify((window as any).sendit.layout.undockLog));
+
+  test('popping out one tab does not pop out the next one, whose button lands under the finger', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    await page.getByRole('tab', { name: 'Events' }).tap();
+    await button(page, 'Events').tap();
+    await expect(win(page, 'events')).toBeVisible();
+    // The column now shows another tab, whose pop-out button sits where the finger was: it must not fire.
+    await page.waitForTimeout(800);
+    expect(await page.locator('.float-win').evaluateAll((ws) => ws.map((w) => (w as HTMLElement).dataset.tab)), await log(page)).toEqual(['events']);
+    expect(errors).toEqual([]);
+  });
+
+  test('re-renders between touchstart and touchend, and a tap right after a drag, under CPU throttling', async ({ page }) => {
+    const errors = watch(page);
+    await fresh(page);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+    const touch = (type: string, x = 0, y = 0) => cdp.send('Input.dispatchTouchEvent', { type: type as any, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+    for (const name of ['Orbit', 'Events', 'Nodes']) {
+      const tab = page.getByRole('tab', { name, exact: true });
+      if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.tap();
+      const b = (await button(page, name).boundingBox())!;
+      const x = b.x + b.width / 2, y = b.y + b.height / 2;
+      await touch('touchStart', x, y);
+      // Store updates, a layout pass (resize) and a replay-style refresh while the finger is down.
+      await page.evaluate(() => {
+        const w = (window as any).sendit;
+        w.store.set({ paused: !w.store.get().paused });
+        window.dispatchEvent(new Event('resize'));
+        w.store.set({ paused: !w.store.get().paused });
+      });
+      await page.waitForTimeout(120);
+      await touch('touchEnd');
+      await expect(win(page, name.toLowerCase()), await log(page)).toBeVisible({ timeout: 5000 });
+      // Drag the new window by its title bar, then go straight on to the next tap.
+      const t = (await win(page, name.toLowerCase()).locator('.fw-title').boundingBox())!;
+      await touch('touchStart', t.x + 10, t.y + 10);
+      for (let k = 1; k <= 4; k++) await touch('touchMove', t.x + 10 + k * 12, t.y + 10 + k * 8);
+      await touch('touchEnd');
+    }
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    await expect(page.locator('.float-win')).toHaveCount(3);
     expect(errors).toEqual([]);
   });
 });
