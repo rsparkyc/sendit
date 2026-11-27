@@ -53,6 +53,16 @@ export class MapLegend {
       line('lg-tri', MAP.planeNode, 'AN ▲ / DN ▼ plane crossing'),
       line('lg-square', MAP.site, 'Launch site (selected: ringed)'),
       line('lg-line lg-faint', '#9fc6ff', 'Body orbits: thin, in the body’s colour'),
+      // The timeline above the scrubber uses the same shapes and colours (hover or tap a mark for what and when).
+      el('li', { className: 'lg-head', textContent: 'Timeline marks (hover or tap one; click to go there)' }),
+      line('lg-burn', stageStyle(0, true).colour, 'Burn (striped bar, its stage’s colour)'),
+      line('lg-bar', '#ff8a3d', 'Maneuver node'),
+      line('lg-diamond', MAP.event, 'Event (periapsis, apoapsis, sphere of influence)'),
+      line('lg-diamond', MAP.closest, 'Closest approach'),
+      line('lg-square', MAP.failure, 'Failure / end of flight'),
+      line('lg-tri', MAP.planeNode, 'Ascending node ▲ / descending node ▼'),
+      line('lg-glyph', MAP.separation, 'Separation (drag to move)', '✂'),
+      line('lg-ring', '#9fc6ff', 'Several marks close together'),
     ];
     this.list.replaceChildren(...items);
   }

@@ -98,9 +98,9 @@ export function cluster<T extends { x: number }>(items: readonly T[], px: number
 
 export interface TimelineMarks {
   /** Listed events to tick (absolute time, short label, css kind). */
-  events(): { t: number; label: string; kind: string }[];
-  /** Plane-node crossings (absolute time, ascending). */
-  crossings(): { t: number; ascending: boolean }[];
+  events(): { t: number; label: string; kind: string; words?: string }[];
+  /** Plane-node crossings (absolute time, ascending, optional plain-words description). */
+  crossings(): { t: number; ascending: boolean; words?: string }[];
   /** Orbital period at absolute time t (NaN if unbound). */
   period(t: number): number;
   /** Separations (absolute time, label): drawn as draggable markers. */
@@ -111,7 +111,15 @@ export interface TimelineMarks {
   selectSeparation?(j: number): void;
 }
 
-interface Mark { x: number; t: number; label: string; kind: string }
+interface Mark { x: number; t: number; label: string; kind: string; /** Plain words for the tooltip (no time). */ words: string }
+
+/** Tooltip text for a cluster of marks: one line per mark with its time, capped, "+N more". */
+export function tipText(marks: readonly { words: string; t: number }[], when: (t: number) => string, cap = 5): string {
+  if (marks.length === 1) return `${marks[0].words} · ${when(marks[0].t)}`;
+  const lines = marks.slice(0, cap).map((m) => `${m.words} · ${when(m.t)}`);
+  if (marks.length > cap) lines.push(`+${marks.length - cap} more`);
+  return `${marks.length} marks here:\n${lines.join('\n')}`;
+}
 
 export class Timeline {
   readonly root: HTMLElement;
@@ -156,6 +164,7 @@ export class Timeline {
     this.track.append(this.overview, this.range, this.ticks, this.axis);
     this.root = el('div', { className: 'panel scrubber' }, start, this.track, el('div', { className: 'tl-zoom' }, zout, zin, fit, presets), this.met);
     this.wireZoom();
+    this.wireTicks();
     store.subscribe((s, p) => {
       if (s.t !== p.t || s.replay !== p.replay || s.selectedNode !== p.selectedNode || s.selectedSeparation !== p.selectedSeparation || s.plan !== p.plan || s.selectedEvent !== p.selectedEvent) this.render(s);
     });
@@ -165,6 +174,11 @@ export class Timeline {
       this.render(store.get());
       new ResizeObserver(() => this.render(store.get())).observe(this.track);
     });
+  }
+
+  /** The flight span the scrubber covers (absolute s): plan epoch to the end of flight. */
+  flightSpan(): [number, number] {
+    return this.span();
   }
 
   private span(): [number, number] {
@@ -316,6 +330,93 @@ export class Timeline {
     this.overview.addEventListener('pointercancel', () => (drag = false));
   }
 
+  /** The mark tooltip (one, on the page body so the panel cannot clip it). */
+  private readonly tip = el('div', { className: 'tl-tip', role: 'tooltip' });
+  private tipTimer = 0;
+  /** Repeated clicks on one cluster step through its marks. */
+  private cycle: { key: string; i: number } | null = null;
+
+  private showTip(target: HTMLElement, text: string, autoHide: number): void {
+    if (!this.tip.isConnected) document.body.append(this.tip);
+    this.tip.textContent = text;
+    this.tip.hidden = false;
+    const r = target.getBoundingClientRect();
+    const w = this.tip.offsetWidth, h = this.tip.offsetHeight;
+    const x = Math.max(6, Math.min(window.innerWidth - w - 6, r.left + r.width / 2 - w / 2));
+    const y = r.top - h - 14 >= 4 ? r.top - h - 14 : r.bottom + 8;
+    this.tip.style.left = `${x}px`;
+    this.tip.style.top = `${y}px`;
+    clearTimeout(this.tipTimer);
+    if (autoHide) this.tipTimer = window.setTimeout(() => this.hideTip(), autoHide);
+  }
+
+  private hideTip(): void {
+    clearTimeout(this.tipTimer);
+    this.tip.hidden = true;
+  }
+
+  /** Move the time cursor to absolute time t, as a scrub does. */
+  private seek(t: number): void {
+    const [a, b] = this.span();
+    const c = Math.max(a, Math.min(b, t));
+    this.store.set({ t: c, paused: true, loadingTarget: c });
+  }
+
+  /**
+   * Ticks and burn spans: hover (mouse) shows the tooltip; a click / tap moves the
+   * cursor to the mark (a cluster: the first, then the next on each repeated click)
+   * and shows the tooltip. A drag that starts on a mark scrubs like the range input.
+   * Separation markers have their own handlers (they stop propagation).
+   */
+  private wireTicks(): void {
+    const markOf = (e: Event) => (e.target as HTMLElement).closest?.<HTMLElement>('[data-tip]') ?? null;
+    this.ticks.addEventListener('pointerover', (e) => {
+      const m = markOf(e);
+      if (m && e.pointerType === 'mouse' && !press) this.showTip(m, m.dataset.tip ?? '', 0);
+    });
+    this.ticks.addEventListener('pointerout', (e) => {
+      if (e.pointerType === 'mouse' && markOf(e) && !press) this.hideTip();
+    });
+    let press: { id: number; x0: number; times: number[]; tip: string; key: string; moved: boolean; el: HTMLElement } | null = null;
+    const tAtX = (clientX: number) => {
+      const r = this.range.getBoundingClientRect();
+      const [w0, w1] = this.window();
+      return w0 + ((clientX - r.left) / Math.max(1, r.width)) * (w1 - w0);
+    };
+    this.ticks.addEventListener('pointerdown', (e) => {
+      const m = markOf(e);
+      if (!m || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      e.preventDefault();
+      try { this.ticks.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+      const times = (m.dataset.times ?? '').split(',').map(Number).filter(Number.isFinite);
+      press = { id: e.pointerId, x0: e.clientX, times, tip: m.dataset.tip ?? '', key: m.dataset.times ?? '', moved: false, el: m };
+    });
+    this.ticks.addEventListener('pointermove', (e) => {
+      if (!press || press.id !== e.pointerId) return;
+      if (!press.moved && Math.abs(e.clientX - press.x0) > 4) {
+        press.moved = true;
+        this.hideTip();
+      }
+      if (press.moved) this.seek(tAtX(e.clientX));
+    });
+    const end = (e: PointerEvent, commit: boolean) => {
+      if (!press || press.id !== e.pointerId) return;
+      const p = press;
+      press = null;
+      if (!commit || p.moved || !p.times.length) return;
+      const i = this.cycle && this.cycle.key === p.key ? (this.cycle.i + 1) % p.times.length : 0;
+      this.cycle = { key: p.key, i };
+      this.seek(p.times[i]);
+      // The mark element may have been re-rendered by the seek: place the tip from the fresh one.
+      const fresh = [...this.ticks.querySelectorAll<HTMLElement>('[data-tip]')].find((x) => x.dataset.times === p.key) ?? p.el;
+      const lines = p.tip;
+      this.showTip(fresh.isConnected ? fresh : this.range, lines, e.pointerType === 'mouse' ? 0 : 3500);
+    };
+    this.ticks.addEventListener('pointerup', (e) => end(e, true));
+    this.ticks.addEventListener('pointercancel', (e) => end(e, false));
+    this.track.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !press) this.hideTip(); });
+  }
+
   private ready = false;
   /** A separation marker being dragged: index, pointer start, and the time it shows. */
   private sepDrag: { j: number; x0: number; t0: number; t: number; moved: boolean; el: HTMLElement } | null = null;
@@ -406,7 +507,11 @@ export class Timeline {
       const x0 = ((t0 - w0) / (w1 - w0)) * 100;
       const w = (dur / (w1 - w0)) * 100;
       if (x0 > 100 || x0 + w < 0) return;
-      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}${staged ? ` (${ss.tag})` : ''}: ${fmtTime(n.burn.start, 0)} to ${fmtTime(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
+      const burnTip = `Burn ${i + 1}${staged ? ` · fired by ${row?.name ?? ss.tag} (${ss.tag})` : ''} · ${fmtTime(n.burn.start, 0)} to ${fmtTime(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}`;
+      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, role: 'button', tabIndex: -1 });
+      sp.setAttribute('aria-label', burnTip);
+      sp.dataset.tip = burnTip;
+      sp.dataset.times = String(t0);
       sp.style.setProperty('--stage', ss.colour);
       sp.dataset.stage = ss.tag;
       // The tag written on the span when there is room (CSS hides it on narrow spans); colour is the second cue.
@@ -417,13 +522,18 @@ export class Timeline {
     });
     const pts: Mark[] = [];
     const px = (t: number) => ((t - w0) / (w1 - w0)) * W;
-    for (const n of nodesOf(s.plan)) pts.push({ x: px(ep + n.node.t), t: ep + n.node.t, label: `Node ${fmtTime(n.node.t, 0)}`, kind: 'node' });
-    for (const e of this.marks.events()) pts.push({ x: px(e.t), t: e.t, label: `${e.label} ${fmtTime(e.t - ep, 0)}`, kind: e.kind });
-    for (const c of this.marks.crossings()) pts.push({ x: px(c.t), t: c.t, label: `${c.ascending ? 'AN' : 'DN'} ${fmtTime(c.t - ep, 0)}`, kind: 'pnode' });
+    nodesOf(s.plan).forEach((n, i) => pts.push({ x: px(ep + n.node.t), t: ep + n.node.t, label: `Node ${fmtTime(n.node.t, 0)}`, kind: 'node', words: `Maneuver node ${i + 1}${staged ? ` · ${stageStyle(n.stage, !rows[n.stage] || rows[n.stage].isSpacecraft, rows[n.stage]?.tag).tag}` : ''}` }));
+    for (const e of this.marks.events()) pts.push({ x: px(e.t), t: e.t, label: `${e.label} ${fmtTime(e.t - ep, 0)}`, kind: e.kind, words: e.words ?? e.label });
+    for (const c of this.marks.crossings()) pts.push({ x: px(c.t), t: c.t, label: `${c.ascending ? 'AN' : 'DN'} ${fmtTime(c.t - ep, 0)}`, kind: c.ascending ? 'pnode an' : 'pnode dn', words: c.words ?? `${c.ascending ? 'Ascending' : 'Descending'} node (crosses the reference plane)` });
+    const when = (t: number) => fmtTime(t - ep, 0);
     for (const g of cluster(pts.filter((p) => p.x >= -2 && p.x <= W + 2), 5)) {
       const kinds = new Set(g.map((p) => p.kind));
       const k = kinds.has('failure') ? 'failure' : kinds.has('node') ? 'node' : [...kinds][0];
-      const tk = el('span', { className: `tick ${k}${g.length > 1 ? ' many' : ''}`, title: g.length > 1 ? `${g.length} marks: ${g.slice(0, 4).map((p) => p.label).join(', ')}${g.length > 4 ? '…' : ''}` : g[0].label });
+      const tip = tipText(g, when);
+      const tk = el('span', { className: `tick ${k}${g.length > 1 ? ' many' : ''}`, role: 'button', tabIndex: -1 });
+      tk.setAttribute('aria-label', tip.replace(/\n/g, '; '));
+      tk.dataset.tip = tip;
+      tk.dataset.times = g.map((p) => p.t).join(',');
       tk.style.left = `${(g[0].x / W) * 100}%`;
       out.push(tk);
     }
@@ -440,7 +550,10 @@ export class Timeline {
       out.push(tk);
     });
     if (r && r.result.outcome !== 'completed' && Number.isFinite(r.result.finalT) && r.result.finalT <= w1) {
-      const t = el('span', { className: 'tick end', title: 'End of flight' });
+      const t = el('span', { className: 'tick end', role: 'button', tabIndex: -1 });
+      t.dataset.tip = `End of flight · ${fmtTime(r.result.finalT - ep, 0)}`;
+      t.setAttribute('aria-label', t.dataset.tip);
+      t.dataset.times = String(r.result.finalT);
       t.style.left = `${((r.result.finalT - w0) / (w1 - w0)) * 100}%`;
       out.push(t);
     }

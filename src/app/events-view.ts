@@ -124,3 +124,20 @@ export function eventExplain(x: ListedEvent, bodyName: (id: string) => string): 
   }
   return b;
 }
+
+/** The event in plain words, no abbreviations (timeline tooltips), e.g. "Apoapsis · Earth · 200 km alt". */
+export function eventWords(x: ListedEvent, bodyName: (id: string) => string): string {
+  const b = bodyName(x.ev.body);
+  const d = fromSurface(x.ev.altitude, x.ev.body);
+  switch (x.role === 'closest' ? 'closest' : x.ev.kind) {
+    case 'closest': return `Closest approach to ${b} · ${d}`;
+    case 'periapsis': return `Periapsis (lowest point) · ${b} · ${d}`;
+    case 'apoapsis': return `Apoapsis (highest point) · ${b} · ${d}`;
+    case 'impact': return `Impact on ${b}: the flight ends`;
+    case 'atmosphere-entry': return `Enters ${b}'s atmosphere · ${(x.ev.speed / 1000).toFixed(2)} km/s`;
+    case 'atmosphere-exit': return `Leaves ${b}'s atmosphere`;
+    case 'enter': return `Enters ${b}'s sphere of influence`;
+    case 'exit': return `Leaves ${b}'s sphere of influence`;
+  }
+  return b;
+}

@@ -331,11 +331,26 @@ html.touch .scrub-overview { height: 16px; }
 .scrubber.zoomed .scrub-overview { display: block; }
 .ov-win { position: absolute; top: 0; bottom: 0; background: rgba(125,255,176,0.35); border: 1px solid var(--accent); border-radius: 3px; min-width: 4px; }
 .ov-cursor { position: absolute; top: -1px; bottom: -1px; width: 2px; margin-left: -1px; background: #fff; }
+/* Timeline marks: shape and colour match the map legend (palette.ts MAP): ◆ event (blue), ◆ closest approach
+   (yellow), ■ failure (red), | maneuver node (orange), ▲ / ▼ plane crossing (violet), ● ringed: several marks. */
 .tick { top: 0; background: #9fc6ff; }
+.tick.event, .tick.closest, .tick.pnode { width: 8px; height: 8px; top: 0; margin-left: -4px; background: none; border-radius: 0; }
+.tick.event::after, .tick.closest::after, .tick.pnode::after { content: ''; position: absolute; inset: 0; background: #9fc6ff; pointer-events: none; }
+.tick.event::after, .tick.closest::after { inset: 1px; transform: rotate(45deg); }
+.tick.closest::after { background: #ffd36b; }
+.tick.pnode::after { background: #c9a2ff; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.tick.pnode.dn::after { clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .tick.node { background: #ff8a3d; height: 10px; top: -1px; }
-.tick.failure { background: #ff4d4d; }
-.tick.pnode { background: #c9a2ff; height: 5px; top: 3px; }
-.tick.many { width: 5px; margin-left: -2px; }
+.tick.failure { background: #ff4d4d; width: 7px; height: 7px; top: 0; margin-left: -3px; border-radius: 1px; }
+.tick.many { width: 7px; height: 7px; top: 0; margin-left: -3px; border-radius: 50%; box-shadow: 0 0 0 1.5px #fff; }
+.tick.many::after { border-radius: 50%; inset: 0; transform: none; clip-path: none; }
+.tick.end { height: 12px; top: -2px; }
+/* Marks explain themselves: hover (mouse) or tap shows .tl-tip; the hit area reaches up above the strip, clear of the handle. */
+.scrub-ticks [data-tip] { pointer-events: auto; cursor: pointer; touch-action: none; }
+.scrub-ticks [data-tip]::before { content: ''; position: absolute; left: -5px; right: -5px; top: -10px; bottom: -1px; }
+html.touch .scrub-ticks .tick[data-tip]::before { left: -14px; right: -14px; top: -18px; }
+.tl-tip { position: fixed; z-index: 1500; max-width: min(340px, calc(100vw - 12px)); padding: 6px 8px; background: var(--panel-solid); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.5); font: 12px/1.4 var(--sans, system-ui); white-space: pre-line; pointer-events: none; }
+.tl-tip[hidden] { display: none; }
 .tl-zoom { display: flex; gap: 3px; align-items: center; }
 .tl-zoom .btn { min-width: 26px; }
 .tl-presets { max-width: 7.5em; }
@@ -366,10 +381,28 @@ dialog { color: var(--fg); background: var(--panel-solid); border: 1px solid var
 dialog::backdrop { background: rgba(0,0,0,0.6); }
 dialog h2 { margin: 0 0 8px; font-size: 16px; }
 dialog h3 { margin: 8px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.keys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-.keys dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; margin: 0 0 10px; }
-.keys dt { margin: 0; }
-.keys dd { margin: 0; color: var(--muted); }
+/* Shortcuts and gestures (keys-dialog.ts): fixed header, a body that scrolls, sized to the viewport. */
+dialog.keys { box-sizing: border-box; width: min(980px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 0; overflow: hidden; flex-direction: column; z-index: 1000; }
+dialog.keys[open] { display: flex; }
+.keys-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.keys-head h2 { margin: 0; }
+.keys-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 4px 14px 14px; columns: 2 420px; column-gap: 24px; }
+.keys-body:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.kblock { break-inside: avoid-column; margin-bottom: 6px; }
+.kblock h3 { margin-top: 10px; }
+.krows { margin: 0; }
+.krow { display: grid; grid-template-columns: minmax(7.5em, 13em) minmax(0, 1fr); gap: 2px 12px; padding: 4px 0; border-top: 1px solid rgba(255,255,255,0.06); break-inside: avoid; }
+.krow dt, .krow dd { margin: 0; min-width: 0; }
+.krow dd { color: #c3cad6; line-height: 1.35; overflow-wrap: anywhere; }
+.kcaps { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.kcaps kbd { white-space: nowrap; }
+.ksep { font-size: 11px; color: var(--muted); }
+.kterm { font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .keys-body { columns: 1; padding: 4px 12px 12px; }
+  .krow { grid-template-columns: minmax(0, 1fr); }
+  .keys-head { padding: 8px 12px; }
+}
 kbd { font: 12px var(--mono); padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: rgba(255,255,255,0.05); }
 .lb { width: min(640px, calc(100vw - 24px)); }
 .lb-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -617,6 +650,9 @@ html.touch .scrub-met { min-height: 44px; }
 .lg-tri::before { content: ''; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid var(--c); }
 .lg-square::before { content: ''; width: 8px; height: 8px; background: var(--c); border-radius: 1px; }
 .lg-glyph { font-size: 13px; }
+.lg-ring::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1.5px #fff; }
+.lg-bar::before { content: ''; width: 3px; height: 11px; background: var(--c); border-radius: 1px; }
+.lg-head { font-weight: 600; color: var(--muted); margin-top: 4px; }
 
 /* Stage identity (palette.ts): chips, timeline spans striped in the stage colour with the tag written on them. */
 .nstage, .nstage.sc { background: var(--stage); color: #0b0b12; }

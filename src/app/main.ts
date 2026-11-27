@@ -14,7 +14,7 @@ import { deriveMeta } from './body-meta';
 import { OrbitCamera } from './camera';
 import { Editor } from './editor';
 import { bodyName, CraftPanel, DV_LEVELS, T_LEVELS, EventsPanel, MissionPanel, NodesPanel, ResultsPanel, StartPanel, type UiContext } from './editor-ui';
-import { listEvents, eventMarker, eventExplain, type ListedEvent } from './events-view';
+import { listEvents, eventMarker, eventExplain, eventWords, type ListedEvent } from './events-view';
 import { crossingsNear, planeCrossings, type PlaneCrossing, type RelSample } from './plane-nodes';
 import { drawnEnd, defaultDiscRadius, loadViewSettings } from './view-settings';
 import { ViewOptions } from './view-ui';
@@ -53,6 +53,8 @@ import { sandboxSpheres } from './replay-options';
 import { SceneView, UNIT } from './scene';
 import { loadSaved, parsePlanHash, planHash, save, versionNotice } from './share';
 import { Store, WARP_RATES, type AppState } from './store';
+import { isTypingTarget, matchBinding, stepLevel } from './shortcuts';
+import { TimeKeys } from './time-keys';
 import { calendarToTdb, formatCalendar, JULIAN_YEAR, parseCalendar, tdbToCalendar, utcMsToTdb } from './time';
 import { SAMPLE_STRIDE, stateAt, trajectoryFrom, type Trajectory } from './trajectory';
 
@@ -429,8 +431,8 @@ layout.add(orbitPanel.root, 'orbit', 'right');
 orbitPanel.onDetails = () => layout.showTab('orbit');
 layout.add(hud.infoPanel, 'view', 'right');
 const timeline = new Timeline(store, {
-  events: () => listed.filter((x) => !x.distant).map((x) => ({ t: x.ev.t, label: eventMarker(x, bodyName), kind: x.failure ? 'failure' : 'event' })),
-  crossings: () => (viewSettings.showNodes ? crossings : []),
+  events: () => listed.filter((x) => !x.distant).map((x) => ({ t: x.ev.t, label: eventMarker(x, bodyName), words: eventWords(x, bodyName), kind: x.failure ? 'failure' : x.role === 'closest' ? 'closest' : 'event' })),
+  crossings: () => (viewSettings.showNodes ? crossings.map((c) => ({ t: c.t, ascending: c.ascending, words: `${c.ascending ? 'Ascending' : 'Descending'} node (crosses ${crossingLabel})` })) : []),
   period: (t) => periodAt(t),
   separations: () => { const p = store.get().plan; return separationsOf(p).map((x) => ({ t: p.epoch + x.time, label: `Separation ${separationTag(p, x)}` })); },
   moveSeparation: (j, t) => { editor.moveSeparation(j, t - store.get().plan.epoch); },
@@ -818,53 +820,52 @@ function addNodeAt(t: number): void {
   editor.addNode(Math.round(t * 10) / 10, { kind: 'orbital', body: dominantBody(t) });
 }
 
+const timeKeys = new TimeKeys(store, () => timeline.flightSpan());
 window.addEventListener('keydown', (e) => {
-  const tag = (e.target as HTMLElement).tagName;
-  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (isTypingTarget(e.target)) return;
   if (planner.isOpen || (e.target as HTMLElement).closest?.('dialog')) return;
-  // Undo / redo of plan edits (text fields keep their own undo: handled above by returning early).
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.code === 'KeyZ' || e.code === 'KeyY')) {
-    e.preventDefault();
-    if (e.code === 'KeyY' || e.shiftKey) editor.redo();
-    else editor.undo();
-    return;
-  }
-  if (e.ctrlKey || e.metaKey) return;
   const s = store.get();
   const i = s.selectedNode;
-  const level = e.shiftKey ? 2 : e.altKey ? 0 : 1;
-  const nudge: Record<string, [0 | 1 | 2, number]> = { KeyW: [0, 1], KeyS: [0, -1], KeyD: [1, 1], KeyA: [1, -1], KeyE: [2, 1], KeyQ: [2, -1] };
-  if (i !== null && nudge[e.code]) {
+  const b = matchBinding(e, { node: i !== null, picked: !!tapPick });
+  if (!b) return;
+  if (e.repeat && b.hold === false) {
     e.preventDefault();
-    const [axis, sign] = nudge[e.code];
-    editor.nudgeDv(i, axis, sign * DV_LEVELS[level]);
     return;
   }
-  if (i !== null && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+  const level = stepLevel(e);
+  const nudge: Partial<Record<string, [0 | 1 | 2, number]>> = { progradePlus: [0, 1], progradeMinus: [0, -1], normalPlus: [1, 1], normalMinus: [1, -1], radialPlus: [2, 1], radialMinus: [2, -1] };
+  const nd = nudge[b.id];
+  if (nd && i !== null) {
     e.preventDefault();
-    editor.nudgeTime(i, (e.code === 'BracketLeft' ? -1 : 1) * T_LEVELS[level]);
+    editor.nudgeDv(i, nd[0], nd[1] * DV_LEVELS[level]);
     return;
   }
-  if (i !== null && (e.key === 'Delete' || e.key === 'Backspace')) {
-    e.preventDefault();
-    editor.removeNode(i);
-    return;
+  switch (b.id) {
+    case 'undo': e.preventDefault(); editor.undo(); return;
+    case 'redo': e.preventDefault(); editor.redo(); return;
+    case 'nodeEarlier': case 'nodeLater':
+      e.preventDefault();
+      if (i !== null) editor.nudgeTime(i, (b.id === 'nodeEarlier' ? -1 : 1) * T_LEVELS[level]);
+      return;
+    case 'deleteNode': e.preventDefault(); if (i !== null) editor.removeNode(i); return;
+    case 'help': hud.showKeys(); return;
+    case 'clearSelection':
+      hideTapPop();
+      store.set({ selectedNode: null, selectedSeparation: null, selectedEvent: null });
+      return;
+    case 'togglePlay': e.preventDefault(); store.set({ paused: !s.paused }); return;
+    case 'warpSlower': hud.stepWarp(-1); return;
+    case 'warpFaster': hud.stepWarp(1); return;
+    case 'timeBack': e.preventDefault(); timeKeys.press(-1); return;
+    case 'timeForward': e.preventDefault(); timeKeys.press(1); return;
+    case 'addNode':
+      if (tapPick) {
+        const p = tapPick;
+        hideTapPop();
+        addNodeAt(p.t);
+      } else nodesPanel.addAtCursor();
+      return;
   }
-  if (e.key === '?') hud.showKeys();
-  else if (e.key === 'Escape') {
-    hideTapPop();
-    store.set({ selectedNode: null, selectedSeparation: null, selectedEvent: null });
-  }
-  else if (e.code === 'Space') {
-    e.preventDefault();
-    store.set({ paused: !s.paused });
-  } else if (e.key === ',') hud.stepWarp(-1);
-  else if (e.key === '.') hud.stepWarp(1);
-  else if ((e.key === 'n' || e.key === 'N' || e.key === 'Enter') && tapPick) {
-    const p = tapPick;
-    hideTapPop();
-    addNodeAt(p.t);
-  } else if (e.key === 'n' || e.key === 'N') nodesPanel.addAtCursor();
 });
 
 // ---------------------------------------------------------------------------
