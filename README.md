@@ -541,6 +541,9 @@ pnpm preview     # serve dist/ locally
 pnpm test:browsers   # Playwright: every suite on Chromium, Firefox and WebKit (builds first)
 ```
 
+Which UI tests run on which engine, what Playwright's WebKit does not prove about iOS Safari, and a
+ten-minute manual script for real phones: [docs/mobile-testing.md](docs/mobile-testing.md).
+
 The browser suite can be narrowed the way CI splits it (`e2e/playwright.config.ts`):
 `PW_SUITE=engines` runs only the cross-engine determinism files (`determinism`, `ephemeris`),
 `PW_SUITE=ui` every other file; `PW_PREBUILT=1` serves the existing `dist/` instead of
@@ -555,8 +558,9 @@ building first. For example `PW_SUITE=ui pnpm test:browsers --project=chromium -
 | `unit` | `pnpm typecheck`, `pnpm test` | |
 | `build` | `pnpm build` (uploaded as the artifact `site-dist`), `pnpm build:leaderboard` | |
 | `engines` (×3) | `PW_SUITE=engines` on Chromium, Firefox and WebKit, one job per engine, against `site-dist` | `build` |
-| `ui` (×4) | `PW_SUITE=ui` on Chromium, `--shard=1/4` … `4/4`, against `site-dist` | `build` |
-| `report` | merges every browser job's blob report into one HTML report and writes the run summary | `engines`, `ui` |
+| `ui` (×11) | `PW_SUITE=ui` (every UI suite, including `smoke` and `mobile`) on Chromium in 5 shards and on WebKit in 6, against `site-dist` | `build` |
+| `firefox` | `e2e/smoke.e2e.ts` on Firefox, `PW_FIREFOX_HEADED=1 xvfb-run -a` (headless Linux Firefox has no WebGL) | `build` |
+| `report` | merges every browser job's blob report into one HTML report and writes the run summary | `engines`, `ui`, `firefox` |
 | `deploy` | `.github/workflows/deploy.yml` (below); pushes to main only | all of the above |
 
 Dependencies come from the pnpm store cache (`actions/setup-node`), browsers from a cache per
@@ -566,7 +570,7 @@ would mark a flaky pass separately if retries were ever turned on).
 
 Finding a failure: the run's Summary page lists every failed test with its file and line and
 the artifact that holds it. Each failing browser job uploads `playwright-report-engines-<engine>`
-or `playwright-report-ui-<shard>` (HTML report, traces); the merged report of all jobs is
+or `playwright-report-ui-<engine>-<shard>` / `playwright-report-firefox-smoke` (HTML report, traces); the merged report of all jobs is
 `playwright-report`. Failures are also annotated on the commit by Playwright's `github` reporter.
 
 Timings. The old single job took about 13 minutes, most of it the browser suite run

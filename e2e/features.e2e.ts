@@ -13,7 +13,7 @@ import { solveGeo } from './geo';
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/features';
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'feature flows run in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 };
 
@@ -38,6 +38,7 @@ async function fresh(page: Page, mission?: string): Promise<void> {
   watch(page);
   await page.goto(`${BASE}/`);
   await page.evaluate(() => localStorage.clear());
+  await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
   await page.goto(`${BASE}/`);
   await settled(page);
   if (mission) {
@@ -388,6 +389,8 @@ test.describe('phone', () => {
   test.use(PHONE);
 
   test('phone: node buttons fit at 360-390 px, timeline zoom, sheet drag to any height, panel collapse', async ({ page }) => {
+    test.skip(test.info().project.name !== 'chromium', 'drives touch through CDP Input.dispatchTouchEvent (Chromium only); the WebKit touch flow is mobile.e2e.ts');
+
     await fresh(page, 'geo-from-leo');
     await solveGeo(page);
     await settled(page);

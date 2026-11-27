@@ -12,7 +12,7 @@ import { devices, expect, test, type Page } from '@playwright/test';
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/responsive';
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'layout checks run in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 
 const PHONE_UA = devices['iPhone 13'].userAgent;
 const SIZES = {
@@ -91,9 +91,13 @@ for (const [name, opts] of Object.entries(SIZES)) {
   test.describe(name, () => {
     test.use(opts as any);
     test(`${name}: layout, map dominance, tap targets, no horizontal scroll`, async ({ page }) => {
+      // Emulation artefact, not an iOS bug: Playwright WebKit is macOS WebKit, whose native <select> theme ignores min-height
+      // (the Fit menu measures 23 px); no Mac has a touch screen, and iOS Safari honours it. See docs/mobile-testing.md.
+      test.skip(test.info().project.name === 'webkit', 'macOS WebKit <select> theme ignores min-height under touch emulation');
       const errors = watch(page);
       await page.goto(`${BASE}/`);
       await page.evaluate(() => localStorage.clear());
+      await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
       await page.goto(`${BASE}/`);
       await settled(page);
       // A mission with a node, so the node editor has something to show.
@@ -159,6 +163,7 @@ test.describe('burn markers', () => {
     const errors = watch(page);
     await page.goto(`${BASE}/`);
     await page.evaluate(() => localStorage.clear());
+    await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
     await page.goto(`${BASE}/`);
     await settled(page);
     await page.evaluate(() => (window as any).sendit.editor.selectMission('earth-escape'));
@@ -217,6 +222,7 @@ test.describe('burn markers', () => {
 test.describe('phone performance', () => {
   test.use(SIZES['phone-portrait'] as any);
   test('frame time at 390 x 844 with 4x CPU throttling; idle when still', async ({ page }) => {
+    test.skip(test.info().project.name !== 'chromium', 'CPU throttling is a CDP (Chromium-only) emulation');
     const errors = watch(page);
     await page.goto(`${BASE}/#paused=0&warp=4`);
     await page.waitForFunction(() => (window as any).sendit?.store.get().loadingTarget === null, null, { timeout: 120_000 });

@@ -23,7 +23,7 @@ for (const su of r.suites ?? []) walk(su, []);
 const lines = [
   '### Browser tests',
   `${s.expected ?? 0} passed, ${s.unexpected ?? 0} failed, ${s.flaky ?? 0} flaky, ${s.skipped ?? 0} skipped.`,
-  `Jobs: engines ${process.env.ENGINES ?? '?'}, ui ${process.env.UI ?? '?'}.`,
+  `Jobs: engines ${process.env.ENGINES ?? '?'}, ui ${process.env.UI ?? '?'}, firefox ${process.env.FIREFOX ?? '?'}.`,
 ];
 if (rows.length) {
   lines.push('', '| result | project | test | where | artifact |', '|---|---|---|---|---|', ...rows, '',

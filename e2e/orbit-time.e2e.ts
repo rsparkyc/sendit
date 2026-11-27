@@ -15,7 +15,7 @@ import { referenceOf, solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/orbit';
-test.skip(({ browserName }) => browserName !== 'chromium', 'runs in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 };
 
 function watch(page: Page): string[] {
@@ -34,6 +34,7 @@ async function settled(page: Page): Promise<void> {
 async function fresh(page: Page, mission: string): Promise<void> {
   await page.goto(`${BASE}/`);
   await page.evaluate(() => localStorage.clear());
+  await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
   await page.goto(`${BASE}/`);
   await settled(page);
   await page.evaluate((m) => (window as any).sendit.editor.selectMission(m), mission);

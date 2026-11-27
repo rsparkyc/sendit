@@ -23,7 +23,7 @@ const SHOTS = 'test-results/vehicles';
 const ROOT = resolve(import.meta.dirname, '..');
 const OUT = resolve(import.meta.dirname, '.dist-node/leaderboard-vehicles');
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'vehicle flows run in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'Firefox: these flows run in Chromium and WebKit; Firefox has the smaller smoke.e2e.ts (and CI Linux Firefox has no WebGL)');
 
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 };
 
@@ -47,6 +47,7 @@ async function settled(page: Page): Promise<void> {
 async function fresh(page: Page, mission?: string): Promise<void> {
   await page.goto(`${BASE}/`);
   await page.evaluate(() => localStorage.clear());
+  await settled(page); // WebKit reports the outgoing page's in-flight worker fetches as errors if it is reloaded mid-load
   await page.goto(`${BASE}/`);
   await settled(page);
   if (mission) {

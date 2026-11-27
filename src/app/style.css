@@ -426,6 +426,8 @@ html.touch .lb-close { min-width: 44px; }
 .planner .pl-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 8px; }
 .planner .pl-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .planner .pl-input { font: 14px var(--mono); color: var(--fg); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; min-height: 44px; width: 100%; color-scheme: dark; }
+/* iOS Safari zooms the whole page when a focused field's text is smaller than 16px. */
+html.touch .planner .pl-input { font-size: 16px; }
 .planner .pl-readout { display: grid; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
 .planner .pl-readout .kv b { text-align: right; }
 .planner .pl-status, .planner .hint { font-size: 12px; color: var(--muted); }
@@ -475,6 +477,8 @@ html.touch .fctl .btn.small { min-width: 44px; flex: 1 0 44px; }
 .label.occluded .text { pointer-events: none; }
 .hover-mark { position: absolute; left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px; border: 2px solid #7dffb0; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 1px #000; z-index: 3; }
 .hover-read { position: absolute; left: 0; top: 0; pointer-events: none; font: 11px/1.35 var(--mono); color: var(--fg); background: var(--panel-solid); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; white-space: nowrap; z-index: 3; }
+/* `#hud > *` (id specificity) re-enabled pointer events on these: WebKit then hit-tests the hover ring under a resting cursor and the click misses the map. */
+#hud > .hover-mark, #hud > .hover-read { pointer-events: none; }
 canvas#view { cursor: grab; }
 canvas#view.grabbing { cursor: grabbing; }
 canvas#view.add-here { cursor: crosshair; }
@@ -589,6 +593,8 @@ html.touch .scrub-met { min-height: 44px; }
    between their step buttons; the status bar's orbit readout wraps instead of being cut off on a phone. */
 .fctl input.az-input { min-width: 6.5em; flex: 1 1 6.5em; }
 .fctl input.date-input { min-width: 13.5em; flex: 1 1 13.5em; font-size: 12px; }
+/* Touch: back to 16 px, or iOS Safari zooms the page when the field takes focus. */
+html.touch .fctl input.date-input { font-size: 16px; }
 #hud[data-mode="sheet"] .tb-key { white-space: normal; overflow: visible; }
 .fctl:has(> input.az-input), .fctl:has(> input.date-input) { flex-wrap: wrap; }
 

@@ -116,7 +116,7 @@ export class Hud {
   private readonly readouts = el('div', { className: 'readouts' });
   private readonly perf = el('div', { className: 'perf' });
   private readonly loading = el('div', { className: 'loading', role: 'status' });
-  private readonly jumpInput = el('input', { type: 'text', placeholder: 'YYYY-MM-DD [HH:MM]', spellcheck: false, title: 'Jump to a TDB date', inputMode: 'numeric', enterKeyHint: 'go' });
+  private readonly jumpInput = el('input', { type: 'text', placeholder: 'YYYY-MM-DD [HH:MM]', spellcheck: false, title: 'Jump to a TDB date', inputMode: 'text', enterKeyHint: 'go' }); // not 'numeric': iOS Safari's numeric pad has no '-' or ':', so a date could not be typed
   private readonly jumpError = el('div', { className: 'error' });
 
   constructor(

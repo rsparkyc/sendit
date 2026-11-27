@@ -41,7 +41,11 @@ export default defineConfig({
   use: { trace: 'retain-on-failure' },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    // Headless Firefox on Linux has no WebGL whatever the prefs (webgl.force-enabled etc. still end in
+    // FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS); headed Firefox under Xvfb gets Mesa llvmpipe. So on Linux CI run
+    // `PW_FIREFOX_HEADED=1 xvfb-run -a pnpm test:browsers` to give Firefox the full smoke set; without it only the
+    // load test runs there (smoke.e2e.ts skips the rest, saying why). macOS headless Firefox has WebGL.
+    { name: 'firefox', use: { ...devices['Desktop Firefox'], ...(process.env.PW_FIREFOX_HEADED ? { headless: false } : {}) } },
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
   webServer: [

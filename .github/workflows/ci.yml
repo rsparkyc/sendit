@@ -4,7 +4,8 @@ name: CI
 #   unit      typecheck + vitest
 #   build     the production site, shared with the browser jobs as the artifact site-dist
 #   engines   the cross-engine determinism suites (determinism, ephemeris), one job per engine
-#   ui        the Chromium-only UI suites, in 4 shards
+#   ui        the UI suites (incl. smoke and mobile) on Chromium in 5 shards and on WebKit in 6 shards
+#   firefox   smoke.e2e.ts on headed Firefox under Xvfb (headless Linux Firefox has no WebGL)
 #   report    merges every browser job's results into one HTML report (uploaded when something failed)
 #   deploy    pushes to main only, after all of the above passed, and only while the repository
 #             variable DEPLOY_ENABLED is 'true' (.github/workflows/deploy.yml)
@@ -143,20 +144,18 @@ jobs:
             e2e/test-results/
           retention-days: 14
 
-  ui:
-    name: UI (Chromium, shard ${{ matrix.shard }}/4)
+  firefox:
+    name: Smoke (Firefox, headed under Xvfb)
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
+    timeout-minutes: 15
     env:
       PW_SUITE: ui
+      # Headless Firefox on Linux has no WebGL; headed under Xvfb it gets Mesa llvmpipe (docs/mobile-testing.md).
+      PW_FIREFOX_HEADED: '1'
       PW_PREBUILT: '1'
       PLAYWRIGHT_BLOB_OUTPUT_DIR: ${{ github.workspace }}/e2e/blob-report
-      PLAYWRIGHT_BLOB_OUTPUT_NAME: ui-${{ matrix.shard }}.zip
+      PLAYWRIGHT_BLOB_OUTPUT_NAME: firefox-smoke.zip
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,27 +182,105 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-chromium
-      - name: Install Chromium and its system dependencies
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-firefox
+      - name: Install the browser and its system dependencies
         if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install --with-deps chromium
-      - name: Install Chromium's system dependencies (browser cached)
+        run: pnpm exec playwright install --with-deps firefox
+      - name: Install the browser's system dependencies (browser cached)
         if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: pnpm exec playwright install-deps chromium
-      - name: UI suites
-        run: pnpm test:browsers --project=chromium --shard="${{ matrix.shard }}/4"
+        run: pnpm exec playwright install-deps firefox
+      - name: Smoke tests (headed Firefox under Xvfb)
+        run: xvfb-run -a pnpm test:browsers --project=firefox e2e/smoke.e2e.ts
       - name: Upload the blob report (for the merged report)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: blob-ui-${{ matrix.shard }}
+          name: blob-firefox-smoke
+          path: e2e/blob-report/
+          retention-days: 3
+      - name: Upload this job's Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report-firefox-smoke
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14
+
+  ui:
+    name: UI (${{ matrix.engine }}, shard ${{ matrix.shard }}/${{ matrix.of }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # WebKit runs slower than Chromium on the Linux runners, so it gets one shard more.
+        include:
+          - { engine: chromium, shard: 1, of: 5 }
+          - { engine: chromium, shard: 2, of: 5 }
+          - { engine: chromium, shard: 3, of: 5 }
+          - { engine: chromium, shard: 4, of: 5 }
+          - { engine: chromium, shard: 5, of: 5 }
+          - { engine: webkit, shard: 1, of: 6 }
+          - { engine: webkit, shard: 2, of: 6 }
+          - { engine: webkit, shard: 3, of: 6 }
+          - { engine: webkit, shard: 4, of: 6 }
+          - { engine: webkit, shard: 5, of: 6 }
+          - { engine: webkit, shard: 6, of: 6 }
+    env:
+      PW_SUITE: ui
+      PW_PREBUILT: '1'
+      PLAYWRIGHT_BLOB_OUTPUT_DIR: ${{ github.workspace }}/e2e/blob-report
+      PLAYWRIGHT_BLOB_OUTPUT_NAME: ui-${{ matrix.engine }}-${{ matrix.shard }}.zip
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Download the site build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: site-dist
+          path: dist
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-${{ matrix.engine }}
+      - name: Install the browser and its system dependencies
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps "${{ matrix.engine }}"
+      - name: Install the browser's system dependencies (browser cached)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps "${{ matrix.engine }}"
+      - name: UI suites
+        run: pnpm test:browsers --project="${{ matrix.engine }}" --shard="${{ matrix.shard }}/${{ matrix.of }}"
+      - name: Upload the blob report (for the merged report)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: blob-ui-${{ matrix.engine }}-${{ matrix.shard }}
           path: e2e/blob-report/
           retention-days: 3
       - name: Upload this shard's Playwright report and traces
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-report-ui-${{ matrix.shard }}
+          name: playwright-report-ui-${{ matrix.engine }}-${{ matrix.shard }}
           path: |
             e2e/playwright-report/
             e2e/test-results/
@@ -211,7 +288,7 @@ jobs:
 
   report:
     name: Browser test report
-    needs: [engines, ui]
+    needs: [engines, ui, firefox]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -238,6 +315,7 @@ jobs:
         env:
           ENGINES: ${{ needs.engines.result }}
           UI: ${{ needs.ui.result }}
+          FIREFOX: ${{ needs.firefox.result }}
           PLAYWRIGHT_HTML_OUTPUT_DIR: ${{ github.workspace }}/playwright-report
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/merged.json
         run: |
@@ -253,7 +331,7 @@ jobs:
 
   deploy:
     name: Deploy
-    needs: [unit, build, engines, ui]
+    needs: [unit, build, engines, ui, firefox]
     # Only a push to main in this repository (never a pull request, so never a fork), and only while the
     # kill switch is on. needs: makes every verification job a precondition.
     if: >-

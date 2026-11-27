@@ -21,7 +21,7 @@ import { solveGeo } from './geo';
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/distances';
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'audit runs in Chromium');
+test.skip(({ browserName }) => browserName !== 'chromium', 'engine-independent text audit (label strings come from the same code in every engine), run once in Chromium');
 
 const SIZES = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } } as const;
 
