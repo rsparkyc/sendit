@@ -126,6 +126,27 @@ doubling) and one is not observable (the implicit half-kick's argument to the
 1PN term); the script gives the reasons. core/data is regenerated and diffed
 by scripts/test.sh.
 
+### Layer two: Earth orientation and launch states (`src/mission/launch.rs`)
+
+Ported: earth-orientation.ts (bodyToIcrf, poleAt, spinRate,
+geodeticToBodyFixed, siteIcrf with EARTH_ROTATION) and the replay path of
+launch.ts (azimuthAllowed, siteFrame, launchPlane, launchGeometry,
+launchState in j2-mean / two-body / default modes with its refusals,
+directInjectionState). The planning helpers (Math.atan2, Math.asin) are not
+ported. Earth's barycentric state is a callback (`earth_state(t, out)`); the
+vectors (core/ts/export-launch.vec.ts) record what a fake ephemeris returned
+and the time it was asked for, since the Chebyshev evaluation is proven on its
+own. 298,740 values over every site x 29 azimuths (corridor limits, one ulp
+and 1e-9 deg outside, wrapped by +-360, NaN) x parking altitudes (limits, 0,
+-0, negative, NaN) x epochs 1949-2101, 10,500 dense valid launches and 20,000
+geodetic points: 0 mismatches natively, scalar and SIMD wasm. Mutation check
+(`python3 scripts/mutation-check.py launch.rs geodetic "earth pole" "site frame" "pad velocity"`):
+10 of 12 caught; `e + geo` reordered is equivalent (commutative), and the
+j2-mean radius term `(eps / 6) s2c2u` reassociated is practically not
+observable (absorbed by `1 + x`, ~2e-4 chance per launch; the same change in
+the radial speed is caught). The bench binary has a `mission` mode so this
+code is in the native no-FMA scan.
+
 ## TypeScript behaviours reproduced deliberately
 
 - nbody.ts `fieldOf`: a zonal term whose `tesseral` list is present but

@@ -4,6 +4,7 @@
 //! TypeScript before the next is ported (see core/README.md).
 
 pub mod jsfmt;
+pub mod launch;
 pub mod mdata;
 pub mod objectives;
 pub mod plan;

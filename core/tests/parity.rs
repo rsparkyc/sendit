@@ -121,3 +121,8 @@ fn plan_codec() {
     let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
     check(sendit_core::parity3::plan_codec(&read("plan.txt"), &d));
 }
+#[test]
+fn launch() {
+    let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
+    check(sendit_core::parity3::launch(&read("launch.txt"), &d));
+}

@@ -103,9 +103,34 @@ fn bench_chunk() {
     println!("lazy builder, chunk 0 from the epoch: {}", st.fmt("ms", 1));
 }
 
+/// Mission layer (also makes its code reachable for scripts/check-no-fma.sh).
+fn bench_mission() {
+    use sendit_core::mission::{launch, mdata::MissionData, plan};
+    let d = MissionData::parse(sendit_core::data::MISSION_JSON);
+    let em = launch::EarthModel::new(&d);
+    let site = d.sites[0].clone();
+    let az = site.azimuth_min_deg;
+    let st = wall(25, 5, || {
+        for i in 0..1000 {
+            let t = black_box(i as f64 * 8.64e4);
+            let spec = launch::ParkingOrbitLaunch { site_id: site.id.clone(), launch_time: t, azimuth_deg: az, altitude_m: 2e5, ascent_time_s: None, downrange_deg: None, circularization: None };
+            let r = launch::launch_state(&d, &em, &spec, &mut |_, e| *e = [0.0; 6]).unwrap();
+            let b = launch::BurnoutState { time: 500.0, altitude_m: 2e5, horizontal_speed: 7800.0, radial_speed: 10.0, downrange: 0.2 };
+            let r2 = launch::direct_injection_state(&d, &em, &site.id, t, az, &b, &mut |_, e| *e = [0.0; 6]).unwrap();
+            black_box((r.state, r2.state, launch::launch_geometry(&em, &site, t, az)));
+        }
+    });
+    println!("1000 x (launchState + directInjectionState + launchGeometry): {}", st.fmt("ms", 2));
+    black_box(plan::decode_plan(black_box("x"), &d).is_ok());
+}
+
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("chunk") {
         bench_chunk();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("mission") {
+        bench_mission();
         return;
     }
     let world = World::parse(&std::fs::read_to_string(dir().join("world.txt")).unwrap());

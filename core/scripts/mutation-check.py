@@ -82,6 +82,28 @@ MUTATIONS = [
      'if lo_open { !(v > lo) } else { !(v >= lo) }', 'if lo_open { !(v >= lo) } else { !(v >= lo) }'),
     ('decoder: trailing-byte check dropped', 'src/mission/plan.rs',
      'if self.pos != self.buf.len() {', 'if self.pos > self.buf.len() {'),
+    # Layer two: Earth orientation and the launch states.
+    ('launch: azimuth corridor end made exclusive', 'src/mission/launch.rs', 'd <= span\n}', 'd < span\n}'),
+    ('launch: j2-mean radius term reassociated: eps * s2c2u / 6', 'src/mission/launch.rs',
+     'let rr = r0 * (1.0 + (eps / 6.0) * s2c2u);', 'let rr = r0 * (1.0 + eps * s2c2u / 6.0);'),
+    ('launch: j2-mean radial speed reassociated: (n * r0)', 'src/mission/launch.rs',
+     'let vr = -(eps / 3.0) * n * r0 * s2s2u;', 'let vr = -(eps / 3.0) * (n * r0) * s2s2u;'),
+    ('launch: j2 eps reassociated: (re * re) / (r0 * r0)', 'src/mission/launch.rs',
+     'let eps = 1.5 * j2 * (re / r0) * (re / r0);', 'let eps = 1.5 * j2 * ((re * re) / (r0 * r0));'),
+    ('launch: two-body speed as sqrt(gm) / sqrt(r0)', 'src/mission/launch.rs',
+     'let v = (earth.gm / r0).sqrt();', 'let v = earth.gm.sqrt() / r0.sqrt();'),
+    ('geodetic: e2 * (sp * sp)', 'src/mission/launch.rs',
+     'let n = self.a / (1.0 - e2 * sp * sp).sqrt();', 'let n = self.a / (1.0 - e2 * (sp * sp)).sqrt();'),
+    ('earth pole: (90 - dec) * DEG distributed', 'src/mission/launch.rs',
+     'sincos((90.0 - dec) * DEG)', 'sincos(90.0 * DEG - dec * DEG)'),
+    ('site frame: up as r / |r| instead of r * (1 / |r|)', 'src/mission/launch.rs',
+     'let up = scale(&r, 1.0 / norm(&r));', 'let up = { let k = norm(&r); [r[0] / k, r[1] / k, r[2] / k] };'),
+    ('pad velocity: omega applied to r before the cross product', 'src/mission/launch.rs',
+     'let vp = scale(&cross(&f.pole, &f.r), w);', 'let vp = cross(&f.pole, &scale(&f.r, w));'),
+    ('launch: altitude refusal accepts NaN', 'src/mission/launch.rs',
+     'if !(spec.altitude_m > 0.0) {', 'if spec.altitude_m <= 0.0 {'),
+    ('launch: geocentric added to Earth as geo + e (commutative)', 'src/mission/launch.rs',
+     'let state = [e[0] + geo[0],', 'let state = [geo[0] + e[0],'),
 ]
 
 # Mutations that are bit-identical by construction or almost never observable,
@@ -124,6 +146,17 @@ EXPECTED_INVISIBLE = {
     # in the explicit kick (kick(): c * (acc + apn)) IS caught, as is changing
     # the iteration count.
     'implicit half-kick distributed: v + half a + half apn',
+    # EQUIVALENT MUTANT (control): IEEE addition is commutative, so e + geo and
+    # geo + e are the same float64 for every input, NaN payloads aside (the
+    # comparison treats every NaN as equal).
+    'launch: geocentric added to Earth as geo + e (commutative)',
+    # NOT OBSERVABLE in practice (not equivalent): (eps / 6) s2c2u is ~3e-4 and
+    # is added to 1 before it is used, so a 1-ulp change of it (~5e-20) moves
+    # 1 + x across a rounding boundary of 1 (ulp 2.2e-16) with probability
+    # ~2e-4 per launch; 7,600 j2-mean launches in the vectors expect ~1.5 hits
+    # and showed none. The same arithmetic where it is not absorbed (the
+    # radial speed vr, eps above) IS caught.
+    'launch: j2-mean radius term reassociated: eps * s2c2u / 6',
 }
 
 
