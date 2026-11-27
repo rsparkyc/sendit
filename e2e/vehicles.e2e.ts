@@ -197,9 +197,11 @@ test.describe('desktop flows', () => {
     const p2 = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
     await p2.goto(`${BASE}/`);
     await p2.evaluate(() => localStorage.clear());
+    // The link opened in a tab already running the app: only the hash changes. The app must load it itself (it
+    // reloads); it used to ignore it and then write its own plan's hash over the link 250 ms later, so a reload
+    // after that (the old version of this test; on CI's slower WebKit, sometimes) showed no notice.
     await p2.goto(url);
-    await p2.reload();
-    await expect(p2.locator('.notice')).toContainText('earlier version of the mission');
+    await expect(p2.locator('.notice')).toContainText('earlier version of the mission', { timeout: 30_000 });
     expect(await p2.evaluate(() => (window as any).sendit.store.get().missionId)).toBe('sandbox');
     await p2.screenshot({ path: `${SHOTS}/6-old-version-refused.png` });
   });

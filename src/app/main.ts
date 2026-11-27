@@ -521,6 +521,19 @@ function planChanged(): void {
   }, 250);
 }
 
+// A plan link opened in a tab that already runs the app (pasted into the address bar, or a fragment-only navigation)
+// changes only the hash: the page is not reloaded, and the startup code that loads a shared link (and says why it
+// was refused) does not run. Worse, the pending save above then wrote the current plan's hash over the link, so
+// even a manual reload lost it. Load the link the way a fresh page does: drop the pending save and reload.
+addEventListener('hashchange', () => {
+  if (new URLSearchParams(location.hash.slice(1)).get('p') === null) return;
+  const s = store.get();
+  if (location.hash === planHash(s.missionId, s.plan)) return;
+  if (saveTimer !== null) clearTimeout(saveTimer);
+  saveTimer = null;
+  location.reload();
+});
+
 store.subscribe((s, p) => {
   if (s.plan.epoch !== p.plan.epoch && s.loadingTarget === null) {
     // Liftoff / start moved: keep the time cursor at the same mission elapsed time, inside the flight.
