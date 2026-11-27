@@ -25,6 +25,7 @@ pub mod exact_math;
 pub mod fixture;
 pub mod gravity;
 pub mod json;
+pub mod mission;
 pub mod nbody;
 pub mod orientation;
 pub mod data;
