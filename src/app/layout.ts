@@ -35,7 +35,7 @@
  * camera centres its focus there (so a dock or the sheet never hides it).
  */
 import { el } from './dom';
-import { onTap } from './tap';
+import { armClickBlock, onTap, ownTap } from './tap';
 import { DEFAULT_OPACITY, defaultRect, emptyFloats, floatAllowed, parseFloats, type FloatModes } from './float-geom';
 import { FloatWindow } from './float-window';
 
@@ -591,6 +591,7 @@ export class Layout {
   private wireGrip(): void {
     let start: { y: number; h: number; moved: boolean } | null = null;
     const order: SheetState[] = ['peek', 'half', 'full'];
+    ownTap(this.grip); // acts on pointerup itself (tap cycles, drag resizes)
     this.grip.addEventListener('pointerdown', (e) => {
       if (this.mode !== 'sheet') return;
       start = { y: e.clientY, h: this.sheet.getBoundingClientRect().height, moved: false };
@@ -611,7 +612,10 @@ export class Layout {
       start = null;
       this.sheet.classList.remove('dragging');
       if (!s.moved) {
-        if (e.type === 'pointerup') this.setSheet(order[(order.indexOf(this.sheetState) + 1) % 3]);
+        if (e.type === 'pointerup') {
+          if (e.pointerType !== 'mouse') armClickBlock(); // its late click must not land on what the resize put under the finger
+          this.setSheet(order[(order.indexOf(this.sheetState) + 1) % 3]);
+        }
         return;
       }
       const h = s.h - (e.clientY - s.y);

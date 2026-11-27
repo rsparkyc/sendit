@@ -25,6 +25,7 @@ import { computeFrame, frameCenter, frameKey, newFrameState, parseFrameKey, toFr
 import { Hud, type Readout } from './hud';
 import { bodyOrientation, displayPole } from './orientation';
 import { Layout } from './layout';
+import { installTapLayer } from './tap';
 import { LeaderboardPanel } from './leaderboard-ui';
 import { MapInput } from './map-input';
 import { DOT_TAP_RADIUS, dotUnderTap, isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick';
@@ -169,6 +170,7 @@ const editor = new Editor(store, fingerprint);
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const overlay = document.getElementById('labels') as HTMLElement;
 const hudRoot = document.getElementById('hud') as HTMLElement;
+installTapLayer(); // every button-like control acts once per clean touch tap, even when the browser drops its click
 const layout = new Layout(hudRoot);
 document.documentElement.classList.toggle('touch', matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
