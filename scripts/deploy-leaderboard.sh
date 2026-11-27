@@ -40,7 +40,9 @@ if [[ -z "$DISTRIBUTION" || "$DISTRIBUTION" == None ]]; then
   exit 1
 fi
 
-pnpm test
+# SKIP_TESTS=1: the caller vouches that the unit tests already passed on this exact commit (CI does,
+# before an automatic deploy) or accepts deploying without them (the workflow's skip_tests input).
+if [[ "${SKIP_TESTS:-0}" != 1 ]]; then pnpm test; fi
 pnpm build:leaderboard
 
 # Zip handler + its chunks + checkpoint asset (no bench / admin entry points). Fixed mtimes: same build, same zip, same key.
