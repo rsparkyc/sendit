@@ -714,3 +714,24 @@ html.touch .fctl input.date-input { font-size: 16px; }
 .launch-cost .lc-parts { color: var(--muted); font-size: 12px; }
 /* Outside wide mode the cost line stays one line (it is sticky over the charts); its detail is in the title and the wide column. */
 #hud:not([data-mode="wide"]) .launch-cost .lc-ref { display: none; }
+
+/* Nodes panel holds still while a replay recomputes (editor-ui.ts NodesPanel): rows are kept and
+   updated in place; each field has a fixed width so changing digits never re-wraps a row; replay
+   values keep their last value, dimmed, while a new replay is pending; readout lines stay one line. */
+.node-list .node-row > .nmet { min-width: 14ch; }
+.node-list .node-row > .ndv { min-width: 12ch; text-align: right; }
+.node-list .node-row > .nact { min-width: 17ch; }
+.node-list .node-row > .ndrops { min-width: 24ch; }
+.node-list .node-row > .nchip:empty, .node-list .nerr[hidden] { display: none; }
+.node-row, .node-readout, .tuner input { font-variant-numeric: tabular-nums; }
+.nact.stale, .node-readout .kv.stale b { opacity: 0.55; transition: opacity 0.15s; }
+.node-readout .kv b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.node-readout .kv > span { flex: none; }
+.node-readout .kv[hidden] { display: none; }
+/* Desktop status line: its width no longer follows its text (which changes while a replay runs), so the
+   Credits link and "?" never wrap or move; the key number ellipsizes (full text in its tooltip). */
+#hud[data-mode="wide"] .topbar { flex-wrap: nowrap; }
+#hud[data-mode="wide"] .tb-status { flex: 1 1 0; flex-wrap: nowrap; }
+/* Results status ("Replaying…", "Preview…"): a reserved single line, so the panel does not grow and shrink on every edit. */
+.status.results-status { display: block; min-height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.replay-pending .stack-totals .kv:last-child b, .replay-pending .stage-live > div:has(> b:first-child) { opacity: 0.55; }
