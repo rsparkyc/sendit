@@ -67,7 +67,7 @@ if (mode === 'parity') {
   const sections = [
     [0, 'dmath.txt'], [1, 'dop853.txt'], [2, 'gravity.txt'], [3, 'orientation.txt'], [4, 'ephem.txt'],
     [5, null], [6, 'deriv.txt'], [7, 'prop.txt'], [8, 'corrector.txt'], [9, 'deriv-rel.txt'],
-    [10, 'nbody.txt'], [11, 'chunks.txt'],
+    [10, 'nbody.txt'], [11, 'chunks.txt'], [12, 'plan.txt'],
   ];
   // Section 11 reads the checkpoint asset and the chunk bins through add_file.
   const addFile = (name, b) => {

@@ -767,14 +767,14 @@ impl R<'_> {
     }
     fn str(&mut self, what: &str) -> Result<String, String> {
         let n = self.u8(what)? as usize;
-        if n == 0 || n > self.max_id {
+        if (n == 0 || n > self.max_id) && self.max_id != usize::MAX {
             return Err(format!("{what}: bad id length {n}"));
         }
         self.need(n, what)?;
         // String.fromCharCode of each byte (Latin-1), then the id pattern.
         let s: String = self.buf[self.pos..self.pos + n].iter().map(|&b| b as char).collect();
         self.pos += n;
-        if !is_id(&s, usize::MAX) {
+        if self.max_id != usize::MAX && !is_id(&s, usize::MAX) {
             return Err(format!("{what}: id has invalid characters"));
         }
         Ok(s)
@@ -789,13 +789,25 @@ impl R<'_> {
 
 /// decodePlan(): decode and validate (structural). Err carries the PlanError message.
 pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
+    let plan = parse_plan(s, d, true)?;
+    let errs = validate_plan(&plan, d, LaunchCheck::Structural);
+    if !errs.is_empty() {
+        return Err(format!("invalid plan: {}", errs.join("; ")));
+    }
+    Ok(plan)
+}
+
+/// The wire format only. `strict`: decodePlan's count limits and action order
+/// (false reads any well-formed bytes, so validation can be compared on plans
+/// the decoder would refuse).
+pub fn parse_plan(s: &str, d: &MissionData, strict: bool) -> Result<Plan, String> {
     let l = &d.limits;
     let len16 = s.encode_utf16().count();
     if len16 > l.max_encoded_length {
         return Err(format!("plan string is too long ({len16} > {})", l.max_encoded_length));
     }
     let bytes = from_base64url(s)?;
-    let mut r = R { buf: &bytes, pos: 0, max_id: l.max_id_length };
+    let mut r = R { buf: &bytes, pos: 0, max_id: if strict { l.max_id_length } else { usize::MAX } };
     if r.u8("magic")? != 0x53 {
         return Err("not a mission plan (bad magic byte)".into());
     }
@@ -816,10 +828,10 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
             *x = r.f64("start.state")?;
         }
         Start::State { center, state }
-    } else if tag == 1 || (tag == 2 && format >= PLAN_FORMAT_STAGED) || (tag == 3 && format == PLAN_FORMAT_DIRECT) {
+    } else if tag == 1 || (tag == 2 && (format >= PLAN_FORMAT_STAGED || !strict)) || (tag == 3 && (format == PLAN_FORMAT_DIRECT || !strict)) {
         let site = r.str("start.site")?;
         let n = r.u8("start.params count")? as usize;
-        if n > l.max_launch_params {
+        if strict && n > l.max_launch_params {
             return Err(format!("too many launch parameters ({n})"));
         }
         let mut params = Vec::with_capacity(n);
@@ -834,7 +846,7 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
         let wet_mass = r.f64(&format!("{what}.wetMass"))?;
         let dry_mass = r.f64(&format!("{what}.dryMass"))?;
         let ne = r.u8(&format!("{what} engine count"))? as usize;
-        if ne > l.max_engines {
+        if strict && ne > l.max_engines {
             return Err(format!("too many engines ({ne})"));
         }
         let mut engines = Vec::new();
@@ -870,7 +882,7 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
     let plan = if format == PLAN_FORMAT {
         let spacecraft = read_stage(&mut r, "spacecraft")?;
         let nb = r.u16("burn count")? as usize;
-        if nb > l.max_burns {
+        if strict && nb > l.max_burns {
             return Err(format!("too many burns ({nb} > {})", l.max_burns));
         }
         let mut burns = Vec::new();
@@ -881,7 +893,7 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
         Plan { format, model, data, epoch, duration, rtol, start, spacecraft, burns, lower_stages: None, separations: None }
     } else {
         let ns = r.u8("stage count")? as usize;
-        if ns < 1 || ns > l.max_stages {
+        if ns < 1 || (strict && ns > l.max_stages) {
             return Err(format!("a vehicle needs 1-{} stages, got {ns}", l.max_stages));
         }
         let mut stages = Vec::new();
@@ -889,7 +901,7 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
             stages.push(read_stage(&mut r, &format!("stages[{k}]"))?);
         }
         let na = r.u16("action count")? as usize;
-        if na > l.max_burns + l.max_separations {
+        if strict && na > l.max_burns + l.max_separations {
             return Err(format!("too many actions ({na})"));
         }
         let mut burns = Vec::new();
@@ -900,14 +912,14 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
             let kind = r.u8(&format!("actions[{i}] kind"))?;
             let t;
             if kind == 0 {
-                if burns.len() >= l.max_burns {
+                if strict && burns.len() >= l.max_burns {
                     return Err(format!("too many burns (> {})", l.max_burns));
                 }
                 let b = read_burn(&mut r, burns.len(), true)?;
                 t = b.start;
                 burns.push(b);
             } else if kind == 1 {
-                if seps.len() >= l.max_separations {
+                if strict && seps.len() >= l.max_separations {
                     return Err(format!("too many separations (> {})", l.max_separations));
                 }
                 t = r.f64(&format!("separations[{}].time", seps.len()))?;
@@ -915,7 +927,7 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
             } else {
                 return Err(format!("actions[{i}]: unknown action kind {kind}"));
             }
-            if t < prev_t || (t == prev_t && kind == 1 && prev_kind == 0) {
+            if strict && (t < prev_t || (t == prev_t && kind == 1 && prev_kind == 0)) {
                 return Err(format!("actions[{i}]: actions are not in time order (action-order)"));
             }
             prev_t = t;
@@ -925,9 +937,5 @@ pub fn decode_plan(s: &str, d: &MissionData) -> Result<Plan, String> {
         let spacecraft = stages.pop().unwrap();
         Plan { format, model, data, epoch, duration, rtol, start, spacecraft, burns, lower_stages: Some(stages), separations: Some(seps) }
     };
-    let errs = validate_plan(&plan, d, LaunchCheck::Structural);
-    if !errs.is_empty() {
-        return Err(format!("invalid plan: {}", errs.join("; ")));
-    }
     Ok(plan)
 }

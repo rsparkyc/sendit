@@ -76,6 +76,12 @@ MUTATIONS = [
      'y[k] = s / diag[k];', 'y[k] = s * (1.0 / diag[k]);'),
     ('fit: pseudo-inverse dot product in reverse row order', 'src/chunk.rs',
      'for r in 0..rows {\n                    sum += basis.pinv', 'for r in (0..rows).rev() {\n                    sum += basis.pinv'),
+    # Layer two: the plan codec and validation.
+    ('azimuth corridor end made exclusive', 'src/mission/plan.rs', 'd <= span\n}', 'd < span\n}'),
+    ('range check lower bound inclusive where open', 'src/mission/plan.rs',
+     'if lo_open { !(v > lo) } else { !(v >= lo) }', 'if lo_open { !(v >= lo) } else { !(v >= lo) }'),
+    ('decoder: trailing-byte check dropped', 'src/mission/plan.rs',
+     'if self.pos != self.buf.len() {', 'if self.pos > self.buf.len() {'),
 ]
 
 # Mutations that are bit-identical by construction or almost never observable,

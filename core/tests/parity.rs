@@ -116,3 +116,8 @@ fn chunks() {
 fn derivative_relativistic() {
     check(parity::deriv_rel(&read("deriv-rel.txt")));
 }
+#[test]
+fn plan_codec() {
+    let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
+    check(sendit_core::parity3::plan_codec(&read("plan.txt"), &d));
+}
