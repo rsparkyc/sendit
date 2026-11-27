@@ -29,6 +29,18 @@ struct State {
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static REPORT: RefCell<String> = const { RefCell::new(String::new()) };
+    static FILES: RefCell<std::collections::HashMap<String, Vec<u8>>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Install a named byte file (the checkpoint asset, chunk bins) for sections that read several files.
+#[unsafe(no_mangle)]
+pub extern "C" fn add_file(name: *const u8, name_len: usize, ptr: *const u8, len: usize) {
+    let n = text(name, name_len).to_string();
+    let b = bytes(ptr, len).to_vec();
+    FILES.with(|f| f.borrow_mut().insert(n, b));
+}
+fn file(name: &str) -> Option<Vec<u8>> {
+    FILES.with(|f| f.borrow().get(name).cloned())
 }
 
 fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
@@ -75,7 +87,8 @@ pub extern "C" fn set_simd(on: i32) {
 /// Run one parity section over the fixture text; returns the number of mismatches
 /// (u32::MAX if nothing was compared). The summary is in report_ptr/report_len.
 /// Sections: 0 dmath, 1 dop853, 2 gravity, 3 orientation, 4 ephem, 5 golden eval,
-/// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative.
+/// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative, 10 n-body integrator,
+/// 11 chunks (needs add_file: the checkpoint asset and the chunk bins).
 #[unsafe(no_mangle)]
 pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
     let t = text(ptr, len);
@@ -84,6 +97,11 @@ pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
         1 => parity::dop853(t),
         2 => parity::gravity(t),
         9 => parity::deriv_rel(t),
+        10 => crate::parity2::nbody(t, &crate::data::world()),
+        11 => {
+            let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+            crate::parity2::chunks(t, &crate::data::world(), &asset, file)
+        }
         _ => STATE.with(|s| {
             let mut g = s.borrow_mut();
             let st = g.as_mut().expect("set_world first");
