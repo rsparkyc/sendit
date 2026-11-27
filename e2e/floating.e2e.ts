@@ -8,6 +8,7 @@
  * front. Screenshots go to test-results/floating/.
  */
 import { devices, expect, test, type Page } from '@playwright/test';
+import { clickableTrajectoryPoint } from './view';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/floating';
@@ -187,10 +188,8 @@ test.describe('desktop', () => {
     const errors = watch(page);
     await fresh(page);
     await page.evaluate(() => { const w = (window as any).sendit; w.camera.setDistance(4e7, true); w.store.set({ paused: true }); });
-    await page.waitForTimeout(400);
-    const t = await page.evaluate(() => { const p = (window as any).sendit.store.get().plan; return p.duration * 0.05; });
-    const p = await page.evaluate((tm) => (window as any).sendit.screenAt(tm, true), t);
-    expect(p, 'trajectory point on screen').not.toBeNull();
+    const dur = await page.evaluate(() => (window as any).sendit.store.get().plan.duration as number);
+    const p = await clickableTrajectoryPoint(page, [0.05, 0.03, 0.08, 0.12, 0.2].map((f) => dur * f));
     await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).click();
     // Put the window's body over that trajectory point and make it short, so its content scrolls.
     await page.evaluate(({ x, y }) => {

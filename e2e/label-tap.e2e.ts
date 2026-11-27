@@ -8,6 +8,7 @@
  * on screen. Screenshots go to test-results/label-tap/.
  */
 import { devices, expect, test, type Page } from '@playwright/test';
+import { frames, settleCamera } from './view';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/label-tap';
@@ -21,10 +22,6 @@ async function settled(page: Page): Promise<void> {
   }, null, { timeout: 120_000 });
 }
 
-async function frames(page: Page, k = 4): Promise<void> {
-  const n0 = await page.evaluate(() => (window as any).sendit.renders());
-  await page.waitForFunction(([n, kk]) => (window as any).sendit.renders() >= n + kk, [n0, k] as const);
-}
 
 type Cluster = { key: string; x: number; y: number; size: number };
 
@@ -52,16 +49,34 @@ async function setUp(page: Page): Promise<Cluster> {
     if (w.layout.mode === 'sheet') w.layout.setSheet('peek');
     w.camera.elevation = 1.2;
   });
+  // Search camera directions and distances (body frames are pole-up, so no one fixed direction suits every
+  // launch) for a cluster on open map whose dot really takes a tap: the map or the cluster's own label is the top
+  // element there (another label's text over the dot would take the tap instead), and the map's picking at the dot
+  // chooses the cluster itself.
   const free = await page.evaluate(() => (window as any).sendit.layout.freeRect());
   const vp = page.viewportSize()!;
-  for (const d of [3e7, 5e7, 8e7, 1.2e8, 2e8, 3e8, 5e8]) {
-    await page.evaluate((dd) => (window as any).sendit.camera.setDistance(dd, true), d);
-    await frames(page, 6);
-    const st = await page.evaluate(() => (window as any).sendit.labelState());
-    const open = (st.clusters as Cluster[]).filter((c) => c.x > free.left + 30 && c.x < vp.width - free.right - 30 && c.y > free.top + 30 && c.y < vp.height - free.bottom - 30);
-    if (open.length) return open[0];
+  const seen: string[] = [];
+  for (const [az, el] of [[null, 1.2], [0, 1.2], [Math.PI / 2, 1.2], [Math.PI, 1.2], [(3 * Math.PI) / 2, 1.2], [0, -1.2], [Math.PI, -1.2], [0, 0.7], [Math.PI, 0.7]] as const) {
+    await page.evaluate(([a, e]) => { const c = (window as any).sendit.camera; if (a !== null) c.azimuth = a; c.elevation = e; }, [az, el] as const);
+    for (const d of [3e7, 5e7, 8e7, 1.2e8, 2e8, 3e8, 5e8]) {
+      await page.evaluate((dd) => (window as any).sendit.camera.setDistance(dd, true), d);
+      await settleCamera(page);
+      await frames(page, 6);
+      const st = await page.evaluate(() => (window as any).sendit.labelState());
+      const open = (st.clusters as Cluster[]).filter((c) => c.x > free.left + 30 && c.x < vp.width - free.right - 30 && c.y > free.top + 30 && c.y < vp.height - free.bottom - 30);
+      for (const c of open) {
+        const r = await page.evaluate(([x, y, key, touch]) => {
+          const e = document.elementFromPoint(x, y);
+          const own = !!e && (e.id === 'view' || e.closest('.label')?.getAttribute('data-key') === key);
+          const win = (window as any).sendit.pickAt(x, y, touch, false).winner;
+          return { own, top: e ? `${(e.closest('.label') as HTMLElement | null)?.dataset.key ?? e.id ?? e.tagName}` : 'null', win: win?.key ?? null };
+        }, [c.x, c.y, c.key, vp.width < 600] as const);
+        if (r.own && r.win === c.key) return c;
+        seen.push(`az ${az ?? 'current'} el ${el} d ${d}: ${c.key} under ${r.top}, pick ${r.win}`);
+      }
+    }
   }
-  throw new Error('no cluster on the open map at any distance');
+  throw new Error(`no tappable cluster on the open map; seen:\n  ${seen.join('\n  ')}`);
 }
 
 /** The element under a client point is the map or a map label (nothing of the HUD covers it). */
@@ -87,7 +102,7 @@ for (const [size, use] of [
       // Real input at the cluster's dot.
       if (touch) await page.touchscreen.tap(c.x, c.y);
       else await page.mouse.click(c.x, c.y);
-      await frames(page);
+      await frames(page, 4);
       const st1 = await page.evaluate(() => (window as any).sendit.labelState());
       expect(st1.expanded, 'the tap expanded the cluster').toBe(c.key);
       await expect(page.locator(`.label[data-key="${c.key}"]`)).not.toHaveClass(/\bcluster\b/);
@@ -100,7 +115,7 @@ for (const [size, use] of [
       await page.waitForTimeout(450);
       if (touch) await page.touchscreen.tap(pick!.x, pick!.y);
       else await page.mouse.click(pick!.x, pick!.y);
-      await frames(page);
+      await frames(page, 4);
       const s = await page.evaluate(() => { const st = (window as any).sendit.store.get(); return { node: st.selectedNode, ev: st.selectedEvent }; });
       if (pick!.key.startsWith('ev:')) expect(s.ev).toBe(Number(pick!.key.slice(3)));
       else expect(s.node).toBe(Number(pick!.key.split(':')[1]));

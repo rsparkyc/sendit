@@ -110,6 +110,8 @@ for (const [size, opts] of [['desktop', { viewport: { width: 1440, height: 900 }
       expect(met.node).toMatch(/^T\+/);
       await page.locator('.scrub-met').click();
       await expect(page.locator('.scrub-met')).toContainText('UTC');
+      // The Orbit panel redraws on its own schedule (next frame / throttled), so wait for it rather than read at once.
+      await expect(page.locator('.orbit-grid')).toContainText('UTC');
       const utc = await grab();
       expect(utc.node).toMatch(/UTC/);
       expect(utc.ev).toMatch(/UTC/);

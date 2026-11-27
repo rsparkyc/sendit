@@ -1676,6 +1676,8 @@ Object.assign(window, {
       return behindBody(path.points, 3 * best);
     },
     listedEvents: () => listed,
+    /** Sim seconds per real second at the current warp (the rate playback and J / K use), for tests. */
+    warpRate: () => WARP_RATES[store.get().warpIndex],
     /** What a tap on a map label or marker does (labelPick), for tests. */
     pickLabel: (key: string) => labelPick(key),
     /** The label layout's cluster radius in the last frame (px; 22 in touch mode, 7 with a mouse), and its clusters. */

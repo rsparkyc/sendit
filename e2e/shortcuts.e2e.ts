@@ -52,30 +52,26 @@ test.describe('J / K time keys', () => {
     await middle(page);
     await page.locator('#view').hover();
     const warpRate = async () => page.evaluate(async () => { const s = (window as any).sendit.store.get(); return s.warpIndex; });
-    // Rate: measure what one second of playback gives at this warp (the same rate J / K use).
-    const r = await page.evaluate(async () => {
-      const st = (window as any).sendit.store;
-      const t0 = st.get().t;
-      st.set({ paused: false });
-      const a = performance.now();
-      await new Promise((res) => setTimeout(res, 500));
-      st.set({ paused: true });
-      const dt = (performance.now() - a) / 1000;
-      const t1 = st.get().loadingTarget ?? st.get().t;
-      st.set({ t: t0, loadingTarget: t0 });
-      return (t1 - t0) / dt;
-    });
+    // Rate: the warp rate J / K use (sim s per real s), read from the app; estimating it from a stretch of playback
+    // under-read on a loaded runner.
+    const r = await page.evaluate(() => (window as any).sendit.warpRate() as number);
     await settled(page);
     expect(r).toBeGreaterThan(0);
 
     // Hold, measured rather than assumed: on a slow runner the key is held longer than the waitForTimeout, so the
     // page records when it saw keydown and keyup and the distance is compared with rate × that held time. Slack:
     // a frame or two of latency at each end (the last frame before keyup may not have run), and r's own error.
+    // The page also records animation frames while a key is held: TimeKeys applies at most MAX_FRAME (0.25 s) of
+    // real time per frame, so with frames longer than that the cursor legitimately moves less than rate × held.
     await page.evaluate(() => {
       const w = window as any;
       w.__keyAt = {};
-      addEventListener('keydown', (e) => { if (!e.repeat) w.__keyAt[`down-${e.key}`] = performance.now(); }, true);
-      addEventListener('keyup', (e) => { w.__keyAt[`up-${e.key}`] = performance.now(); }, true);
+      w.__frames = [];
+      let down = false;
+      const tick = (ts: number) => { if (down) w.__frames.push(ts); requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+      addEventListener('keydown', (e) => { if (!e.repeat) { w.__keyAt[`down-${e.key}`] = performance.now(); w.__frames = []; down = true; } }, true);
+      addEventListener('keyup', (e) => { w.__keyAt[`up-${e.key}`] = performance.now(); down = false; }, true);
     });
     const hold = async (key: string, ms: number) => {
       const t0 = await T(page);
@@ -83,28 +79,36 @@ test.describe('J / K time keys', () => {
       await page.waitForTimeout(ms);
       await page.keyboard.up(key);
       const d = (await T(page)) - t0;
-      const held = await page.evaluate((k) => { const a = (window as any).__keyAt; return (a[`up-${k}`] - a[`down-${k}`]) / 1000; }, key);
-      return { d, held };
+      return { d, ...(await page.evaluate((k) => {
+        const w = window as any;
+        const a = w.__keyAt[`down-${k}`], b = w.__keyAt[`up-${k}`];
+        // Real time TimeKeys can have applied: each frame gap clamped to 0.25 s, from keydown to the last frame.
+        let applied = 0, prev = a;
+        for (const f of w.__frames as number[]) { applied += Math.min(0.25, Math.max(0, f - prev) / 1000); prev = f; }
+        return { held: (b - a) / 1000, applied, frames: w.__frames.length };
+      }, key)) };
     };
     const SLACK = 0.1; // real seconds: about two frames at 30 fps at each end together, plus timer granularity
     // `room`: how far the cursor could move before the end of the range stops it (J runs back into the start).
-    const near = (d: number, held: number, what: string, room = Infinity) => {
-      const lo = Math.min(r * Math.max(0.1, held - SLACK) * 0.85, room * 0.999);
-      const hi = r * Math.max(0.1, held + SLACK) * 1.15;
-      expect(Math.abs(d), `${what}: moved ${d.toFixed(1)} s in ${held.toFixed(3)} s held at ${r.toFixed(1)} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`).toBeGreaterThan(lo);
-      expect(Math.abs(d), `${what}: moved ${d.toFixed(1)} s in ${held.toFixed(3)} s held at ${r.toFixed(1)} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`).toBeLessThan(hi);
+    // Upper bound strict: rate × held time. Lower bound: rate × the real time the frames could have applied.
+    const near = (h: { d: number; held: number; applied: number; frames: number }, what: string, room = Infinity) => {
+      const lo = Math.min(r * Math.max(0.1, Math.min(h.held, h.applied) - SLACK) * 0.85, room * 0.999);
+      const hi = r * Math.max(0.1, h.held + SLACK) * 1.15;
+      const msg = `${what}: moved ${h.d.toFixed(1)} s in ${h.held.toFixed(3)} s held (${h.frames} frames, ${h.applied.toFixed(3)} s applicable) at ${r} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`;
+      expect(Math.abs(h.d), msg).toBeGreaterThan(lo);
+      expect(Math.abs(h.d), msg).toBeLessThan(hi);
     };
     // Hold K ~1 s: forward by rate × held.
     let h = await hold('k', 1000);
-    console.log(`hold K: ${h.d.toFixed(0)} s in ${h.held.toFixed(3)} s held at ${r.toFixed(0)} s/s`);
+    console.log(`hold K: ${h.d.toFixed(0)} s in ${h.held.toFixed(3)} s held, ${h.frames} frames, at ${r} s/s`);
     expect(h.d).toBeGreaterThan(0);
-    near(h.d, h.held, 'hold K');
+    near(h, 'hold K');
     // Hold J: back. The cursor started at the beginning of the flight, so J can only undo what K did: on a slow
     // runner J is held longer than K was and stops at the start (seen on CI: exactly K's distance).
     const room = h.d;
     h = await hold('j', 1000);
     expect(h.d).toBeLessThan(0);
-    near(h.d, h.held, 'hold J', room);
+    near(h, 'hold J', room);
     // Tap: at least a tenth of a second's worth (the top-up), more only if the press itself lasted longer.
     let t0 = await T(page);
     await page.keyboard.press('k');

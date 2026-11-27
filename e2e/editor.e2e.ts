@@ -7,6 +7,7 @@
  * interplanetary coast and printed.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { clickableTrajectoryPoint } from './view';
 import { solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
@@ -96,9 +97,8 @@ async function frames(page: Page, k = 2): Promise<void> {
 async function addNodeByClick(page: Page, tMission: number): Promise<void> {
   // Look at the parking orbit from above so the click lands on it.
   await page.evaluate(() => { const w = (window as any).sendit; w.camera.setDistance(4e7, true); w.store.set({ paused: true }); });
-  await frames(page);
-  const p = await page.evaluate((t) => (window as any).sendit.screenAt(t, true), tMission);
-  expect(p, 'trajectory point on screen').not.toBeNull();
+  // Whichever camera direction shows the point at tMission clickable (body frames are pole-up: see e2e/view.ts).
+  const p = await clickableTrajectoryPoint(page, [tMission]);
   const before = await page.evaluate(() => (window as any).sendit.nodesOf().length);
   // A click picks the point (no node yet); "Add node here" adds it.
   await page.mouse.click(p.x, p.y);
