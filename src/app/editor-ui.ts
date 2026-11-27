@@ -47,6 +47,7 @@ import { conformance, craftPerformance, launchOf, missionById, MISSIONS, SPACECR
 import { budget, dvMagnitude, elementsFromState, nodesOf, separationOffer, separationRefusal, separationsOf, stageAt, stateFromElements, type OrbitElements } from './nodes';
 import { stageRows } from './vehicle';
 import { LaunchFeedback } from './vehicle-ui';
+import { clampAzimuth, corridorLabel } from './launch-limits';
 import { BODIES, bodyIndex } from './physics';
 import type { AppState, Store } from './store';
 import { calendarToTdb, DAY, formatCalendar, parseCalendar, tdbToCalendar } from './time';
@@ -288,7 +289,14 @@ export class StartPanel {
     };
     this.az = numInput('Inertial launch azimuth, degrees clockwise from north', '0.1', (v) => {
       const l = launch();
-      if (l) ctx.editor.setLaunch({ ...l, azimuthDeg: ((v % 360) + 360) % 360 });
+      if (!l) return;
+      // Kept inside the site's corridor (nearest limit), with a note, rather than a refused launch.
+      const s = launchSite(l.site);
+      const az = ((v % 360) + 360) % 360;
+      const clamped = clampAzimuth(s, az);
+      this.err.textContent = clamped !== az ? `Azimuth kept within ${siteName(s.name)}'s launch corridor (${corridorLabel(s)})` : '';
+      ctx.editor.setLaunch({ ...l, azimuthDeg: clamped });
+      this.az.value = String(+clamped.toFixed(4)); // even while focused: show what was kept
     }, 'az-input');
     this.alt = numInput('Parking orbit altitude above Earth’s reference (equatorial) radius, km', '1', (v) => {
       const l = launch();
@@ -305,7 +313,8 @@ export class StartPanel {
     this.targetInc = numInput('Target inclination, degrees: shows the azimuths that reach it', '0.1', () => this.renderAzChoices(ctx.store.get().plan));
     const stepAz = (d: number) => {
       const l = launch();
-      if (l) ctx.editor.setLaunch({ ...l, azimuthDeg: Math.round((((l.azimuthDeg + d) % 360) + 360) % 360 * 100) / 100 });
+      // A step that would leave the corridor stops at the limit on its side (from outside: nearest limit).
+      if (l) ctx.editor.setLaunch({ ...l, azimuthDeg: clampAzimuth(launchSite(l.site), Math.round((((l.azimuthDeg + d) % 360) + 360) % 360 * 100) / 100, l.azimuthDeg) });
     };
     const stepTime = (d: number) => {
       const l = launch();
@@ -404,6 +413,9 @@ export class StartPanel {
     }
     for (const [label, az, ok] of [['Northerly', r.northerly, r.northerlyAllowed], ['Southerly', r.southerly, r.southerlyAllowed]] as const) {
       const btn = el('button', { className: `btn small${ok ? '' : ' bad'}`, textContent: `${label} ${az.toFixed(2)}°${ok ? '' : ' (outside range)'}`, type: 'button' });
+      // An azimuth outside the corridor is shown but cannot be chosen.
+      btn.disabled = !ok;
+      if (!ok) btn.title = `Outside ${siteName(s.name)}'s launch corridor (${corridorLabel(s)})`;
       btn.onclick = () => this.ctx.editor.setLaunch({ ...l, azimuthDeg: Math.round(az * 1e4) / 1e4 });
       this.azChoices.append(btn);
     }

@@ -123,8 +123,9 @@ export class Editor {
     this.commit(withLaunchRule(entry, { ...this.plan, model: PHYSICS_MODEL, data: this.fingerprint }), { notice: null });
   }
 
-  setLaunch(l: LaunchDefaults): void {
-    this.commit(withLaunchRule(missionById(this.store.get().missionId), withLaunch(this.plan, l)));
+  /** `key` coalesces a burst of edits of one launch value (a chart drag) into one undo step. */
+  setLaunch(l: LaunchDefaults, key: string | null = null): void {
+    this.commit(withLaunchRule(missionById(this.store.get().missionId), withLaunch(this.plan, l)), {}, key);
   }
 
   setStateStart(center: string, epoch: number, state: number[]): void {
