@@ -80,7 +80,34 @@ fn cases(file: &str) -> Vec<Case> {
     out
 }
 
+/// `bench chunk`: build one chunk from its checkpoint in the asset, and the
+/// lazy builder from the epoch (also makes the n-body integrator and the chunk
+/// fitter part of this binary, which scripts/check-no-fma.sh scans).
+fn bench_chunk() {
+    use sendit_core::chunk::{bases_for, build_chunk, decode_checkpoint_asset, initial_checkpoint, ChunkBuilder};
+    let w = sendit_core::data::world();
+    let asset = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).unwrap();
+    let a = decode_checkpoint_asset(&asset).unwrap();
+    let bases = bases_for(&w.layout);
+    let cp = a.checkpoints.iter().find(|c| c.boundary == 0).unwrap().clone();
+    let st = wall(5, 1, || {
+        black_box(build_chunk(&w.layout, &w.gm, &w.nbody, &bases, w.t0, 0, &cp));
+    });
+    println!("build chunk 0 from the asset checkpoint: {}", st.fmt("ms", 1));
+    let st = wall(3, 0, || {
+        let mut b = ChunkBuilder::new(w.layout.clone(), w.gm.clone(), w.nbody.clone(), w.t0, initial_checkpoint(&w.initial));
+        let mut built = std::collections::HashMap::new();
+        b.extend_to(0, &mut built);
+        black_box(built.len());
+    });
+    println!("lazy builder, chunk 0 from the epoch: {}", st.fmt("ms", 1));
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("chunk") {
+        bench_chunk();
+        return;
+    }
     let world = World::parse(&std::fs::read_to_string(dir().join("world.txt")).unwrap());
     let (mut eph, mut fm) = parity::load_world(&world, |k| std::fs::read(dir().join(format!("chunk_{k}.bin"))).unwrap());
     let n = world.layout.count;
