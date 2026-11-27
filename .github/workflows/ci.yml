@@ -267,3 +267,6 @@ jobs:
       sha: ${{ github.sha }}
       automatic: true
       version_change_acknowledged: false
+    # Without this the called workflow's secrets context is empty, including the production
+    # environment's role secret (seen on the first automatic run: no credentials could be loaded).
+    secrets: inherit
