@@ -659,3 +659,40 @@ html.touch .scrub-met { min-height: 44px; }
 .launch-cost .lc-parts { color: var(--muted); font-size: 12px; }
 /* Outside wide mode the cost line stays one line (it is sticky over the charts); its detail is in the title and the wide column. */
 #hud:not([data-mode="wide"]) .launch-cost .lc-ref { display: none; }
+
+/* Undock (layout.ts): on the first panel of each tab, where floating windows are offered. */
+.ed > .sec-h { display: flex; align-items: center; }
+.ed > .sec-h > .sec-title { flex: 1 1 auto; min-width: 0; }
+.undock { flex: none; margin-right: 6px; min-width: 26px; padding: 0 6px; color: var(--muted); }
+#hud:not([data-float="true"]) .undock, .float-win .undock { display: none; }
+.tab-float { display: none; font-size: 10px; line-height: 1; }
+.tab.floating .tab-float { display: block; }
+.tab.floating { color: var(--muted); border-bottom: 3px dashed rgba(125, 255, 176, 0.45); }
+#hud[data-all-floating="true"] .side-toggle { display: none !important; }
+#hud[data-mode="side"][data-side-collapsed="true"] .tabs { overflow-y: auto; scrollbar-width: none; }
+
+/* Floating windows (float-window.ts): translucent background, opaque text, never off-screen. */
+#hud > .floats { position: absolute; inset: 0; pointer-events: none; z-index: 7; isolation: isolate; }
+.float-win { position: absolute; pointer-events: auto; display: flex; flex-direction: column; min-width: 0; color: var(--fg);
+  background: rgb(12 16 24 / var(--fw-alpha, 0.85)); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); overflow: hidden; }
+.float-win:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.float-win.flash { animation: fw-flash 0.7s ease-out; }
+@keyframes fw-flash { 0%, 40% { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent), 0 6px 24px rgba(0, 0, 0, 0.45); } }
+@media (prefers-reduced-motion: reduce) { .float-win.flash { animation: none; border-color: var(--accent); } }
+.fw-bar { flex: none; display: flex; align-items: center; gap: 4px; padding: 3px 4px; cursor: move; touch-action: none; -webkit-user-select: none; user-select: none; background: rgba(255, 255, 255, 0.05); border-bottom: 1px solid var(--line); }
+.float-win.collapsed .fw-bar { border-bottom: 0; }
+.fw-move { cursor: move; padding: 0 5px; color: var(--muted); }
+.fw-title { flex: 1 1 auto; min-width: 0; margin: 0; font: 600 12px/1 system-ui, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fw-opacity { width: 64px; min-height: 0; padding: 0; background: none; border: 0; accent-color: var(--accent); cursor: pointer; }
+.fw-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; display: flex; flex-direction: column; scrollbar-width: thin; text-shadow: 0 0 2px rgba(0, 0, 0, 0.85); }
+.fw-body > .panel { flex: none; background: transparent; border: 0; border-radius: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.fw-body > .panel + .panel { border-top: 1px solid var(--line); }
+.fw-rz { position: absolute; touch-action: none; z-index: 1; }
+.fw-rz.e { top: 34px; right: 0; bottom: 16px; width: 8px; cursor: ew-resize; }
+.fw-rz.s { left: 0; right: 16px; bottom: 0; height: 8px; cursor: ns-resize; }
+.fw-rz.se { right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 0 55%, var(--muted) 55% 62%, transparent 62% 74%, var(--muted) 74% 81%, transparent 81%); opacity: 0.7; }
+html.touch .fw-rz.se { width: 40px; height: 40px; }
+.fw-rz.se:focus-visible { outline: 2px solid var(--accent); opacity: 1; }
+.float-win.collapsed .fw-rz { display: none; }
+.float-win.dragging, .float-win.resizing { -webkit-user-select: none; user-select: none; }
