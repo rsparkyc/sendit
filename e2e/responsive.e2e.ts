@@ -163,12 +163,20 @@ test.describe('burn markers', () => {
     await settled(page);
     await page.evaluate(() => (window as any).sendit.editor.selectMission('earth-escape'));
     await settled(page);
-    // 600 m/s at T/W 0.10: a burn of over ten minutes.
+    // The upper stage reaches orbit with propellant to spare and burns quickly; drop it first, so the
+    // 5 kN spacecraft (T/W 0.10) flies 600 m/s itself: a burn of about nine minutes.
+    expect(await page.evaluate(() => (window as any).sendit.editor.addSeparation(1000))).toBe(0);
     await page.evaluate(() => (window as any).sendit.editor.addNode(4000, { kind: 'orbital', body: 'earth' }, [600, 0, 0]));
     await settled(page);
+    expect(await page.evaluate(() => (window as any).sendit.nodesOf()[0].stage)).toBe(await page.evaluate(() => (window as any).sendit.store.get().plan.lowerStages.length));
+    expect(await page.evaluate(() => (window as any).sendit.store.get().replay.result.burns[0].burnTime)).toBeGreaterThan(500);
     // Look from the side the burn is on (markers behind the planet are dimmed and not tappable).
-    await page.evaluate(() => { const c = (window as any).sendit.camera; c.azimuth += Math.PI; c.setDistance(3.5e7, true); });
-    await page.waitForTimeout(800);
+    await page.evaluate(() => (window as any).sendit.camera.setDistance(3.5e7, true));
+    for (let k = 0; k < 8; k++) {
+      await page.waitForTimeout(800);
+      if (await page.locator('.label.marker.burn-end.end:not(.occluded) .text').count()) break;
+      await page.evaluate(() => { const c = (window as any).sendit.camera; c.azimuth += Math.PI / 4; c.setDistance(3.5e7 * 1.0001, true); });
+    }
     await expect(page.locator('.label.marker.burn-end.end:not(.occluded) .text').first()).toBeVisible();
     await expect(page.locator('.label.marker.burn-end.start .text').first()).toBeVisible();
     await expect(page.locator('.label.marker.burn-end.end .text').first()).toContainText('min');

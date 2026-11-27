@@ -20,6 +20,7 @@
  * The window is remembered per flight (mission + plan epoch).
  */
 import { el, formatMet, setText } from './dom';
+import { axisTime, fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { nodesOf } from './nodes';
 import type { AppState, Store } from './store';
 import { formatCalendar, tdbToCalendar } from './time';
@@ -100,6 +101,12 @@ export interface TimelineMarks {
   crossings(): { t: number; ascending: boolean }[];
   /** Orbital period at absolute time t (NaN if unbound). */
   period(t: number): number;
+  /** Separations (absolute time, label): drawn as draggable markers. */
+  separations?(): { t: number; label: string }[];
+  /** A separation marker was dragged to absolute time t (on release: one edit). */
+  moveSeparation?(j: number, t: number): void;
+  /** A separation marker was tapped. */
+  selectSeparation?(j: number): void;
 }
 
 interface Mark { x: number; t: number; label: string; kind: string }
@@ -107,7 +114,7 @@ interface Mark { x: number; t: number; label: string; kind: string }
 export class Timeline {
   readonly root: HTMLElement;
   private readonly range = el('input', { type: 'range', min: '0', max: '100000', step: '1', className: 'scrub', title: 'Time along the flight (drag to scrub)' });
-  private readonly met = el('span', { className: 'scrub-met' });
+  private readonly met = el('button', { className: 'scrub-met', type: 'button', onclick: () => setTimeMode(nextTimeMode(timeMode())) });
   private readonly track = el('div', { className: 'scrub-track' });
   private readonly ticks = el('div', { className: 'scrub-ticks' });
   private readonly axis = el('div', { className: 'scrub-axis', ariaHidden: 'true' });
@@ -148,7 +155,7 @@ export class Timeline {
     this.root = el('div', { className: 'panel scrubber' }, start, this.track, el('div', { className: 'tl-zoom' }, zout, zin, fit, presets), this.met);
     this.wireZoom();
     store.subscribe((s, p) => {
-      if (s.t !== p.t || s.replay !== p.replay || s.selectedNode !== p.selectedNode || s.plan !== p.plan || s.selectedEvent !== p.selectedEvent) this.render(s);
+      if (s.t !== p.t || s.replay !== p.replay || s.selectedNode !== p.selectedNode || s.selectedSeparation !== p.selectedSeparation || s.plan !== p.plan || s.selectedEvent !== p.selectedEvent) this.render(s);
     });
     // First render after the app has finished setting up (the mark getters read state created later).
     requestAnimationFrame(() => {
@@ -308,9 +315,45 @@ export class Timeline {
   }
 
   private ready = false;
+  /** A separation marker being dragged: index, pointer start, and the time it shows. */
+  private sepDrag: { j: number; x0: number; t0: number; t: number; moved: boolean; el: HTMLElement } | null = null;
+
+  private wireSeparation(tk: HTMLElement, j: number, t: number): void {
+    tk.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try { tk.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+      this.sepDrag = { j, x0: e.clientX, t0: t, t, moved: false, el: tk };
+      tk.classList.add('dragging');
+    });
+    tk.addEventListener('pointermove', (e) => {
+      const d = this.sepDrag;
+      if (!d || d.j !== j) return;
+      const r = this.range.getBoundingClientRect();
+      const [w0, w1] = this.window();
+      const dx = e.clientX - d.x0;
+      if (Math.abs(dx) > 3) d.moved = true;
+      if (!d.moved) return;
+      const [a, b] = this.span();
+      d.t = Math.max(a, Math.min(b, d.t0 + (dx / Math.max(1, r.width)) * (w1 - w0)));
+      tk.style.left = `${((d.t - w0) / (w1 - w0)) * 100}%`;
+      tk.title = `Separation → ${fmtTime(d.t - this.store.get().plan.epoch, 0)} (release to move)`;
+    });
+    const end = (commit: boolean) => {
+      const d = this.sepDrag;
+      if (!d || d.j !== j) return;
+      this.sepDrag = null;
+      tk.classList.remove('dragging');
+      if (!commit) return this.render(this.store.get());
+      if (d.moved) this.marks.moveSeparation?.(j, Math.round(d.t));
+      else this.marks.selectSeparation?.(j);
+    };
+    tk.addEventListener('pointerup', () => end(true));
+    tk.addEventListener('pointercancel', () => end(false));
+  }
 
   private render(s: AppState): void {
-    if (!this.ready) return;
+    if (!this.ready || this.sepDrag) return;
     const key = `${s.missionId}:${s.plan.epoch}`;
     if (key !== this.winKey) this.restore(key);
     const [a, b] = this.span();
@@ -325,9 +368,9 @@ export class Timeline {
     const zoomed = !!this.win;
     this.root.classList.toggle('zoomed', zoomed);
     if (document.activeElement !== this.range) this.range.value = String(Math.round(((s.t - w0) / (w1 - w0)) * 100000));
-    setText(this.met, `${formatMet(s.t - s.plan.epoch, 0)} MET`);
+    setText(this.met, `${fmtTime(s.t - s.plan.epoch, 0)}${timeMode() === 'met' ? ' MET' : ''}`);
     const cal = tdbToCalendar(s.t);
-    this.met.title = cal ? `${formatCalendar(cal, true)} TDB` : '';
+    this.met.title = otherTime(s.t - s.plan.epoch);
     // Overview.
     this.ovWin.style.left = `${((w0 - a) / (b - a)) * 100}%`;
     this.ovWin.style.width = `${Math.max(0.5, ((w1 - w0) / (b - a)) * 100)}%`;
@@ -340,7 +383,7 @@ export class Timeline {
     const labels: HTMLElement[] = [];
     for (let m = first; ep + m <= w1 + 1e-6; m += step) {
       const x = ((ep + m - w0) / (w1 - w0)) * 100;
-      const lab = el('span', { className: 'ax', textContent: axisLabel(m, step) });
+      const lab = el('span', { className: 'ax', textContent: axisTime(m, step, axisLabel) });
       lab.style.left = `${x}%`;
       labels.push(lab);
       if (labels.length > 60) break;
@@ -357,16 +400,16 @@ export class Timeline {
       const x0 = ((t0 - w0) / (w1 - w0)) * 100;
       const w = (dur / (w1 - w0)) * 100;
       if (x0 > 100 || x0 + w < 0) return;
-      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}: ${formatMet(n.burn.start, 0)} to ${formatMet(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
+      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}: ${fmtTime(n.burn.start, 0)} to ${fmtTime(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
       sp.style.left = `${Math.max(0, x0)}%`;
       sp.style.width = `${Math.min(100 - Math.max(0, x0), Math.max(w, 0))}%`;
       out.push(sp);
     });
     const pts: Mark[] = [];
     const px = (t: number) => ((t - w0) / (w1 - w0)) * W;
-    for (const n of nodesOf(s.plan)) pts.push({ x: px(ep + n.node.t), t: ep + n.node.t, label: `Node ${formatMet(n.node.t, 0)}`, kind: 'node' });
-    for (const e of this.marks.events()) pts.push({ x: px(e.t), t: e.t, label: `${e.label} ${formatMet(e.t - ep, 0)}`, kind: e.kind });
-    for (const c of this.marks.crossings()) pts.push({ x: px(c.t), t: c.t, label: `${c.ascending ? 'AN' : 'DN'} ${formatMet(c.t - ep, 0)}`, kind: 'pnode' });
+    for (const n of nodesOf(s.plan)) pts.push({ x: px(ep + n.node.t), t: ep + n.node.t, label: `Node ${fmtTime(n.node.t, 0)}`, kind: 'node' });
+    for (const e of this.marks.events()) pts.push({ x: px(e.t), t: e.t, label: `${e.label} ${fmtTime(e.t - ep, 0)}`, kind: e.kind });
+    for (const c of this.marks.crossings()) pts.push({ x: px(c.t), t: c.t, label: `${c.ascending ? 'AN' : 'DN'} ${fmtTime(c.t - ep, 0)}`, kind: 'pnode' });
     for (const g of cluster(pts.filter((p) => p.x >= -2 && p.x <= W + 2), 5)) {
       const kinds = new Set(g.map((p) => p.kind));
       const k = kinds.has('failure') ? 'failure' : kinds.has('node') ? 'node' : [...kinds][0];
@@ -374,6 +417,18 @@ export class Timeline {
       tk.style.left = `${(g[0].x / W) * 100}%`;
       out.push(tk);
     }
+    // Separations: draggable (release moves it: one edit, one undo step); a tap selects it.
+    (this.marks.separations?.() ?? []).forEach((sp, j) => {
+      const x = px(sp.t);
+      if (x < -2 || x > W + 2) return;
+      const tk = el('span', { className: `tick sep${s.selectedSeparation === j && s.selectedNode === null ? ' selected' : ''}`, title: `${sp.label} ${fmtTime(sp.t - ep, 0)}: drag to move, tap to edit` });
+      tk.dataset.sep = String(j);
+      tk.setAttribute('aria-label', `${sp.label} at ${fmtTime(sp.t - ep, 0)}`);
+      tk.append(el('span', { className: 'sep-glyph', textContent: '✂' }));
+      tk.style.left = `${(x / W) * 100}%`;
+      this.wireSeparation(tk, j, sp.t);
+      out.push(tk);
+    });
     if (r && r.result.outcome !== 'completed' && Number.isFinite(r.result.finalT) && r.result.finalT <= w1) {
       const t = el('span', { className: 'tick end', title: 'End of flight' });
       t.style.left = `${((r.result.finalT - w0) / (w1 - w0)) * 100}%`;

@@ -202,6 +202,24 @@ Use `withSpacecraft(vehicle, spacecraft)` to put a spacecraft on top. Direct inj
   `initialMissionPlan`, `launchFields` and the editor's `withLaunchRule` use its altitude
   band and `lowerStages`.
 
+**Regenerating the campaign references.** The per-site reference solutions
+(`test/fixtures/campaign-solutions.json`) and the `CAMPAIGN_SITES` table in
+`src/mission/campaign-sites.ts` are written by `pnpm gen:campaign-sites` from solver logs:
+
+```sh
+mkdir -p campaign-solve-logs/solve
+# One mission per process; logs are read in name order, later ones win.
+SLOW=1 ONLY=geo-from-leo pnpm vitest run test/mission-campaign-sites-solve.test.ts --silent=false \
+  > campaign-solve-logs/solve/geo-from-leo.log
+# ...repeat for each mission (SITES=<id,id> narrows to some sites)...
+pnpm gen:campaign-sites            # or: python3 scripts/gen-campaign-sites.py <logs dir>
+```
+
+Run one mission per process. Most take minutes; the lunar free return's per-site solver takes
+about fifteen minutes. An optional `campaign-solve-logs/not-offered.json` (`{ mission: { site:
+reason } }`) marks sites that are not offered. The logs directory is not committed. Changing the
+references changes par and the limits, so it needs new mission versions (see the release notes).
+
 **Leaderboard server**
 
 - *Start kind.* `engine.ts` `checkRules` requires `start.kind === 'launch'`. Vehicle

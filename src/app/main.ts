@@ -31,10 +31,15 @@ import { isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick
 import { poolSizing } from './schedule';
 import { objectiveBodies, statusOf } from './status';
 import { formatMet, el } from './dom';
+import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { Labels, type LabelItem } from './labels';
-import { geocentricLatitudeDeg, LAUNCH_SITES, makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, type EventKind } from './mission-layer';
+import { geocentricLatitudeDeg, LAUNCH_SITES, makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, errorCount, type EventKind, type MissionPlan } from './mission-layer';
 import { initialPlan, launchOf, missionById, missionForLoadedPlan, MISSIONS } from './missions';
-import { nodesOf } from './nodes';
+import { nodesOf, separationsOf, stageAt } from './nodes';
+import { OrbitPanel } from './orbit-ui';
+import { ECLIPTIC_POLE } from './orbit-elements';
+import { separationTag, stageRows } from './vehicle';
+import { VehiclePanel, ascentMetrics } from './vehicle-ui';
 import { anchorSegments, bodyPath, frameAt, trajectoryPath, type FrameContext, type FramePath } from './paths';
 import { BODIES, BODY_DATA, BODY_GM, bodyIndex, Ephemeris } from './physics';
 import { ChunkPool } from './chunk-pool';
@@ -145,6 +150,7 @@ const store = new Store<AppState>({
   loadingChunks: 0,
   ...ed0,
   selectedNode: null,
+  selectedSeparation: null,
   selectedEvent: null,
   replay: null,
   replayStatus: 'idle',
@@ -221,7 +227,12 @@ function labelPick(key: string): void {
   if (key === 'sc') store.set({ focus: SPACECRAFT });
   else if (key.startsWith('node:')) store.set({ selectedNode: Number(key.slice(5)) });
   else if (key.startsWith('burn:')) store.set({ selectedNode: Number(key.split(':')[1]) });
-  else if (key.startsWith('ev:')) {
+  else if (key.startsWith('sep:')) {
+    const j = Number(key.slice(4));
+    const m = markers.find((x) => x.key === key);
+    store.set({ selectedSeparation: j, selectedNode: null, ...(m ? { t: m.t, paused: true, loadingTarget: m.t } : {}) });
+    if (m && m.title && document.documentElement.classList.contains('touch')) showTapPop(null, at.x, at.y, m.title);
+  } else if (key.startsWith('ev:')) {
     const i = Number(key.slice(3));
     const ev = store.get().replay?.result.events[i];
     if (ev) store.set({ selectedEvent: i, t: ev.t, paused: true, loadingTarget: ev.t });
@@ -347,9 +358,20 @@ layout.add(new MissionPanel(ui).root, 'mission', 'left');
 layout.add(new ResultsPanel(ui).root, 'results', 'left');
 layout.add(leaderboard.root, 'results', 'left');
 layout.add(new StartPanel(ui).root, 'start', 'left');
+layout.add(new VehiclePanel(ui).root, 'mission', 'left');
 layout.add(new CraftPanel(ui).root, 'mission', 'left');
 const viewSettings = loadViewSettings();
 setDistanceMode(viewSettings.distances);
+setTimeMode(viewSettings.timeMode);
+setTimeEpoch(store.get().plan.epoch);
+store.subscribe((s, p) => { if (s.plan.epoch !== p.plan.epoch) setTimeEpoch(s.plan.epoch); });
+onTimeMode(() => {
+  markersDirty = true;
+  viewDirty = true;
+  crossingsDirty = true;
+  const st = store.get();
+  if (st.replay) store.set({ replay: { ...st.replay } }); // panels, timeline and markers re-render in the new convention
+});
 onDistanceMode(() => {
   markersDirty = true;
   viewDirty = true;
@@ -360,16 +382,46 @@ const viewOptions = new ViewOptions(store, editor, viewSettings, () => {
   viewDirty = true;
   crossingsDirty = true;
   updateDrawn();
+  orbitPanel?.schedule();
 });
 layout.add(hud.viewPanel, 'view', 'right');
 layout.add(viewOptions.root, 'view', 'right');
 layout.add(nodesPanel.root, 'nodes', 'right');
 layout.add(eventsPanel.root, 'events', 'right');
+const orbitMass = (t: number): number => {
+  const r = store.get().replay;
+  if (!r) return NaN;
+  const sm = r.samples;
+  const N = sm.length / REPLAY_SAMPLE_STRIDE;
+  let lo = 0, hi = N - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (sm[mid * REPLAY_SAMPLE_STRIDE] <= t) lo = mid; else hi = mid; }
+  return sm[lo * REPLAY_SAMPLE_STRIDE + 7];
+};
+const orbitPanel: OrbitPanel = new OrbitPanel(store, {
+  craft: (t, out) => { if (!trajectory || !stateAt(trajectory, t, out)) return false; out[6] = orbitMass(t); return true; },
+  bodies: (t, pos, vel) => eph.evaluate(t, pos, vel),
+  dominant: (tm) => dominantBody(tm),
+  planeNormal: (center, t, pos, vel) => {
+    const plane = viewSettings.nodePlane;
+    const nrm = [0, 0, 0];
+    if (plane === 'ecliptic') return { n: [...ECLIPTIC_POLE], label: 'ecliptic' };
+    const target = bodyIndex(plane);
+    const use = plane === 'equator' || target === center ? 'equator' : plane;
+    if (!planeNormalAt(center, use, t, pos, vel, nrm)) return null;
+    return { n: nrm, label: use === 'equator' ? `${BODIES[center].name}'s equator` : `${BODIES[target].name}'s orbital plane` };
+  },
+  orientation: (center, t, out) => bodyOrientation(center, t, out),
+  stage: (tm) => { const p = store.get().plan; if (!(p.lowerStages?.length)) return null; const k = stageAt(p, tm); const row = stageRows(p)[k]; return row ? { tag: row.tag, name: row.name } : null; },
+});
+layout.add(orbitPanel.root, 'orbit', 'right');
 layout.add(hud.infoPanel, 'view', 'right');
 const timeline = new Timeline(store, {
   events: () => listed.filter((x) => !x.distant).map((x) => ({ t: x.ev.t, label: eventMarker(x, bodyName), kind: x.failure ? 'failure' : 'event' })),
   crossings: () => (viewSettings.showNodes ? crossings : []),
   period: (t) => periodAt(t),
+  separations: () => { const p = store.get().plan; return separationsOf(p).map((x) => ({ t: p.epoch + x.time, label: `Separation ${separationTag(p, x)}` })); },
+  moveSeparation: (j, t) => { editor.moveSeparation(j, t - store.get().plan.epoch); },
+  selectSeparation: (j) => { const p = store.get().plan; const sp = p.separations?.[j]; store.set({ selectedSeparation: j, selectedNode: null, ...(sp ? { t: p.epoch + sp.time, paused: true, loadingTarget: p.epoch + sp.time } : {}) }); if (layout.mode !== 'wide') layout.showTab('nodes'); },
 });
 layout.bottom.prepend(timeline.root);
 // Selecting a node on a phone brings its editor up.
@@ -431,7 +483,7 @@ const replayClient = new ReplayClient(eph, {
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function planChanged(): void {
   const s = store.get();
-  if (planErrors(s.plan).plan.length + planErrors(s.plan).burns.size === 0) replayClient.request(s.plan, s.missionId);
+  if (errorCount(planErrors(s.plan)) === 0) replayClient.request(s.plan, s.missionId);
   else store.set({ replayStatus: 'idle' });
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
@@ -451,7 +503,7 @@ store.subscribe((s, p) => {
   }
   if (s.plan !== p.plan || s.missionId !== p.missionId) planChanged();
   else if (s.parked !== p.parked) save(s.missionId, s.plan, s.parked);
-  if (s.selectedEvent !== p.selectedEvent || s.selectedNode !== p.selectedNode) markersDirty = true;
+  if (s.selectedEvent !== p.selectedEvent || s.selectedNode !== p.selectedNode || s.selectedSeparation !== p.selectedSeparation) markersDirty = true;
 });
 planChanged();
 
@@ -578,6 +630,7 @@ function focusAt(x: number, y: number, touch: boolean, preferKey?: string): void
   else if (c.kind === 'node' || c.kind === 'event') {
     const t = markerTime(c.key);
     if (c.key.startsWith('node:') || c.key.startsWith('burn:')) store.set({ selectedNode: Number(c.key.split(':')[1]) });
+    if (c.key.startsWith('sep:')) store.set({ selectedSeparation: Number(c.key.slice(4)), selectedNode: null });
     if (c.key.startsWith('ev:')) store.set({ selectedEvent: Number(c.key.slice(3)) });
     if (t !== null) focusCraftAt(t);
   } else if (c.kind === 'site') focusSite(c.key);
@@ -670,11 +723,11 @@ function pointReadout(tm: number): string {
   const st = new Float64Array(6);
   const bp = new Float64Array(3 * n);
   const bv = new Float64Array(3 * n);
-  if (!trajectory || !stateAt(trajectory, t, st) || !eph.evaluate(t, bp, bv)) return formatMet(tm, 0);
+  if (!trajectory || !stateAt(trajectory, t, st) || !eph.evaluate(t, bp, bv)) return fmtTime(tm, 0);
   const di = bodyIndex(dominantBody(tm));
   const alt = Math.hypot(st[0] - bp[3 * di], st[1] - bp[3 * di + 1], st[2] - bp[3 * di + 2]) - BODIES[di].refRadius;
   const v = Math.hypot(st[3] - bv[3 * di], st[4] - bv[3 * di + 1], st[5] - bv[3 * di + 2]);
-  return `${formatMet(tm, 0)} · ${fromSurface(alt, BODIES[di].id)} · ${v.toFixed(0)} m/s (${BODIES[di].name})`;
+  return `${fmtTime(tm, 0)} · ${fromSurface(alt, BODIES[di].id)} · ${v.toFixed(0)} m/s (${BODIES[di].name})`;
 }
 
 // Pointer feedback: over a point a click would pick, a crosshair cursor, a marker on the curve and a readout.
@@ -770,7 +823,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === '?') hud.showKeys();
   else if (e.key === 'Escape') {
     hideTapPop();
-    store.set({ selectedNode: null, selectedEvent: null });
+    store.set({ selectedNode: null, selectedSeparation: null, selectedEvent: null });
   }
   else if (e.code === 'Space') {
     e.preventDefault();
@@ -958,6 +1011,10 @@ let crossingLabel = '';
 let crossingsDirty = true;
 const ROT_N = new Float64Array(9);
 function planeNormalAt(center: number, plane: string, t: number, bp: Float64Array, bv: Float64Array, out: number[]): boolean {
+  if (plane === 'ecliptic') {
+    out[0] = ECLIPTIC_POLE[0]; out[1] = ECLIPTIC_POLE[1]; out[2] = ECLIPTIC_POLE[2];
+    return true;
+  }
   if (plane === 'equator') {
     if (!Number.isFinite(bodyOrientation(center, t, ROT_N))) return false;
     out[0] = ROT_N[2]; out[1] = ROT_N[5]; out[2] = ROT_N[8];
@@ -986,8 +1043,8 @@ function computeCrossings(): void {
   const center = nodeCenter();
   crossingCenter = center;
   const plane = viewSettings.nodePlane;
-  const target = plane === 'equator' ? -1 : bodyIndex(plane);
-  crossingLabel = plane === 'equator' || target === center ? `${BODIES[center].name}'s equator` : `${BODIES[target]?.name ?? plane}'s orbital plane`;
+  const target = plane === 'equator' || plane === 'ecliptic' ? -1 : bodyIndex(plane);
+  crossingLabel = plane === 'ecliptic' ? 'the ecliptic' : plane === 'equator' || target === center ? `${BODIES[center].name}'s equator` : `${BODIES[target]?.name ?? plane}'s orbital plane`;
   const usePlane = target === center ? 'equator' : plane;
   if (!r || !trajectory || !viewSettings.showNodes) return;
   const R = soi.get(BODIES[center].id) ?? Infinity;
@@ -1023,7 +1080,7 @@ function computeCrossings(): void {
   });
   eventsPanel.setCrossings(crossings, r.plan.epoch, crossingLabel);
   const nx = crossings.findIndex((c) => c.t >= store.get().t);
-  viewOptions.setNodeSummary(crossings.length ? `${crossings.length} crossings of ${crossingLabel}${nx >= 0 ? `; next ${crossings[nx].ascending ? 'AN' : 'DN'} at ${formatMet(crossings[nx].t - r.plan.epoch, 0)}, ${crossings[nx].inclinationDeg.toFixed(2)}°` : ''}.` : `No crossings of ${crossingLabel} while near ${BODIES[center].name}.`);
+  viewOptions.setNodeSummary(crossings.length ? `${crossings.length} crossings of ${crossingLabel}${nx >= 0 ? `; next ${crossings[nx].ascending ? 'AN' : 'DN'} at ${fmtTime(crossings[nx].t - r.plan.epoch, 0)}, ${crossings[nx].inclinationDeg.toFixed(2)}°` : ''}.` : `No crossings of ${crossingLabel} while near ${BODIES[center].name}.`);
 }
 store.subscribe((s, p) => {
   if (s.frame !== p.frame) crossingsDirty = true;
@@ -1086,10 +1143,18 @@ function rebuildMarkers(frame: FrameSpec): void {
       const b = place(t1);
       if (!a || !b) return;
       const dur = flown.burnTime >= 120 ? `${(flown.burnTime / 60).toFixed(1)} min` : `${flown.burnTime.toFixed(0)} s`;
-      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1} start${sel ? ` ${formatMet(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: '#ff8a3d', t: t0 };
+      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1} start${sel ? ` ${fmtTime(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: '#ff8a3d', t: t0 };
       const end: Marker = { key: `burn:${i}:e`, text: short ? `■ B${i + 1} cut short · ${dur} · out of propellant` : `■ B${i + 1} end · ${dur}`, cls: `marker burn-end end ${short ? 'short' : ''} ${sel ? 'selected' : ''}`, pos: b, priority: short ? 945 : sel ? 940 : 690, color: short ? '#ff4d4d' : '#ff8a3d', t: t1 };
       burnEnds.push({ node: `node:${i}`, start, end });
     });
+    // Separations: where a stage is dropped (distinct from burns and events: teal, scissors).
+    const rows = stageRows(r.plan);
+    for (const sp of separationsOf(r.plan)) {
+      const pos = place(r.plan.epoch + sp.time);
+      if (!pos) continue;
+      const sel = s.selectedSeparation === sp.index && s.selectedNode === null;
+      markers.push({ key: `sep:${sp.index}`, text: `✂ ${separationTag(r.plan, sp)}`, cls: `marker sep ${sel ? 'selected' : ''}`, pos, priority: sel ? 930 : 680, color: '#3fd0c0', title: `Separation: ${rows[sp.dropped]?.name ?? 'the stage'} is dropped here${sp.empty ? ' (empty)' : ` with ${Math.round(sp.propellantLeft).toLocaleString('en-US')} kg of propellant`}; ${rows[sp.next]?.name ?? 'the next stage'} fires from now on. Tap to edit it.`, t: r.plan.epoch + sp.time });
+    }
   }
 }
 
@@ -1502,6 +1567,11 @@ Object.assign(window, {
     planner,
     replayStats: replayClient.stats,
     nodesOf: () => nodesOf(store.get().plan),
+    ascentMetrics,
+    orbit: () => orbitPanel.last,
+    fmtTime: (t: number, d = 0) => fmtTime(t, d),
+    /** The current plan with these burns and separations, as nodes (tests re-enter a reference solution through the UI). */
+    nodesOfBurns: (burns: MissionPlan['burns'], separations?: MissionPlan['separations']) => nodesOf({ ...store.get().plan, burns, ...(separations ? { separations } : {}) }).map((x) => ({ t: x.node.t, dv: x.node.dv, stage: x.stage })),
     shareUrl,
     layout,
     leaderboard,

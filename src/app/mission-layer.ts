@@ -16,6 +16,10 @@ import { ASCENT_BODIES, computeAscent, type AscentResult } from '../mission/asce
 import { launchGeometry } from '../mission/launch';
 import { replay, type BurnReport, type LaunchInsertion, type Outcome, type ReplayOptions, type ReplayResult } from '../mission/replay';
 import { SAMPLE_MISSIONS } from '../mission/samples';
+import { PARKING_BAND, VEHICLES, catalogueStages, type VehicleSpec } from '../mission/vehicles';
+import { OLD_VERSION_MESSAGE } from '../mission/objectives';
+import { stagingIssues } from '../mission/plan';
+import { BODY_DATA } from './physics';
 import { CAMPAIGN } from '../mission/campaign';
 import type { EventKind, TrajectoryEvent } from '../mission/events';
 import { PHYSICS_MODEL, worldFromBodyData, type MissionWorld } from '../mission/world';
@@ -33,7 +37,9 @@ export {
   CAMPAIGN, DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, LIMITS, PAR_SCORE, initialMissionPlan, missionReplayOptions, validatePlanIssues, PHYSICS_MODEL, PLAN_FORMAT, PlanError, SAMPLE_MISSIONS,
   asymptotePlaneNormals, azimuthAllowed, azimuthForInclination, checkPlanConformance, stellarDay, decodePlan, encodePlan, evaluate, geocentricLatitudeDeg, groundRelativeAzimuthDeg,
   launchFromParams, launchPlane, launchSite, launchToParams, makePlan, orbitNormalOf, planeCrossings, replay, simulationStartOffset, validatePlan, isVehicleLaunch, vehicleStages,
+  VEHICLES, PARKING_BAND, catalogueStages, OLD_VERSION_MESSAGE,
 };
+export type { VehicleSpec };
 export type {
   BriefingDistance, BurnReport, CompleteMission, ConformanceIssue, LaunchInsertion, LeaderboardKeys, Engine, Evaluation, EventKind, MissionDefinition, MissionPlan, MissionWorld, Objective, ObjectiveResult, Outcome,
   AscentResult, PlanBurn, PlanFrame, PlanSeparation, PlanStart, ReplayOptions, ReplayResult, SiteOption, Spacecraft, TrajectoryEvent,
@@ -58,6 +64,17 @@ export function planAscent(plan: MissionPlan, data: readonly BodyData[]): Ascent
     ascentCache.set(key, a);
   }
   return a;
+}
+
+/**
+ * The ascent of `stages` from a site at liftoff t, azimuth and parking
+ * altitude: the replay's own model (computeAscent with launchGeometry), not
+ * memoised (chart sweeps call it tens of times; 5-9 ms each).
+ */
+export function ascentFor(stages: readonly Spacecraft[], site: string, t: number, azimuthDeg: number, altitudeM: number, data: readonly BodyData[] = BODY_DATA): AscentResult | null {
+  const earth = data.find((b) => b.id === 'earth');
+  if (!earth) return null;
+  return computeAscent(stages, { gm: earth.gm, radius: earth.referenceRadius, altitudeM }, launchGeometry(launchSite(site), t, azimuthDeg), ASCENT_BODIES.earth);
 }
 
 /** Mission world over a physics ephemeris built from `data`. */
@@ -123,13 +140,31 @@ export function evaluateMission(mission: MissionDefinition | null, result: Repla
   return mission ? evaluate(mission, result, world, epoch, plan) : null;
 }
 
+/** Number of problems in a planErrors result (zero: the plan can be replayed). */
+export function errorCount(e: { plan: readonly string[]; burns: ReadonlyMap<number, unknown>; separations: ReadonlyMap<number, unknown> }): number {
+  return e.plan.length + e.burns.size + e.separations.size;
+}
+
 /**
  * Validation errors grouped by the burn they belong to (validatePlanIssues'
  * `burn` field); anything else is a plan-level error.
  */
-export function planErrors(plan: MissionPlan): { plan: string[]; burns: Map<number, string[]> } {
-  const out = { plan: [] as string[], burns: new Map<number, string[]>() };
-  for (const e of validatePlanIssues(plan)) {
+export function planErrors(plan: MissionPlan): { plan: string[]; burns: Map<number, string[]>; separations: Map<number, string[]> } {
+  const out = { plan: [] as string[], burns: new Map<number, string[]>(), separations: new Map<number, string[]>() };
+  const issues = validatePlanIssues(plan);
+  // A vehicle launch: the stage sequence needs the stage the ascent reaches orbit in (as replay checks it).
+  if (issues.length === 0 && isVehicleLaunch(plan.start)) {
+    const a = planAscent(plan, BODY_DATA);
+    if (a && !a.ok) out.plan.push(`ascent: ${a.reason}`);
+    else if (a) issues.push(...stagingIssues(plan, a.upperStage));
+  }
+  for (const e of issues) {
+    const sep = /^separations\[(\d+)\]/.exec(e.path);
+    if (sep && e.burn === undefined) {
+      const j = Number(sep[1]);
+      out.separations.set(j, [...(out.separations.get(j) ?? []), e.message]);
+      continue;
+    }
     if (e.burn !== undefined) out.burns.set(e.burn, [...(out.burns.get(e.burn) ?? []), e.message]);
     else out.plan.push(e.message);
   }

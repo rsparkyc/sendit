@@ -15,6 +15,7 @@
  * Screenshots go to test-results/distances/.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/distances';
@@ -176,16 +177,7 @@ const SCENARIOS: { name: string; setup: (page: Page) => Promise<number | null> }
     name: 'geo-solved',
     setup: async (page) => {
       await fresh(page, 'geo-from-leo');
-      await enter(page, 'input[title^="Flight duration"]', '4.6');
-      await settled(page);
-      await node(page, 1678.9791939258575, 2449.478316355737);
-      await page.evaluate(() => { const w = (window as any).sendit; w.store.set({ t: w.store.get().plan.epoch + 20675.642688512802 }); });
-      await page.getByRole('button', { name: '+ Node at cursor' }).click();
-      await enter(page, 'input.met-input', '20675.642688512802');
-      await enter(page, 'input[title="Prograde delta-v, m/s"]', '1467.715665002644');
-      await enter(page, 'input[title="Normal delta-v, m/s"]', '-205.3391377520207');
-      await enter(page, 'input[title="Radial out delta-v, m/s"]', '-1.621673268307772');
-      await settled(page);
+      await solveGeo(page);
       expect(await page.evaluate(() => (window as any).sendit.store.get().replay.evaluation.success)).toBe(true);
       await setTime(page, 3 * 86400);
       return 3 * 86400;
@@ -336,6 +328,7 @@ test('node editor step captions: screenshots at the default dock width and at 39
     })));
     console.log(`${name}: ${JSON.stringify(rows[0].map((b) => [Math.round(b.w), Math.round(b.sr - b.sl), Math.round(b.h)]))}`);
     for (const boxes of rows) {
+      if (boxes.every((b) => b.w === 0)) continue; // a hidden tuner (the separation time, with no separation selected)
       for (const b of boxes) {
         expect(b.sl).toBeGreaterThanOrEqual(b.bl);
         expect(b.sr).toBeLessThanOrEqual(b.br);
@@ -354,6 +347,6 @@ test('node editor step captions: screenshots at the default dock width and at 39
   await phone.locator('#tab-nodes').click();
   await node(phone, 1678.98, 2449.48);
   const pb = await check(phone, 'phone');
-  for (const b of pb) expect(b.h).toBeGreaterThanOrEqual(44);
+  for (const b of pb) if (b.w > 0) expect(b.h).toBeGreaterThanOrEqual(44); // hidden tuners measure 0
   await ctx.close();
 });

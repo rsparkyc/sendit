@@ -5,7 +5,7 @@
  */
 import { initialPlan, missionById, missionForLoadedPlan, MISSIONS, withLaunch, withLaunchRule, withStateStart, type LaunchDefaults } from './missions';
 import { PHYSICS_MODEL, type MissionPlan, type PlanFrame, type Spacecraft } from './mission-layer';
-import { addNode, disableNode, enableNode, nodesOf, removeNode, setSpacecraft, updateNode, type ManeuverNode, type Vec3 } from './nodes';
+import { addNode, addSeparation, disableNode, enableNode, moveSeparation, nodesOf, removeNode, removeSeparation, separationOffer, setSpacecraft, setStages, updateNode, type ManeuverNode, type Vec3 } from './nodes';
 import type { AppState, Store } from './store';
 import type { FrameSpec } from './frames';
 import { History } from './history';
@@ -102,14 +102,14 @@ export class Editor {
     const plan = initialPlan(m, this.fingerprint);
     const frame = SUGGESTED_FRAME[m.id]?.();
     this.resetHistory();
-    this.store.set({ missionId: m.id, plan, parked: [], selectedNode: null, selectedEvent: null, replay: null, t: plan.epoch + 600, loadingTarget: plan.epoch + 600, ...(frame ? { frame } : {}) });
+    this.store.set({ missionId: m.id, plan, parked: [], selectedNode: null, selectedSeparation: null, selectedEvent: null, replay: null, t: plan.epoch + 600, loadingTarget: plan.epoch + 600, ...(frame ? { frame } : {}) });
   }
 
   /** Replace the whole plan (shared link, saved state). */
   load(missionId: string, plan: MissionPlan, parked: readonly ManeuverNode[] = []): void {
     const m = missionForLoadedPlan(missionId, plan);
     this.resetHistory();
-    this.store.set({ missionId: m.missionId, plan, parked, selectedNode: null, selectedEvent: null, replay: null, ...(m.notice ? { notice: m.notice } : {}) });
+    this.store.set({ missionId: m.missionId, plan, parked, selectedNode: null, selectedSeparation: null, selectedEvent: null, replay: null, ...(m.notice ? { notice: m.notice } : {}) });
   }
 
   /** Replace the plan with one made by a planning aid (same mission; ordinary nodes). */
@@ -189,6 +189,44 @@ export class Editor {
     if (!node) return;
     const r = enableNode(this.plan, node);
     this.commit(r.plan, { parked, selectedNode: r.index });
+  }
+
+  /** Add a separation at mission time t (s after the epoch); returns its index, or null with a notice saying why not. */
+  addSeparation(t: number): number | null {
+    const r = addSeparation(this.plan, t);
+    if ('error' in r) {
+      this.store.set({ notice: r.error });
+      return null;
+    }
+    this.commit(r.plan, { selectedSeparation: r.index, selectedNode: null });
+    return r.index;
+  }
+
+  /** "Separate now" after burn i: one second after its cutoff. */
+  separateAfter(i: number): number | null {
+    const o = separationOffer(this.plan, i);
+    return o ? this.addSeparation(o.time) : null;
+  }
+
+  /** Move separation j to mission time t; `key` coalesces a drag or a burst of steps into one undo step. */
+  moveSeparation(j: number, t: number, key: string | null = null): number | null {
+    const r = moveSeparation(this.plan, j, t);
+    if ('error' in r) {
+      this.store.set({ notice: r.error });
+      return null;
+    }
+    this.commit(r.plan, { selectedSeparation: r.index }, key);
+    return r.index;
+  }
+
+  removeSeparation(j: number): void {
+    this.commit(removeSeparation(this.plan, j), { selectedSeparation: null });
+  }
+
+  /** Change the whole stack below the spacecraft (sandbox only); `null` removes the vehicle (free delivery). */
+  setStages(lower: readonly Spacecraft[] | null, sc: Spacecraft = this.plan.spacecraft): void {
+    if (this.store.get().missionId !== 'sandbox') return;
+    this.commit(setStages(this.plan, lower, sc));
   }
 
   deleteParked(k: number): void {

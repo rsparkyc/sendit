@@ -13,6 +13,7 @@ import type { AppState, Store } from './store';
 import type { Editor } from './editor';
 import { DAY } from './time';
 import { setDistanceMode } from './units';
+import { onTimeMode, setTimeMode, timeMode } from './timefmt';
 import { saveViewSettings, type DrawSpan, type ViewSettings } from './view-settings';
 
 export class ViewOptions {
@@ -85,8 +86,8 @@ export class ViewOptions {
       s.showNodes = nodes.checked;
       commit();
     };
-    const plane = el('select', { className: 'plane-sel', title: 'Reference plane of the ascending and descending node markers' });
-    plane.append(el('option', { value: 'equator', textContent: 'Equator of the reference body' }));
+    const plane = el('select', { className: 'plane-sel', title: 'Reference plane of the ascending and descending node markers and of the Orbit panel (inclination, node)' });
+    plane.append(el('option', { value: 'equator', textContent: 'Equator of the reference body' }), el('option', { value: 'ecliptic', textContent: 'Ecliptic' }));
     for (const bd of BODIES) if (bd.id !== 'sun') plane.append(el('option', { value: bd.id, textContent: `Orbital plane of ${bd.name}` }));
     plane.value = s.nodePlane;
     plane.onchange = () => {
@@ -134,8 +135,20 @@ export class ViewOptions {
       saveViewSettings(s);
       setDistanceMode(s.distances);
     };
+    const tm = el('select', { className: 'time-sel', title: 'How points in time are shown everywhere (timeline, nodes, events, markers, readouts); durations stay durations' });
+    tm.append(el('option', { value: 'met', textContent: 'Mission elapsed time (T+)' }), el('option', { value: 'utc', textContent: 'Absolute, UTC' }), el('option', { value: 'tdb', textContent: 'Absolute, TDB (simulation time)' }));
+    tm.value = s.timeMode;
+    tm.onchange = () => {
+      s.timeMode = tm.value as ViewSettings['timeMode'];
+      saveViewSettings(s);
+      setTimeMode(s.timeMode);
+    };
+    onTimeMode(() => {
+      if (tm.value !== timeMode()) { tm.value = timeMode(); s.timeMode = timeMode(); saveViewSettings(s); }
+    });
     this.root = section('Trajectory & overlays', 'traj-view',
       el('label', { className: 'frow' }, el('span', { textContent: 'Distances' }), dist),
+      el('label', { className: 'frow' }, el('span', { textContent: 'Times' }), tm),
       el('div', { className: 'sub', textContent: 'Drawn after the last burn' }),
       span, this.daysRow, this.spanNote,
       el('label', { className: 'check' }, bright, ' Bright: every revolution drawn (else only the one at the cursor)'),

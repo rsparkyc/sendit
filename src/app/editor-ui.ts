@@ -14,6 +14,7 @@
  * Each panel builds its DOM once and updates it from the store.
  */
 import { el, esc, fillBodySelect, formatMet, parseDuration, section, setText, setValue } from './dom';
+import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import type { Editor } from './editor';
 import { Tuner } from './tuner';
 import { tooShort, objectiveBodies } from './status';
@@ -22,7 +23,7 @@ import { eventLabel, listEvents, type ListedEvent } from './events-view';
 import { groupCrossings, type PlaneCrossing } from './plane-nodes';
 import { formatDistance, formatSpeed } from './format';
 import {
-  LAUNCH_SITES, PAR_SCORE, allowedSites, briefingText, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, simulationStartOffset,
+  LAUNCH_SITES, PAR_SCORE, allowedSites, briefingText, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, errorCount, simulationStartOffset,
   type BriefingDistance, type MissionDefinition, type MissionPlan, type Objective, type PlanFrame,
 } from './mission-layer';
 
@@ -40,7 +41,9 @@ export function siteSummary(def: MissionDefinition, site: string): string | null
   return `Reference ${fmtDv(o.deltaV)}, ${d(o.time)} · limits ${fmtDv(o.maxDeltaV)}, ${d(o.maxTime)}`;
 }
 import { conformance, craftPerformance, launchOf, missionById, MISSIONS, SPACECRAFT_PRESETS } from './missions';
-import { budget, dvMagnitude, elementsFromState, nodesOf, stateFromElements, type OrbitElements } from './nodes';
+import { budget, dvMagnitude, elementsFromState, nodesOf, separationOffer, separationRefusal, separationsOf, stageAt, stateFromElements, type OrbitElements } from './nodes';
+import { stageRows } from './vehicle';
+import { LaunchFeedback } from './vehicle-ui';
 import { BODIES, bodyIndex } from './physics';
 import type { AppState, Store } from './store';
 import { calendarToTdb, DAY, formatCalendar, parseCalendar, tdbToCalendar } from './time';
@@ -175,12 +178,13 @@ export class MissionPanel {
         }
         if (ev?.success) {
           const k = ev.keys;
-          setText(this.score, `MISSION COMPLETE · score ${(k?.score ?? ev.score).toLocaleString('en-US')} · Δv ${k ? fmtDv(k.deltaV / 10) : fmtDv(ev.deltaV)} · time ${((k?.time ?? ev.missionTime) / DAY).toFixed(2)} d`);
+          setText(this.score, `MISSION COMPLETE · score ${(k?.score ?? ev.score).toLocaleString('en-US')} · Δv total ${k ? fmtDv(k.deltaV / 10) : fmtDv(ev.deltaV)}${ev.ascentDeltaV > 0 ? ` (ascent ${fmtDv(ev.ascentDeltaV)} + flown ${fmtDv(ev.flightDeltaV)})` : ''} · time ${((k?.time ?? ev.missionTime) / DAY).toFixed(2)} d`);
         } else setText(this.score, ev ? (ev.ruleViolations?.length ? 'Not scored: the plan breaks the mission rules' : 'Objectives not met yet') : '');
         this.score.className = `score${ev?.success ? ' success' : ''}`;
         const sc = m.def.scoring;
-        const siteNote = m.def.launchSites?.length ? ` Par is the reference site's solution and the same for every site; the Δv and time limits above are for the chosen site${s.plan.start.kind === 'launch' ? ` (${LAUNCH_SITES.find((x) => x.id === (s.plan.start as { site: string }).site)?.name ?? ''})` : ''}.` : '';
-        setText(this.par, `Par (the author's solution): Δv ${fmtDv(sc.deltaVRef)}, ${(sc.timeRef / DAY).toFixed(1)} d.${siteNote} Matching par scores ${PAR_SCORE.toLocaleString('en-US')}; less Δv and less time score higher. Leaderboards also rank by Δv alone and by time alone.`);
+        const siteNote = m.def.launchSites?.length ? ` Par is the same for every site; the Δv and time limits above are for the chosen site${s.plan.start.kind === 'launch' ? ` (${LAUNCH_SITES.find((x) => x.id === (s.plan.start as { site: string }).site)?.name ?? ''})` : ''}.` : '';
+        const vehicleNote = m.def.rules.vehicle ? ' Δv is the TOTAL: the ascent (what the vehicle spends reaching your parking orbit) plus everything flown after insertion, by any stage. The reference drops the upper stage with propellant still in it, so par can be beaten: a better site, azimuth or parking orbit, or using more of the upper stage, all lower the total.' : '';
+        setText(this.par, `Par (the best site's reference solution): Δv ${fmtDv(sc.deltaVRef)}, ${(sc.timeRef / DAY).toFixed(1)} d.${vehicleNote}${siteNote} Matching par scores ${PAR_SCORE.toLocaleString('en-US')}; less Δv and less time score higher. Leaderboards also rank by total Δv alone and by time alone.`);
         const issues = conformance(m, s.plan);
         setText(this.rules, issues.length ? `Mission rules: ${issues.map((i) => i.message).join('; ')}` : '');
       } else {
@@ -247,6 +251,7 @@ export class StartPanel {
   private readonly err = el('div', { className: 'error' });
   private orbitEls: OrbitElements = { periAlt: 300e3, apoAlt: 300e3, incDeg: 0, raanDeg: 0, argPeDeg: 0, trueAnomalyDeg: 0 };
   private orbitCenter = 'earth';
+  private readonly feedback: LaunchFeedback;
 
   constructor(private readonly ctx: UiContext) {
     this.kind.append(el('option', { value: 'launch', textContent: 'Launch from a site' }), el('option', { value: 'state', textContent: 'Start in orbit (sandbox)' }));
@@ -286,8 +291,14 @@ export class StartPanel {
       const l = launch();
       // The field follows the distance convention: radius from Earth's centre in radius mode.
       const altM = v * 1000 - (distanceMode() === 'radius' ? bodyRadius('earth') : 0);
-      if (l && altM > 0) ctx.editor.setLaunch({ ...l, altitudeM: altM });
-    });
+      if (!l || !(altM > 0)) return;
+      // Within the mission's band (clamped, with a note) or what a launch accepts in Sandbox.
+      const [lo, hi] = this.feedback.band();
+      const clamped = Math.max(lo, Math.min(hi, altM));
+      this.err.textContent = clamped !== altM ? `Parking orbit kept within ${fromSurface(lo, 'earth')} – ${fromSurface(hi, 'earth')}` : '';
+      ctx.editor.setLaunch({ ...l, altitudeM: clamped });
+    }, 'parking-alt');
+    this.feedback = new LaunchFeedback(ctx);
     this.targetInc = numInput('Target inclination, degrees: shows the azimuths that reach it', '0.1', () => this.renderAzChoices(ctx.store.get().plan));
     const stepAz = (d: number) => {
       const l = launch();
@@ -303,6 +314,7 @@ export class StartPanel {
       return x;
     };
     this.launchBox.append(
+      this.feedback.summary,
       row('Site', this.site),
       this.siteInfo,
       this.corridor,
@@ -315,6 +327,7 @@ export class StartPanel {
       this.azChoices,
       el('label', { className: 'frow' }, this.altLabel, el('div', { className: 'fctl' }, this.alt)),
       this.altNote,
+      this.feedback.root,
     );
 
     fillBodySelect(this.center, (i) => BODIES[i].id);
@@ -439,7 +452,8 @@ export class StartPanel {
       const fixed = missionById(this.ctx.store.get().missionId)?.def?.rules.launch;
       this.alt.disabled = !!fixed;
       this.alt.title = fixed ? `Fixed by this mission: parking orbit at ${fromSurface(fixed.altitudeM, 'earth')}` : `Parking orbit ${radiusMode ? 'radius from Earth’s centre' : 'altitude above Earth’s reference (equatorial) radius'}, km`;
-      setText(this.altNote, fixed ? `Parking orbit fixed by this mission (${fromSurface(fixed.altitudeM, 'earth')}); ascent ${fixed.ascentTimeS} s, ${fixed.downrangeDeg}° downrange.` : '');
+      const band = missionById(this.ctx.store.get().missionId)?.def?.rules.vehicle?.altitude;
+      setText(this.altNote, fixed ? `Parking orbit fixed by this mission (${fromSurface(fixed.altitudeM, 'earth')}); ascent ${fixed.ascentTimeS} s, ${fixed.downrangeDeg}° downrange.` : band ? `This mission allows a parking orbit from ${fromSurface(band[0], 'earth')} to ${fromSurface(band[1], 'earth')}: lower is cheaper to reach.` : '');
       setText(this.corridor, `Range-safety azimuths ${site.azimuthMinDeg}° → ${site.azimuthMaxDeg}° (clockwise)${site.azimuthApproximate ? ', approximate' : ''}`);
       const ok = azimuthAllowed(site, l.azimuthDeg);
       setText(this.azWarn, ok ? '' : `Azimuth ${l.azimuthDeg.toFixed(2)}° is outside ${site.name}'s range-safety corridor: launch refused`);
@@ -574,6 +588,11 @@ export class NodesPanel {
   private readonly engineSel = el('select', { title: 'Engine' });
   private readonly readout = el('div', { className: 'node-readout' });
   private readonly nodeErr = el('div', { className: 'error' });
+  private readonly sepDetail = el('div', { className: 'sep-detail' });
+  private readonly sepTuner: Tuner;
+  private readonly sepReadout = el('div', { className: 'node-readout' });
+  private readonly sepErr = el('div', { className: 'error' });
+  private readonly addSepBtn: HTMLButtonElement;
   private readonly undoBtn = el('button', { className: 'btn small hist', type: 'button', textContent: '↶ Undo' });
   private readonly redoBtn = el('button', { className: 'btn small hist', type: 'button', textContent: '↷ Redo' });
 
@@ -650,6 +669,34 @@ export class NodesPanel {
       btn('Target flyby…', () => { const i = sel(); if (i !== null) ctx.openPlanner?.('target', i); }, 'Correct this burn toward a closest-approach altitude at a body'));
     this.detail.append(this.timeTuner.root, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), this.readout, this.nodeErr, actions);
     const addCursor = btn('+ Node at cursor', () => this.addAtCursor(), 'Add a burn at the time cursor (or click the trajectory)');
+    this.addSepBtn = btn('✂ Separation at cursor', () => this.addSepAtCursor(), 'Drop the active stage at the time cursor (with whatever propellant it still holds)');
+    this.addSepBtn.classList.add('sep-add');
+    const selSep = () => ctx.store.get().selectedSeparation;
+    this.sepTuner = new Tuner({
+      label: 'Separation',
+      title: 'Separation time, mission elapsed time: "T+1d 02:03:04", "3h 20m", or seconds',
+      inputClass: 'sep-met-input',
+      inputMode: 'text',
+      levels: T_LEVELS,
+      levelText: tText,
+      gesture: (open) => ctx.editor.gesture(open),
+      nudge: (d) => {
+        const j = selSep();
+        const sp = j !== null ? ctx.store.get().plan.separations?.[j] : undefined;
+        if (j !== null && sp) ctx.editor.moveSeparation(j, Math.round((sp.time + d) * 100) / 100, `sep:${j}`);
+      },
+      commit: (text) => {
+        const j = selSep();
+        const v = parseTime(text);
+        if (j === null) return null;
+        if (v === null) return 'Time: use "T+1d 02:03:04.5", "2h 30m" or seconds after liftoff / start';
+        ctx.editor.moveSeparation(j, v);
+        return null;
+      },
+    });
+    this.sepDetail.append(this.sepTuner.root, this.sepReadout, this.sepErr, el('div', { className: 'row wrap' },
+      btn('Go to separation', () => { const j = selSep(); const sp = j !== null ? ctx.store.get().plan.separations?.[j] : undefined; if (sp) { const ep = ctx.store.get().plan.epoch; ctx.store.set({ t: ep + sp.time, paused: true, loadingTarget: ep + sp.time }); } }),
+      nodeAction('Delete separation', 'danger', 'Delete this separation (Undo brings it back)', () => { const j = selSep(); if (j !== null) ctx.editor.removeSeparation(j); })));
     const planner = btn('Transfer planner…', () => ctx.openPlanner?.('transfer'), 'Porkchop plots, departure burns, flyby targeting and chains');
     this.undoBtn.setAttribute('aria-label', 'Undo the last plan edit (Ctrl or ⌘ Z)');
     this.redoBtn.setAttribute('aria-label', 'Redo (Shift Ctrl or ⌘ Z)');
@@ -661,9 +708,9 @@ export class NodesPanel {
     };
     ctx.editor.onHistory(syncHistory);
     syncHistory();
-    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, el('span', { className: 'hint', textContent: 'or pick a point on the trajectory' }), planner, el('span', { className: 'hist-group' }, this.undoBtn, this.redoBtn)), this.list, this.detail, this.parked);
+    this.root = section('Maneuver nodes', 'nodes', this.planErr, el('div', { className: 'row wrap' }, addCursor, this.addSepBtn, el('span', { className: 'hint', textContent: 'or pick a point on the trajectory' }), planner, el('span', { className: 'hist-group' }, this.undoBtn, this.redoBtn)), this.list, this.detail, this.sepDetail, this.parked);
     ctx.store.subscribe((s, p) => {
-      if (s.plan !== p.plan || s.selectedNode !== p.selectedNode || s.replay !== p.replay || s.parked !== p.parked) this.render();
+      if (s.plan !== p.plan || s.selectedNode !== p.selectedNode || s.selectedSeparation !== p.selectedSeparation || s.replay !== p.replay || s.parked !== p.parked) this.render();
     });
     this.render();
   }
@@ -671,10 +718,10 @@ export class NodesPanel {
 
   private commitTime(text: string): string | null {
     const i = this.ctx.store.get().selectedNode;
-    const v = parseDuration(text);
+    const v = parseTime(text);
     if (i === null) return null;
     if (v === null) {
-      const m = 'Time: use "T+1d 02:03:04.5", "2h 30m" or seconds after liftoff / start';
+      const m = 'Time: "T+1d 02:03:04.5", "2h 30m", seconds after liftoff / start, or a date "2027-01-10 12:30:00" (UTC or TDB)';
       this.nodeErr.textContent = m;
       return m;
     }
@@ -695,6 +742,17 @@ export class NodesPanel {
     this.ctx.editor.addNode(Math.round(t), { kind: 'orbital', body });
   }
 
+  addSepAtCursor(): void {
+    const s = this.ctx.store.get();
+    const t = Math.round((s.t - s.plan.epoch) * 10) / 10;
+    const why = separationRefusal(s.plan, t);
+    if (why) {
+      this.ctx.store.set({ notice: `Cannot separate at ${fmtTime(t, 0)}: ${why}` });
+      return;
+    }
+    this.ctx.editor.addSeparation(t);
+  }
+
   goTo(i: number): void {
     const s = this.ctx.store.get();
     const n = nodesOf(s.plan)[i];
@@ -708,54 +766,105 @@ export class NodesPanel {
     const errs = planErrors(plan);
     const reports = s.replay && s.replay.plan === plan && s.replay.preview === null ? s.replay.result.burns : null;
     setText(this.planErr, errs.plan.join('\n'));
-    // List.
+    // List: burns and separations in flight order, each burn with the stage that fires it.
     this.list.replaceChildren();
-    if (infos.length === 0) this.list.append(el('div', { className: 'hint', textContent: 'No burns yet.' }));
+    const rows = stageRows(plan);
+    const staged = rows.length > 1;
+    const seps = separationsOf(plan);
+    this.addSepBtn.style.display = staged ? '' : 'none';
+    if (infos.length === 0 && seps.length === 0) this.list.append(el('div', { className: 'hint', textContent: staged ? 'No burns yet. The first burn is fired by the stage that reached orbit.' : 'No burns yet.' }));
+    const sepRow = (sp: (typeof seps)[number]) => {
+      const e = errs.separations.get(sp.index);
+      const from = rows[sp.dropped];
+      const to = rows[sp.next];
+      const r = el('div', { className: `node-row sep-row${s.selectedSeparation === sp.index && s.selectedNode === null ? ' selected' : ''}${e ? ' invalid' : ''}`, dataset: { sep: String(sp.index) } },
+        el('span', { className: 'nidx sep-icon', textContent: '✂' }),
+        el('span', { className: 'nmet', textContent: fmtTime(sp.time, 0) }),
+        el('span', { className: 'nsep', textContent: `Separate ${from?.tag ?? '?'} → ${to?.tag ?? '?'}` }),
+        el('span', { className: 'nframe', textContent: sp.empty ? 'stage empty' : `drops ${fmtKg(sp.propellantLeft)} propellant` }),
+        e ? el('div', { className: 'nerr', textContent: e.join('; ') }) : null);
+      r.onclick = () => this.ctx.store.set({ selectedSeparation: sp.index, selectedNode: null });
+      activatable(r, `Separation ${sp.index + 1} at ${fmtTime(sp.time, 0)}`);
+      r.append(el('span', { className: 'nrow-acts' }, nodeAction('Delete', 'danger', `Delete separation ${sp.index + 1}`, () => this.ctx.editor.removeSeparation(sp.index))));
+      return r;
+    };
+    let si = 0;
     infos.forEach((x, i) => {
+      while (si < seps.length && seps[si].time <= x.burn.start) this.list.append(sepRow(seps[si++]));
       const e = errs.burns.get(i);
       const frame = x.node.frame.kind === 'orbital' ? bodyName(x.node.frame.body) : 'inertial';
       const actual = reports?.[i];
+      const st = rows[x.stage];
       const r = el('div', { className: `node-row${s.selectedNode === i ? ' selected' : ''}${e ? ' invalid' : ''}`, dataset: { index: String(i) } },
         el('span', { className: 'nidx', textContent: `#${i + 1}` }),
-        el('span', { className: 'nmet', textContent: formatMet(x.node.t, 0) }),
+        staged && st ? el('span', { className: `nstage${st.isSpacecraft ? ' sc' : ''}`, textContent: st.tag, title: `Fired by ${st.name}` }) : null,
+        el('span', { className: 'nmet', textContent: fmtTime(x.node.t, 0), title: otherTime(x.node.t) }),
         el('span', { className: 'ndv', textContent: fmtDv(dvMagnitude(x.node.dv)) }),
         el('span', { className: 'nframe', textContent: frame }),
         actual ? el('span', { className: 'nact', textContent: `actual ${fmtDv(actual.deltaV)}` }) : null,
         e ? el('div', { className: 'nerr', textContent: e.join('; ') }) : null,
-        x.short ? el('div', { className: 'nerr', textContent: 'Not enough propellant: this burn will be cut short' }) : null);
-      r.onclick = () => this.ctx.store.set({ selectedNode: i });
+        x.short ? el('div', { className: 'nerr', textContent: staged ? `Not enough propellant in ${st?.name ?? 'this stage'}: this burn will be cut short. Separate before it, or split it across a separation.` : 'Not enough propellant: this burn will be cut short' }) : null);
+      r.onclick = () => this.ctx.store.set({ selectedNode: i, selectedSeparation: null });
       activatable(r, `Burn ${i + 1}`);
       r.append(el('span', { className: 'nrow-acts' },
         nodeAction('Disable', 'toggle', `Disable burn ${i + 1}`, () => this.ctx.editor.disableNode(i)),
         nodeAction('Delete', 'danger', `Delete burn ${i + 1}`, () => this.ctx.editor.removeNode(i))));
       this.list.append(r);
+      // "Separate now": after the last burn of a lower stage (prominent when it left the stage dry).
+      const offer = separationOffer(plan, i);
+      if (offer) {
+        const b = el('button', { className: `btn small sep-offer${offer.empty ? ' empty' : ''}`, type: 'button', textContent: offer.empty ? `✂ ${rows[offer.stage].tag} is empty: separate now` : `✂ Separate ${rows[offer.stage].tag} after burn ${i + 1}` });
+        b.title = `Add a separation at ${fmtTime(offer.time, 0)}, one second after cutoff; later burns are fired by ${rows[offer.stage + 1]?.name ?? 'the next stage'}`;
+        b.onclick = () => this.ctx.editor.separateAfter(i);
+        this.list.append(el('div', { className: 'sep-offer-row' }, b));
+      }
     });
+    while (si < seps.length) this.list.append(sepRow(seps[si++]));
     // Detail.
     const i = s.selectedNode;
     const x = i !== null ? infos[i] : undefined;
     this.detail.style.display = x ? '' : 'none';
     if (x && i !== null) {
-      this.timeTuner.setValue(formatMet(x.node.t, 1));
+      const stage = rows[x.stage];
+      const engines = (x.stage === rows.length - 1 ? plan.spacecraft : plan.lowerStages?.[x.stage] ?? plan.spacecraft).engines;
+      this.timeTuner.setValue(fmtTime(x.node.t, 1));
+      this.timeTuner.input.title = `Burn centre (${otherTime(x.node.t)}): type a MET "T+1d 02:03:04", "3h 20m", seconds, or a date (UTC or TDB)`;
       setValue(this.frameSel, x.node.frame.kind === 'orbital' ? x.node.frame.body : '@inertial');
-      const engKey = plan.spacecraft.engines.map((e) => `${e.thrust}/${e.isp}`).join();
+      const engKey = engines.map((e) => `${e.thrust}/${e.isp}`).join();
       if (this.engineSel.dataset.key !== engKey) {
         this.engineSel.dataset.key = engKey;
-        this.engineSel.replaceChildren(...plan.spacecraft.engines.map((e, k) => el('option', { value: String(k), textContent: `E${k + 1}: ${(e.thrust / 1000).toLocaleString('en-US')} kN, ${e.isp} s` })));
+        this.engineSel.replaceChildren(...engines.map((e, k) => el('option', { value: String(k), textContent: `E${k + 1}: ${(e.thrust / 1000).toLocaleString('en-US')} kN, ${e.isp} s` })));
       }
       setValue(this.engineSel, String(x.node.engine));
       x.node.dv.forEach((v, k) => this.dvTuners[k].setValue(String(+v.toFixed(4))));
       const axisNames = x.node.frame.kind === 'inertial' ? ['ICRF x', 'ICRF y', 'ICRF z'] : AXES;
       this.dvTuners.forEach((t, k) => t.setLabel(axisNames[k]));
       const rep = reports?.[i];
-      const mdot = plan.spacecraft.engines[x.burn.engine]?.thrust / ((plan.spacecraft.engines[x.burn.engine]?.isp ?? 1) * 9.80665);
+      const mdot = engines[x.burn.engine]?.thrust / ((engines[x.burn.engine]?.isp ?? 1) * 9.80665);
       this.readout.innerHTML =
+        (staged && stage ? `<div class="kv stage-kv"><span>Fired by</span><b class="nstage-name">${esc(stage.tag)} · ${esc(stage.name)}</b></div>` : '') +
         `<div class="kv"><span>Requested Δv</span><b>${fmtDv(dvMagnitude(x.node.dv))}</b></div>` +
         `<div class="kv"><span>Replay Δv (expended)</span><b class="${rep && Math.abs(rep.deltaV - dvMagnitude(x.node.dv)) > 0.05 * Math.max(1, dvMagnitude(x.node.dv)) ? 'warn' : ''}">${rep ? fmtDv(rep.deltaV) : s.replay?.plan === plan && s.replay.preview === null ? 'not flown' : '…'}</b></div>` +
         `<div class="kv"><span>Burn</span><b>${x.burn.duration.toFixed(2)} s${rep ? ` (flown ${rep.burnTime.toFixed(2)} s)` : ''}</b></div>` +
-        `<div class="kv"><span>Ignition → cutoff</span><b>${esc(formatMet(x.burn.start, 1))} → ${esc(formatMet(x.burn.start + x.burn.duration, 1))}</b></div>` +
+        `<div class="kv"><span>${timeMode() === 'met' ? 'Absolute' : 'Mission elapsed'}</span><b class="node-time-other">${esc(otherTime(x.node.t))}</b></div>` +
+        `<div class="kv"><span>Ignition → cutoff</span><b>${esc(fmtTime(x.burn.start, 1))} → ${esc(fmtTime(x.burn.start + x.burn.duration, 1))}</b></div>` +
         `<div class="kv"><span>Mass</span><b>${fmtKg(x.m0)} → ${fmtKg(x.m1)}</b></div>` +
         `<div class="kv"><span>Propellant</span><b>${fmtKg(x.m0 - x.m1)}${rep ? ` (flown ${fmtKg(rep.propellant)})` : ''} · ${Number.isFinite(mdot) ? mdot.toFixed(2) : '—'} kg/s</b></div>`;
       setText(this.nodeErr, [...(errs.burns.get(i) ?? []), x.short ? 'Not enough propellant left for the requested Δv: the burn will run the tanks dry.' : ''].filter(Boolean).join('\n'));
+    }
+    // Separation detail.
+    const j = s.selectedNode === null ? s.selectedSeparation : null;
+    const sp = j !== null ? seps[j] : undefined;
+    this.sepDetail.style.display = sp ? '' : 'none';
+    if (sp) {
+      this.sepTuner.setValue(fmtTime(sp.time, 1));
+      this.sepTuner.input.title = `Separation time (${otherTime(sp.time)})`;
+      const from = rows[sp.dropped];
+      const to = rows[sp.next];
+      this.sepReadout.innerHTML =
+        `<div class="kv"><span>Drops</span><b>${esc(from?.name ?? '?')}${sp.empty ? ' (empty)' : ` with ${fmtKg(sp.propellantLeft)} propellant`}</b></div>` +
+        `<div class="kv"><span>Then active</span><b>${esc(to?.name ?? '?')}</b></div>`;
+      setText(this.sepErr, (errs.separations.get(sp.index) ?? []).join('\n'));
     }
     // Parked.
     this.parked.replaceChildren();
@@ -764,11 +873,11 @@ export class NodesPanel {
       s.parked.forEach((n, k) => {
         this.parked.append(el('div', { className: 'node-row parked-row' },
           el('span', { className: 'nidx', textContent: 'off' }),
-          el('span', { className: 'nmet', textContent: formatMet(n.t, 0) }),
+          el('span', { className: 'nmet', textContent: fmtTime(n.t, 0) }),
           el('span', { className: 'ndv', textContent: fmtDv(dvMagnitude(n.dv)) }),
           el('span', { className: 'nrow-acts' },
-            nodeAction('Enable', 'toggle', `Enable the disabled node at ${formatMet(n.t, 0)}`, () => this.ctx.editor.enableParked(k)),
-            nodeAction('Delete', 'danger', `Delete the disabled node at ${formatMet(n.t, 0)}`, () => this.ctx.editor.deleteParked(k)))));
+            nodeAction('Enable', 'toggle', `Enable the disabled node at ${fmtTime(n.t, 0)}`, () => this.ctx.editor.enableParked(k)),
+            nodeAction('Delete', 'danger', `Delete the disabled node at ${fmtTime(n.t, 0)}`, () => this.ctx.editor.deleteParked(k)))));
       });
     }
   }
@@ -813,7 +922,7 @@ export class EventsPanel {
         this.ctx.focusBody(ev.body);
       };
       const rowEl = el('div', { className: `event-row ${x.failure ? 'failure' : ''} ${x.role} k-${ev.kind}${s.selectedEvent === x.index ? ' selected' : ''}`, dataset: { index: String(x.index) } },
-        el('span', { className: 'emet', textContent: formatMet(ev.t - epoch, 0) }),
+        el('span', { className: 'emet', textContent: fmtTime(ev.t - epoch, 0), title: otherTime(ev.t - epoch) }),
         el('span', { className: 'ename', textContent: eventLabel(x, bodyName) }),
         el('span', { className: 'eval', textContent: `${fromSurface(ev.altitude, ev.body)} · ${formatSpeed(ev.speed)}` }),
         focus);
@@ -831,9 +940,9 @@ export class EventsPanel {
       const open = this.expanded.has(key) || g.some((x) => x.index === s.selectedEvent);
       const alts = g.map((x) => x.ev.altitude);
       const sum = el('button', { className: 'event-row apsis-group', type: 'button', ariaExpanded: String(open) },
-        el('span', { className: 'emet', textContent: formatMet(g[0].ev.t - epoch, 0) }),
+        el('span', { className: 'emet', textContent: fmtTime(g[0].ev.t - epoch, 0) }),
         el('span', { className: 'ename', textContent: `${open ? '▾' : '▸'} ${g.length} apsides at ${bodyName(g[0].ev.body)} (near-circular)` }),
-        el('span', { className: 'eval', textContent: `${fromSurface(Math.min(...alts), g[0].ev.body)} – ${fromSurface(Math.max(...alts), g[0].ev.body)} · until ${formatMet(g[g.length - 1].ev.t - epoch, 0)}` }));
+        el('span', { className: 'eval', textContent: `${fromSurface(Math.min(...alts), g[0].ev.body)} – ${fromSurface(Math.max(...alts), g[0].ev.body)} · until ${fmtTime(g[g.length - 1].ev.t - epoch, 0)}` }));
       sum.onclick = () => {
         if (this.expanded.has(key)) this.expanded.delete(key);
         else this.expanded.add(key);
@@ -873,7 +982,7 @@ export class EventsPanel {
     this.planeList.append(el('div', { className: 'sub', textContent: `Nodes on ${label}` }));
     const row = (c: PlaneCrossing) => {
       const r = el('div', { className: `event-row pnode ${c.ascending ? 'asc' : 'desc'}` },
-        el('span', { className: 'emet', textContent: formatMet(c.t - epoch, 0) }),
+        el('span', { className: 'emet', textContent: fmtTime(c.t - epoch, 0) }),
         el('span', { className: 'ename', textContent: c.ascending ? '▲ Ascending node' : '▼ Descending node' }),
         el('span', { className: 'eval', textContent: `${c.inclinationDeg.toFixed(2)}° relative inclination` }));
       r.onclick = () => this.ctx.store.set({ t: c.t, paused: true, loadingTarget: c.t });
@@ -889,9 +998,9 @@ export class EventsPanel {
       const open = this.expanded.has(key);
       const a = list[g[0]], b = list[g[g.length - 1]];
       const sum = el('button', { className: 'event-row apsis-group', type: 'button', ariaExpanded: String(open) },
-        el('span', { className: 'emet', textContent: formatMet(a.t - epoch, 0) }),
+        el('span', { className: 'emet', textContent: fmtTime(a.t - epoch, 0) }),
         el('span', { className: 'ename', textContent: `${open ? '▾' : '▸'} ${g.length} node crossings at ${a.inclinationDeg.toFixed(2)}°` }),
-        el('span', { className: 'eval', textContent: `until ${formatMet(b.t - epoch, 0)}` }));
+        el('span', { className: 'eval', textContent: `until ${fmtTime(b.t - epoch, 0)}` }));
       sum.onclick = () => {
         if (open) this.expanded.delete(key);
         else this.expanded.add(key);
@@ -989,7 +1098,7 @@ export class ResultsPanel {
     const r = s.replay;
     const current = r?.plan === s.plan;
     const errs = planErrors(s.plan);
-    const invalid = errs.plan.length + errs.burns.size > 0;
+    const invalid = errorCount(errs) > 0;
     const preview = r?.preview ?? null;
     setText(this.status, invalid
       ? 'Plan has errors (see the nodes / start panels): showing the last valid flight.'
@@ -1006,16 +1115,30 @@ export class ResultsPanel {
     this.outcome.className = `outcome o-${res.outcome}${bad ? ' fail' : ''}${current ? '' : ' stale'}`;
     this.outcome.innerHTML = `<b>${esc(OUTCOME_TEXT[res.outcome] ?? res.outcome)}</b> ${res.reason ? `<span>${esc(res.reason)}</span>` : ''}`;
     const b = budget(r.plan);
+    const rows = stageRows(r.plan);
+    const staged = rows.length > 1;
+    const top = res.stages[rows.length - 1];
     const sc = r.plan.spacecraft;
-    const left = sc.wetMass - res.propellantUsed;
+    // The spacecraft's own propellant (never the upper stage's mixed in).
+    const scLeft = top ? top.propellantLeft : sc.wetMass - sc.dryMass - res.propellantUsed;
     const ve0 = sc.engines[0].isp * 9.80665;
-    const remaining = ve0 * Math.log(Math.max(left, sc.dryMass) / sc.dryMass);
+    const remaining = ve0 * Math.log((sc.dryMass + Math.max(0, scLeft)) / sc.dryMass);
+    const stageLines = staged ? res.stages.map((x) => {
+      const row = rows[x.stage];
+      const fate = x.droppedInAscent ? 'dropped in the ascent' : x.separatedAt !== null ? `separated ${fmtTime(x.separatedAt, 0)}` : 'to the end';
+      const orbit = res.ascent && res.ascent.upperStage === x.stage ? ' · reached orbit' : '';
+      return `<div class="kv stage-line"><span>${esc(row?.tag ?? '')} ${esc(row?.name ?? '')}</span><b>Δv ${fmtDv(x.deltaV)}${x.ascentDeltaV > 0 && x.ascentDeltaV < x.deltaV - 0.05 ? ` (ascent ${fmtDv(x.ascentDeltaV)})` : ''} · ${fmtKg(x.propellantUsed)} used · ${fmtKg(x.propellantLeft)} left · ${fate}${orbit}</b></div>`;
+    }).join('') : '';
     this.table.innerHTML =
-      (res.launch ? `<div class="kv"><span>Orbit insertion (replay)</span><b>${esc(formatMet(res.launch.t - r.plan.epoch, 0))}${res.launch.inclinationDeg !== undefined ? ` · inclination ${res.launch.inclinationDeg.toFixed(2)}°` : ''}</b></div>` : '') +
-      `<div class="kv"><span>Δv used (replay)</span><b>${fmtDv(res.deltaV)}</b></div>` +
-      `<div class="kv"><span>Δv requested</span><b>${fmtDv(b.requested)}</b></div>` +
-      `<div class="kv"><span>Δv remaining (E1)</span><b>${fmtDv(remaining)}</b></div>` +
-      `<div class="kv"><span>Propellant</span><b>${fmtKg(res.propellantUsed)} used · ${fmtKg(left - sc.dryMass)} left</b></div>` +
+      (res.launch ? `<div class="kv"><span>Orbit insertion (replay)</span><b>${esc(fmtTime(res.launch.t - r.plan.epoch, 0))}${res.launch.inclinationDeg !== undefined ? ` · inclination ${res.launch.inclinationDeg.toFixed(2)}°` : ''}</b></div>` : '') +
+      (res.ascent
+        ? `<div class="kv dv-total"><span>Δv total (ranked)</span><b>${fmtDv(res.totalDeltaV)}</b></div>` +
+          `<div class="kv"><span>= ascent + flown</span><b>${fmtDv(res.ascent.deltaV)} + ${fmtDv(res.deltaV)}</b></div>`
+        : `<div class="kv dv-total"><span>Δv used (replay)</span><b>${fmtDv(res.totalDeltaV)}</b></div>`) +
+      `<div class="kv"><span>Δv requested (spacecraft nodes)</span><b>${fmtDv(b.requested)}</b></div>` +
+      `<div class="kv"><span>Spacecraft Δv remaining (E1)</span><b>${fmtDv(remaining)}</b></div>` +
+      `<div class="kv"><span>Spacecraft propellant</span><b>${fmtKg(sc.wetMass - sc.dryMass - scLeft)} used · ${fmtKg(scLeft)} left</b></div>` +
+      stageLines +
       `<div class="kv"><span>Mission elapsed</span><b>${esc(formatMet(res.elapsed, 0))}</b></div>` +
       `<div class="kv"><span>Ended</span><b>${Number.isFinite(res.finalT) ? esc(formatCalendar(tdbToCalendar(res.finalT), false)) + ' TDB' : '—'}</b></div>`;
     const nodes = nodesOf(r.plan);

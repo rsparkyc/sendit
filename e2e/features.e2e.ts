@@ -8,6 +8,7 @@
  * test-results/features/ for a human to look at.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/features';
@@ -49,24 +50,6 @@ async function enter(page: Page, selector: string, value: string): Promise<void>
   const i = page.locator(selector);
   await i.fill(value);
   await i.press('Enter');
-}
-
-const GEO_NODES: [number, [number, number, number]][] = [
-  [1678.9791939258575, [2449.478316355737, 0, 0]],
-  [20675.642688512802, [1467.715665002644, -205.3391377520207, -1.621673268307772]],
-];
-
-async function solveGeo(page: Page): Promise<void> {
-  await enter(page, 'input[title^="Flight duration"]', '4.6');
-  await settled(page);
-  for (const [t, dv] of GEO_NODES) {
-    await page.getByRole('button', { name: '+ Node at cursor' }).click();
-    await enter(page, 'input.met-input', String(t));
-    await enter(page, 'input[title="Prograde delta-v, m/s"]', String(dv[0]));
-    await enter(page, 'input[title="Normal delta-v, m/s"]', String(dv[1]));
-    await enter(page, 'input[title="Radial out delta-v, m/s"]', String(dv[2]));
-    await settled(page);
-  }
 }
 
 /** Angle (deg) between the craft's orbit normal about Earth at mission time tm and a reference normal, computed independently in the page. */
@@ -327,10 +310,17 @@ test.describe('desktop', () => {
     await settled(page);
     await page.evaluate(() => (window as any).sendit.store.set({ selectedNode: 0 }));
     await page.selectOption('.tl-presets', 'burn');
-    const win = await page.evaluate(() => (window as any).sendit.timeline.window());
+    const fitBurn = await page.evaluate(() => (window as any).sendit.timeline.window());
     const burn = await page.evaluate(() => { const s = (window as any).sendit.store.get(); return s.replay.result.burns[0].burnTime; });
-    console.log(`burn 1 lasts ${burn.toFixed(0)} s; window ${(win[1] - win[0]).toFixed(0)} s`);
-    expect(win[1] - win[0]).toBeLessThan(burn * 2 + 61);
+    console.log(`burn 1 (the upper stage's transfer burn) lasts ${burn.toFixed(0)} s; window ${(fitBurn[1] - fitBurn[0]).toFixed(0)} s`);
+    expect(fitBurn[1] - fitBurn[0]).toBeLessThan(burn * 2 + 61);
+    // The upper stage's burn is ~13 minutes: zoom in once more, about the middle of the burn, for a second per pixel.
+    await page.evaluate(() => { const w = (window as any).sendit; const s = w.store.get(); const b = s.plan.burns[0]; w.store.set({ t: s.plan.epoch + b.start + b.duration / 2, paused: true }); });
+    await page.getByRole('button', { name: 'Zoom the timeline in (about the cursor)' }).click();
+    const win = await page.evaluate(() => (window as any).sendit.timeline.window());
+    const b0 = await page.evaluate(() => { const s = (window as any).sendit.store.get(); return [s.plan.epoch + s.plan.burns[0].start, s.plan.epoch + s.plan.burns[0].start + s.plan.burns[0].duration]; });
+    expect(win[0]).toBeGreaterThan(b0[0]);
+    expect(win[1]).toBeLessThan(b0[1]);
     const rw = (await page.locator('input.scrub').boundingBox())!.width;
     expect((win[1] - win[0]) / rw).toBeLessThan(2); // about a second per pixel
     // Scrub within the burn by dragging the handle.
@@ -383,14 +373,7 @@ test.describe('phone', () => {
 
   test('phone: node buttons fit at 360-390 px, timeline zoom, sheet drag to any height, panel collapse', async ({ page }) => {
     await fresh(page, 'geo-from-leo');
-    // Plan entered through the editor API (the desktop tests drive the same inputs by hand).
-    await page.evaluate((nodes) => {
-      const w = (window as any).sendit;
-      for (const [t, dv] of nodes) {
-        const i = w.editor.addNode(t, { kind: 'orbital', body: 'earth' });
-        w.editor.updateNode(i, { dv });
-      }
-    }, GEO_NODES);
+    await solveGeo(page);
     await settled(page);
     await page.evaluate(() => (window as any).sendit.store.set({ selectedNode: 0 }));
     await page.getByRole('tab', { name: 'Nodes' }).tap();

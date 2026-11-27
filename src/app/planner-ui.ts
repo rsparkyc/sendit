@@ -16,6 +16,10 @@
  */
 import type { ChunkPool } from './chunk-pool';
 import { el, esc, fillBodySelect, formatMet } from './dom';
+import { errorCount, planErrors } from './mission-layer';
+import { splitAcrossSeparation } from './nodes';
+import { stageRows } from './vehicle';
+import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import type { Editor } from './editor';
 import { geocentricLatitudeDeg, launchSite, type MissionPlan } from './mission-layer';
 import { launchOf, missionById } from './missions';
@@ -845,9 +849,40 @@ export class PlannerOverlay {
       return null;
     });
     if (!r) return;
-    this.editor.replacePlan(this.withinMission(r.plan), r.index);
+    const planned = this.withinMission(r.plan);
+    const refused = this.refusal(planned);
+    if (refused) {
+      this.result.innerHTML = `<div class="pl-fail">The departure burn was not inserted: the plan would not be valid (${esc(refused)}).</div>`;
+      return;
+    }
+    this.editor.replacePlan(planned, r.index);
     this.departure = { index: r.index, tArr: sel.tArr, body: sel.arr };
     this.result.innerHTML = `<div class="pl-ok">Inserted burn #${r.index + 1}: ${r.dv.toFixed(0)} m/s at ${esc(fmtDate(r.tImpulse))}${l ? `, after liftoff ${esc(fmtDate(this.store.get().plan.epoch))} at azimuth ${launchOf(this.store.get().plan)!.azimuthDeg.toFixed(2)}°` : ''}. It is a normal node: edit it freely. A Lambert guess flown with a real engine misses by millions of km; Refine fixes that.</div>` + (r.warning ? `<div class="pl-fail">${esc(r.warning)}</div>` : '');
+    if (r.split) this.offerSplit(this.result, this.withinMission(r.split.plan), (p) => { this.departure = { index: r.split!.first, tArr: sel.tArr, body: sel.arr }; void p; });
+  }
+
+  /** The first validation problem of a plan (plan layer, with the ascent's staging), or null. */
+  private refusal(plan: MissionPlan): string | null {
+    const e = planErrors(plan);
+    if (errorCount(e) === 0) return null;
+    return [...e.plan, ...[...e.burns.values()].flat(), ...[...e.separations.values()].flat()][0] ?? 'invalid plan';
+  }
+
+  /** "Split across a separation": a button that applies the split plan (validated first). */
+  private offerSplit(out: HTMLElement, plan: MissionPlan, after: (p: MissionPlan) => void): void {
+    const why = this.refusal(plan);
+    if (why) {
+      out.append(el('div', { className: 'pl-fail', textContent: `A split across a separation would not be valid either (${why}).` }));
+      return;
+    }
+    const b = el('button', { className: 'btn primary split-btn', type: 'button', textContent: '✂ Split across a separation (the next stage finishes)' });
+    b.onclick = () => {
+      this.editor.replacePlan(plan, null);
+      after(plan);
+      b.disabled = true;
+      out.append(el('div', { className: 'pl-ok', textContent: 'Split: the stage burns what it has, separates one second after cutoff, and the next stage flies the rest in the same direction. Refine the first burn to aim it again.' }));
+    };
+    out.append(b);
   }
 
   private async refine(): Promise<void> {
@@ -882,11 +917,24 @@ export class PlannerOverlay {
       return;
     }
     // Only apply if the plan has not been edited meanwhile.
-    if (r.ok && r.plan && this.store.get().plan === before) this.editor.replacePlan(this.withinMission(r.plan), burn);
-    else if (r.ok) r.message += ' (not applied: the plan changed while the corrector ran)';
+    let applied: MissionPlan | null = null;
+    if (r.ok && r.plan && this.store.get().plan === before) {
+      const p = this.withinMission(r.plan);
+      const why = this.refusal(p);
+      if (why) { r.ok = false; r.message = `The corrected burn was not applied: the plan would not be valid (${why}).`; }
+      else { this.editor.replacePlan(p, burn); applied = p; }
+    } else if (r.ok) r.message += ' (not applied: the plan changed while the corrector ran)';
     out.innerHTML = correctionSummary(r, body, altitude) + `<div class="hint">Total ${((performance.now() - t0) / 1000).toFixed(2)} s including ephemeris.</div>`;
     out.dataset.measured = r.measured ? String(r.measured.altitude) : '';
     out.dataset.ok = String(r.ok);
+    // The stage that fires it cannot complete the corrected burn: say so and offer the split.
+    const info = applied ? nodesOf(applied)[burn] : undefined;
+    if (applied && info?.short) {
+      const rows = stageRows(applied);
+      const sp = splitAcrossSeparation(applied, burn);
+      out.append(el('div', { className: 'pl-fail', textContent: `${rows[info.stage]?.name ?? 'This stage'} runs dry before completing this burn${sp ? `: it has about ${sp.available.toFixed(0)} m/s of the ${(sp.available + sp.rest).toFixed(0)} m/s` : ''}.` }));
+      if (sp) this.offerSplit(out, this.withinMission(sp.plan), () => undefined);
+    }
   }
 
   /** A mission caps the plan duration; the planner may have extended it to reach the encounter. */
@@ -911,7 +959,7 @@ export class PlannerOverlay {
   private refreshTarget(): void {
     const plan: MissionPlan = this.store.get().plan;
     const keep = this.tBurn.value;
-    this.tBurn.replaceChildren(...nodesOf(plan).map((x, i) => el('option', { value: String(i), textContent: `#${i + 1} ${formatMet(x.node.t, 0)} · ${dvMagnitude(x.node.dv).toFixed(1)} m/s` })));
+    this.tBurn.replaceChildren(...nodesOf(plan).map((x, i) => el('option', { value: String(i), textContent: `#${i + 1} ${fmtTime(x.node.t, 0)} · ${dvMagnitude(x.node.dv).toFixed(1)} m/s` })));
     if (plan.burns.length === 0) this.tBurn.append(el('option', { value: '', textContent: 'No burns in the plan', disabled: true }));
     if (keep) this.tBurn.value = keep;
   }

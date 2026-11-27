@@ -26,8 +26,9 @@
  * when empty"); separations already in the plan are kept as they are.
  * Format-1 plans (spacecraft only) are unchanged, bit for bit.
  */
-import { planAscent, vehicleStages, isVehicleLaunch, type MissionPlan, type PlanBurn, type PlanFrame, type PlanSeparation, type Spacecraft } from './mission-layer';
+import { makePlan, planAscent, simulationStartOffset, vehicleStages, isVehicleLaunch, type MissionPlan, type PlanBurn, type PlanFrame, type PlanSeparation, type Spacecraft } from './mission-layer';
 import { BODY_DATA } from './physics';
+import { osculating } from './orbit-elements';
 
 /** Standard gravity, m/s^2 (defines Isp; same constant as the physics). */
 export const G0 = 9.80665;
@@ -176,7 +177,7 @@ function sortNodes(nodes: ManeuverNode[]): ManeuverNode[] {
  * Plan whose burns are plan.burns[0..keep) unchanged, followed by burns for
  * `nodes` (all of them, sorted by time) with the mass chain continuing.
  */
-function rebuild(plan: MissionPlan, keep: number, nodes: ManeuverNode[]): MissionPlan {
+function rebuild(plan: MissionPlan, keep: number, nodes: ManeuverNode[], autoSeparate = true): MissionPlan {
   const st = stackOf(plan);
   const mass = massChain(st);
   const L = plan.lowerStages?.length ?? 0;
@@ -191,7 +192,7 @@ function rebuild(plan: MissionPlan, keep: number, nodes: ManeuverNode[]): Missio
   for (const n of nodes) {
     let k = st.staged ? activeAt(st, seps, n.t) : 0;
     // Separate when empty: the active stage has nothing left and a stage above it does.
-    if (st.staged && mass[k] - emptyMass(st, k) < 1e-6 * st.stages[k].wetMass && k < st.stages.length - 1 && Number.isFinite(lastEnd[k]) && lastEnd[k] + 1 < n.t) {
+    if (autoSeparate && st.staged && mass[k] - emptyMass(st, k) < 1e-6 * st.stages[k].wetMass && k < st.stages.length - 1 && Number.isFinite(lastEnd[k]) && lastEnd[k] + 1 < n.t) {
       seps.push({ time: lastEnd[k] + 1 });
       seps.sort((a, b) => a.time - b.time);
       k++;
@@ -256,6 +257,157 @@ export function disableNode(plan: MissionPlan, i: number): { plan: MissionPlan; 
 /** Put a parked node back. */
 export function enableNode(plan: MissionPlan, node: ManeuverNode): { plan: MissionPlan; index: number } {
   return addNode(plan, { ...node, dv: [...node.dv] as Vec3 });
+}
+
+// ---------------------------------------------------------------------------
+// Separations (format-2 staged plans). A separation drops the active stage at
+// its time, with whatever propellant it still holds. Editing one keeps every
+// burn that ends before the earliest time touched bit-for-bit and re-fires
+// every later node (same requested delta-v) on the stage active at its time;
+// the automatic "separate when empty" is not applied, so a separation the
+// player removed stays removed.
+
+export interface SeparationInfo {
+  /** Index into plan.separations. */
+  index: number;
+  /** Mission time, s after the epoch. */
+  time: number;
+  /** Stage dropped (index into vehicleStages) and the stage that takes over. */
+  dropped: number;
+  next: number;
+  /** Propellant the dropped stage still holds (by the node chain), kg. */
+  propellantLeft: number;
+  /** The dropped stage was dry (a "separate when empty"). */
+  empty: boolean;
+}
+
+/** Plan's separations with the stage each one drops (by the node chain's masses). */
+export function separationsOf(plan: MissionPlan): SeparationInfo[] {
+  const st = stackOf(plan);
+  const seps = plan.separations ?? [];
+  if (!seps.length) return [];
+  const left = st.prop.slice();
+  const infos = nodesOf(plan);
+  return seps.map((s, j) => {
+    const dropped = Math.min(st.first + j, st.stages.length - 1);
+    let p = left[dropped];
+    for (const x of infos) if (x.stage === dropped && x.burn.start < s.time) p -= x.m0 - x.m1;
+    p = Math.max(0, p);
+    return { index: j, time: s.time, dropped, next: Math.min(dropped + 1, st.stages.length - 1), propellantLeft: p, empty: p < 1e-6 * st.stages[dropped].wetMass + 1e-9 };
+  });
+}
+
+/** Stage that is active at mission time t (s after the epoch): the flight's first stage plus one per earlier separation. */
+export function stageAt(plan: MissionPlan, t: number): number {
+  const st = stackOf(plan);
+  return activeAt(st, plan.separations ?? [], t);
+}
+
+/** First stage of the flight (after a vehicle ascent: the stage that reached orbit; else 0). */
+export function firstStage(plan: MissionPlan): number {
+  return stackOf(plan).first;
+}
+
+/** Why a separation cannot go at time t (null if it can). */
+export function separationRefusal(plan: MissionPlan, t: number, ignore = -1): string | null {
+  const st = stackOf(plan);
+  if (!st.staged) return 'This vehicle has a single stage: there is nothing to separate.';
+  const seps = (plan.separations ?? []).filter((_, j) => j !== ignore);
+  if (st.first + seps.length >= st.stages.length - 1) return 'Every stage below the spacecraft is already separated (a separation would drop the spacecraft).';
+  if (seps.length >= 5) return 'At most 5 separations.';
+  const t0 = simulationStartOffset(plan.start);
+  if (!(t >= t0)) return 'A separation cannot come before orbit insertion.';
+  if (!(t <= plan.duration)) return 'A separation must be within the flight.';
+  return null;
+}
+
+function withSeparations(plan: MissionPlan, seps: PlanSeparation[], touched: number): MissionPlan {
+  const sorted = seps.slice().sort((a, b) => a.time - b.time);
+  const nodes = nodesOf(plan).map((x) => x.node);
+  // Keep every burn whose node and burn both end before the earliest touched time.
+  let keep = 0;
+  while (keep < plan.burns.length && plan.burns[keep].start + plan.burns[keep].duration <= touched && nodes[keep].t < touched) keep++;
+  const { separations: _old, ...rest } = plan;
+  void _old;
+  const base: MissionPlan = sorted.length ? { ...rest, separations: sorted } : (plan.format >= 2 ? { ...rest, separations: [] } : rest);
+  return rebuild(base, keep, nodes.slice(keep), false);
+}
+
+/** Add a separation at time t; returns the new plan and its index, or the refusal. */
+export function addSeparation(plan: MissionPlan, t: number): { plan: MissionPlan; index: number } | { error: string } {
+  const why = separationRefusal(plan, t);
+  if (why) return { error: why };
+  const seps = [...(plan.separations ?? []), { time: t }];
+  const out = withSeparations(plan, seps, t);
+  return { plan: out, index: (out.separations ?? []).findIndex((s) => s.time === t) };
+}
+
+/** Move separation j to time t. */
+export function moveSeparation(plan: MissionPlan, j: number, t: number): { plan: MissionPlan; index: number } | { error: string } {
+  const old = plan.separations?.[j];
+  if (!old) return { error: 'No such separation.' };
+  const why = separationRefusal(plan, t, j);
+  if (why) return { error: why };
+  const seps = (plan.separations ?? []).map((s, k) => (k === j ? { time: t } : s));
+  const out = withSeparations(plan, seps, Math.min(old.time, t));
+  return { plan: out, index: (out.separations ?? []).findIndex((s) => s.time === t) };
+}
+
+/** Remove separation j; later nodes are re-fired on the stage then active. */
+export function removeSeparation(plan: MissionPlan, j: number): MissionPlan {
+  const old = plan.separations?.[j];
+  if (!old) return plan;
+  return withSeparations(plan, (plan.separations ?? []).filter((_, k) => k !== j), old.time);
+}
+
+/**
+ * Where "separate now" after burn i would go: one second after its cutoff,
+ * when burn i's stage is not the spacecraft and nothing separates it before
+ * the next burn. `empty`: the burn leaves its stage dry.
+ */
+export function separationOffer(plan: MissionPlan, i: number): { time: number; empty: boolean; stage: number } | null {
+  const infos = nodesOf(plan);
+  const x = infos[i];
+  if (!x) return null;
+  const st = stackOf(plan);
+  if (!st.staged || x.stage >= st.stages.length - 1) return null;
+  const end = x.burn.start + x.burn.duration;
+  const next = infos[i + 1];
+  if (next && !(end + 1 <= next.burn.start)) return null; // no room before the next burn
+  const seps = plan.separations ?? [];
+  if (activeAt(st, seps, end + 1) !== x.stage) return null; // already separated after it
+  if (separationRefusal(plan, end + 1)) return null;
+  const dry = x.m1 - emptyMass(st, x.stage) < 1e-6 * st.stages[x.stage].wetMass + 1e-9;
+  return { time: end + 1, empty: dry, stage: x.stage };
+}
+
+/**
+ * Change the stack (sandbox vehicle editor): `lower` stages under `sc`, or
+ * null for a spacecraft alone delivered free to the parking orbit (format 1,
+ * as before vehicles). A launch start becomes a vehicle launch when there
+ * are lower stages. Nodes keep their requested delta-v and time; separations
+ * beyond what the new stack can drop are removed (latest first).
+ */
+export function setStages(plan: MissionPlan, lower: readonly Spacecraft[] | null, sc: Spacecraft): MissionPlan {
+  const nodes = nodesOf(plan).map((x) => x.node);
+  const { lowerStages: _l, separations: _s, format: _f, model, ...rest } = plan;
+  void _l; void _s; void _f;
+  let start = rest.start;
+  if (start.kind === 'launch') {
+    const { ascent: _a, ...st } = start;
+    void _a;
+    start = lower && lower.length ? { ...st, ascent: 'vehicle' as const } : st;
+  }
+  const staged = !!lower && lower.length > 0;
+  const keepSeps = staged ? (plan.separations ?? []).slice(0, Math.max(0, lower.length)) : [];
+  const fresh = makePlan({ ...rest, start, spacecraft: sc, burns: [], ...(staged ? { lowerStages: lower.map((x) => ({ ...x, engines: x.engines.map((e) => ({ ...e })) })), separations: keepSeps } : {}) });
+  const p: MissionPlan = { ...fresh, model };
+  const out = rebuild(p, 0, nodes, false);
+  // Drop separations the stack cannot take (they would drop the spacecraft).
+  const first = stackOf(out).first;
+  const n = vehicleStages(out).length;
+  const max = Math.max(0, n - 1 - first);
+  return (out.separations?.length ?? 0) > max ? rebuild({ ...out, separations: out.separations!.slice(0, max) }, 0, nodes, false) : out;
 }
 
 /**
@@ -352,20 +504,60 @@ export function stateFromElements(mu: number, radius: number, pole: readonly num
   return [...toIcrf(rq), ...toIcrf(vq)];
 }
 
-/** Inverse of stateFromElements for display (periapsis / apoapsis altitude, inclination). Unbound orbits give apoAlt = Infinity. */
+/** Inverse of stateFromElements for display (periapsis / apoapsis altitude, inclination); orbit-elements.ts does the work. Unbound orbits give apoAlt = Infinity. */
 export function elementsFromState(mu: number, radius: number, pole: readonly number[] | null, s: readonly number[]): { periAlt: number; apoAlt: number; incDeg: number } {
-  const r: V3 = [s[0], s[1], s[2]];
-  const v: V3 = [s[3], s[4], s[5]];
-  const rn = Math.hypot(...r);
-  const v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-  const h = cross(r, v);
-  const hn = Math.hypot(...h);
-  const energy = v2 / 2 - mu / rn;
-  const a = -mu / (2 * energy);
-  const e = Math.sqrt(Math.max(0, 1 - (hn * hn) / (mu * a)));
   const B = equatorialBasis(pole);
-  const incDeg = (Math.acos(Math.max(-1, Math.min(1, (h[0] * B.z[0] + h[1] * B.z[1] + h[2] * B.z[2]) / hn))) * 180) / Math.PI;
-  const periAlt = (energy < 0 ? a * (1 - e) : (hn * hn) / mu / (1 + e)) - radius;
-  const apoAlt = energy < 0 ? a * (1 + e) - radius : Infinity;
-  return { periAlt, apoAlt, incDeg };
+  const o = osculating(mu, s, B);
+  return { periAlt: o.rp - radius, apoAlt: o.ra - radius, incDeg: o.incDeg };
+}
+
+// ---------------------------------------------------------------------------
+// Splitting a burn its stage cannot complete (planner and targeting).
+
+/**
+ * Node i asks more of its stage than the stage holds: return a plan where
+ * that stage burns what it has (same direction, same ignition), a
+ * separation follows one second after cutoff, and the next stage flies the
+ * rest of the requested delta-v in the same direction right after. Null if
+ * the burn is not short, is already on the spacecraft, or a separation
+ * cannot go there. A first approximation: refine it (the corrector) after.
+ */
+export function splitAcrossSeparation(plan: MissionPlan, i: number): { plan: MissionPlan; first: number; second: number; available: number; rest: number } | null {
+  const infos = nodesOf(plan);
+  const x = infos[i];
+  if (!x || !x.short) return null;
+  const st = stackOf(plan);
+  const k = x.stage;
+  if (!st.staged || k >= st.stages.length - 1) return null;
+  const sc = st.stages[k];
+  const e = sc.engines[x.node.engine] ?? sc.engines[0];
+  const ve = e.isp * G0;
+  const empty = emptyMass(st, k);
+  const available = ve * Math.log(x.m0 / empty) * (1 - 1e-9);
+  const total = dvMagnitude(x.node.dv);
+  if (!(available > 0) || !(total > available)) return null;
+  const u = x.node.dv.map((v) => v / total) as Vec3;
+  const dv1 = u.map((v) => v * available) as Vec3;
+  const b1 = nodeToBurn({ ...x.node, dv: dv1 }, sc, x.m0);
+  const start = x.burn.start;
+  let p = updateNode(plan, i, { dv: dv1, t: start + b1.duration / 2 }).plan;
+  const sepT = start + b1.duration + 1;
+  if (separationRefusal(p, sepT)) return null;
+  const r = addSeparation(p, sepT);
+  if ('error' in r) return null;
+  p = r.plan;
+  const next = st.stages[k + 1];
+  const m1 = emptyMass(st, k + 1) + (next.wetMass - next.dryMass);
+  const rest = total - available;
+  const dv2 = u.map((v) => v * rest) as Vec3;
+  const b2 = nodeToBurn({ ...x.node, dv: dv2, engine: 0 }, next, m1);
+  const a = addNode(p, { t: sepT + 1 + b2.duration / 2, dv: dv2, frame: x.node.frame, engine: 0 });
+  return { plan: a.plan, first: i, second: a.index, available, rest };
+}
+
+/** Mass at which burn i's stage is empty (the stack above plus its dry mass): the cutoff a corrector must respect. */
+export function stageCutoffMass(plan: MissionPlan, i: number): number {
+  const st = stackOf(plan);
+  const x = nodesOf(plan)[i];
+  return x ? emptyMass(st, x.stage) : plan.spacecraft.dryMass;
 }

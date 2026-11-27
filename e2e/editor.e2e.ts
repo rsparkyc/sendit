@@ -7,6 +7,7 @@
  * interplanetary coast and printed.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/editor';
@@ -192,20 +193,11 @@ test('solve the geostationary mission by numeric entry; objectives turn complete
   await fresh(page);
   await page.selectOption('select.mission-select', 'geo-from-leo');
   await settled(page);
-  await enter(page, 'input[title^="Flight duration"]', '4.6');
-  await settled(page);
-  const nodes: [number, [number, number, number]][] = [
-    [1678.9791939258575, [2449.478316355737, 0, 0]],
-    [20675.642688512802, [1467.715665002644, -205.3391377520207, -1.621673268307772]],
-  ];
-  for (const [t, dv] of nodes) {
-    await page.getByRole('button', { name: '+ Node at cursor' }).click();
-    await enter(page, 'input.met-input', String(t));
-    await enter(page, 'input[title="Prograde delta-v, m/s"]', String(dv[0]));
-    await enter(page, 'input[title="Normal delta-v, m/s"]', String(dv[1]));
-    await enter(page, 'input[title="Radial out delta-v, m/s"]', String(dv[2]));
-    await settled(page);
-  }
+  // The reference approach: the upper stage flies the transfer, a separation drops it, the satellite circularises.
+  const stages = await solveGeo(page);
+  const L = await page.evaluate(() => (window as any).sendit.store.get().plan.lowerStages.length);
+  expect(stages).toEqual([L - 1, L]);
+  await expect(page.locator('.node-row .nstage')).toHaveText(['S3', 'SC']);
   const s = await settled(page);
   expect(s.success).toBe(true);
   expect(s.objectives!.every(Boolean)).toBe(true);

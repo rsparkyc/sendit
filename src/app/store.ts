@@ -43,6 +43,8 @@ export interface EditorState {
   /** Disabled nodes, kept outside the plan (editor-only). */
   parked: readonly ManeuverNode[];
   selectedNode: number | null;
+  /** Index into plan.separations (the separation shown in the nodes panel's detail). */
+  selectedSeparation: number | null;
   /** Index into the replay's events. */
   selectedEvent: number | null;
   replay: ReplayView | null;

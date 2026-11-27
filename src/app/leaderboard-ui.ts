@@ -17,7 +17,7 @@ import type { AppState, Store } from './store';
 const NAME_KEY = 'sendit.leaderboard.name';
 const BOARDS: { id: BoardId; label: string }[] = [
   { id: 'combined', label: 'Score' },
-  { id: 'deltaV', label: 'Δv' },
+  { id: 'deltaV', label: 'Δv total' },
   { id: 'time', label: 'Time' },
 ];
 export const VERIFY_LINE = 'Scores are verified: the server re-flies your plan with the same physics and computes every number itself.';
@@ -205,6 +205,7 @@ export class LeaderboardPanel {
     return el('div', { className: 'lb-result' },
       el('p', { className: 'ok-line', textContent: `✓ Accepted as ${r.player.name} #${r.player.tag}` }),
       el('table', { className: 'lb-table' }, el('thead', {}, el('tr', {}, el('th', { textContent: 'Board' }), el('th', { textContent: 'Server result' }), el('th', { textContent: 'All sites' }), el('th', { textContent: siteName(r.site) }))), el('tbody', {}, ...rows)),
+      el('p', { className: 'hint lb-dv-note', textContent: 'Δv total is what you are ranked on: the ascent plus everything flown after orbit insertion, as the server computed it.' }),
       el('p', { className: 'hint', textContent: `Your ranks on the all-sites boards and on the ${siteName(r.site)} boards (flown from there); ▲ new best.` }),
       el('p', { className: 'hint', textContent: same ? `Replay digest ${r.result.digest} matches your flight bit for bit.` : `Server digest ${r.result.digest} (yours ${localDigest || '—'}).` }),
       view);

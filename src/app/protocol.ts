@@ -90,7 +90,7 @@ export type FromPlanner =
       ms: number;
       grid: { nDep: number; nArr: number; depTimes: Float64Array; arrTimes: Float64Array; c3: Float64Array; vInfArr: Float64Array; dvTotal: Float64Array; dla: Float64Array; rla: Float64Array; theta: Float64Array; vInfDep: Float64Array };
     }
-  | { type: 'departure'; id: number; plan: import('./mission-layer').MissionPlan; index: number; dv: number; asymptoteErrorDeg: number; tImpulse: number; ms: number; warning: string | null }
+  | { type: 'departure'; id: number; plan: import('./mission-layer').MissionPlan; index: number; dv: number; asymptoteErrorDeg: number; tImpulse: number; ms: number; warning: string | null; split: { plan: import('./mission-layer').MissionPlan; first: number; second: number } | null }
   | {
       type: 'correct';
       id: number;

@@ -14,7 +14,9 @@
  */
 import { makeWorld, replay, simulationStartOffset, type MissionPlan } from './mission-layer';
 import { missionById } from './missions';
-import { addNode, burnToNode, nodesOf, updateNode } from './nodes';
+import { addNode, burnToNode, nodesOf, splitAcrossSeparation, stageAt, stageCutoffMass, updateNode } from './nodes';
+import { vehicleStages } from './mission-layer';
+import { stageRows } from './vehicle';
 import { BODY_DATA, ReplayEphemeris, type Burn } from './physics';
 import { bForPeriapsis, bPlane, computePorkchopAsync, correctBurn, evaluateChain, findBody, flyToTarget, optimizeChain, planDeparture, type BPlaneTarget, type PositionTarget } from './planning-layer';
 import type { FlybyTarget, FromPlanner, StageReport, ToPlanner } from './protocol';
@@ -81,21 +83,28 @@ function departure(m: Extract<ToPlanner, { type: 'departure' }>): void {
   const until = lastEnd + 60;
   if (plan.epoch + until > m.tDep - 1800) throw new Error('the plan starts too close to (or after) the departure date: launch or start earlier');
   const { y, t } = stateBefore({ ...plan, burns: keep }, keep.length, until);
-  const e = plan.spacecraft.engines[0];
+  // The stage active at the departure fires it (after a vehicle ascent: the upper stage, unless separated).
+  const k = stageAt({ ...plan, burns: keep }, m.tDep - plan.epoch);
+  const stage = vehicleStages(plan)[k];
+  const e = stage.engines[0];
   const d = planDeparture(ephem, BODY_DATA, { departure: m.departure, vInf: m.vInf, tDep: m.tDep, parking: y, t0: t, engine: { thrust: e.thrust, isp: e.isp } });
   const b: Burn = d.burn;
   const pb = { start: b.tStart - plan.epoch, duration: b.duration, engine: 0, direction: [b.direction[0], b.direction[1], b.direction[2]] as [number, number, number], frame: { kind: 'orbital' as const, body: m.departure } };
-  const node = burnToNode(pb, plan.spacecraft, y[6]);
+  const node = burnToNode(pb, stage, y[6]);
   const longer = { ...plan, duration: Math.max(plan.duration, m.tArr - plan.epoch + 20 * DAY) };
   const r = addNode(longer, node);
   const info = nodesOf(r.plan)[r.index];
   const mins = info.burn.duration / 60;
+  const rows = stageRows(plan);
+  const split = info.short ? splitAcrossSeparation(r.plan, r.index) : null;
   const warning = info.short
-    ? `Not enough propellant: this departure needs ${d.dvMag.toFixed(0)} m/s and the burn will run the tanks dry. Refining will not fix that; use a bigger stage.`
+    ? split
+      ? `${rows[info.stage]?.name ?? 'This stage'} cannot complete this departure: it has about ${split.available.toFixed(0)} of the ${d.dvMag.toFixed(0)} m/s. Split it across a separation, with ${rows[info.stage + 1]?.name ?? 'the next stage'} finishing the last ${split.rest.toFixed(0)} m/s.`
+      : `Not enough propellant: this departure needs ${d.dvMag.toFixed(0)} m/s and the burn will run the tanks dry. Refining will not fix that; use a bigger stage.`
     : mins > 30
       ? `This is a ${mins.toFixed(0)}-minute burn: so long a burn loses much of its effect (gravity loss) and the corrector may not converge. A higher-thrust stage works better.`
       : null;
-  post({ type: 'departure', id: m.id, plan: r.plan, index: r.index, dv: d.dvMag, asymptoteErrorDeg: (d.asymptoteError * 180) / Math.PI, tImpulse: d.tImpulse, ms: performance.now() - t0w, warning });
+  post({ type: 'departure', id: m.id, plan: r.plan, index: r.index, split: split ? { plan: split.plan, first: split.first, second: split.second } : null, dv: d.dvMag, asymptoteErrorDeg: (d.asymptoteError * 180) / Math.PI, tImpulse: d.tImpulse, ms: performance.now() - t0w, warning });
 }
 
 async function correct(m: Extract<ToPlanner, { type: 'correct' }>): Promise<void> {
@@ -132,7 +141,7 @@ async function correctInner(m: Extract<ToPlanner, { type: 'correct' }>): Promise
   if (target.tArr !== null) tEnd = Math.max(tEnd, target.tArr + 30 * DAY);
   // Tighter than the replay's tolerance at most: finite differences need smooth residuals.
   const rtol = Math.min(plan.rtol, 1e-11);
-  const fly = (b: Burn, tq: number) => flyToTarget(ephem, bi, y0, t0, tEnd, tq, [b], { searchFrom: burnEnd + 60, rtol, dryMass: plan.spacecraft.dryMass });
+  const fly = (b: Burn, tq: number) => flyToTarget(ephem, bi, y0, t0, tEnd, tq, [b], { searchFrom: burnEnd + 60, rtol, dryMass: stageCutoffMass(plan, i) });
   /** A stage, restarted (fresh linearisation) up to twice while it stalls but still improves. */
   const stage = (label: string, b: Burn, tgt: BPlaneTarget | PositionTarget, tolerance: number) => {
     let r = stageOnce(label, b, tgt, tolerance);

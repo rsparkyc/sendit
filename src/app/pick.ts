@@ -48,10 +48,10 @@ export function pickTarget(cands: readonly PickCandidate[]): PickCandidate | nul
   return best;
 }
 
-/** Kind of a map label key: 'sc', 'node:i', 'burn:i:s|e', 'ev:i', 'pn:i', 'site:id', a body index; null for others (axis ends). */
+/** Kind of a map label key: 'sc', 'node:i', 'burn:i:s|e', 'sep:j', 'ev:i', 'pn:i', 'site:id', a body index; null for others (axis ends). */
 export function kindOfLabel(key: string): PickKind | null {
   if (key === 'sc') return 'spacecraft';
-  if (key.startsWith('node:') || key.startsWith('burn:')) return 'node';
+  if (key.startsWith('node:') || key.startsWith('burn:') || key.startsWith('sep:')) return 'node';
   if (key.startsWith('ev:') || key.startsWith('pn:')) return 'event';
   if (key.startsWith('site:')) return 'site';
   if (/^\d+$/.test(key)) return 'body';

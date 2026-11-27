@@ -22,7 +22,7 @@
  */
 import { el } from './dom';
 
-export type TabId = 'mission' | 'start' | 'nodes' | 'events' | 'results' | 'view';
+export type TabId = 'mission' | 'start' | 'nodes' | 'events' | 'orbit' | 'results' | 'view';
 export type Mode = 'wide' | 'side' | 'sheet';
 export type SheetState = 'peek' | 'half' | 'full';
 export type Dock = 'left' | 'right' | 'bottom';
@@ -32,6 +32,7 @@ export const TABS: readonly { id: TabId; label: string; icon: string }[] = [
   { id: 'start', label: 'Start', icon: '⇡' },
   { id: 'nodes', label: 'Nodes', icon: '△' },
   { id: 'events', label: 'Events', icon: '☰' },
+  { id: 'orbit', label: 'Orbit', icon: '◯' },
   { id: 'results', label: 'Results', icon: '★' },
   { id: 'view', label: 'View', icon: '◐' },
 ];

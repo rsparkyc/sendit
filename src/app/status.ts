@@ -2,7 +2,7 @@
  * The compact always-visible readout: outcome (with an icon and words, never
  * colour alone) and the single most relevant number. Pure.
  */
-import { planErrors, type Objective } from './mission-layer';
+import { errorCount, planErrors, type Objective } from './mission-layer';
 import { missionById } from './missions';
 import { bodyOrientation } from './orientation';
 import { bodyIndex } from './physics';
@@ -94,9 +94,9 @@ export function statusOf(s: AppState, bodyName: (id: string) => string): Status 
     } else if (body) {
       const alts = r.result.events.filter((e) => e.body === body && (e.kind === 'periapsis' || e.kind === 'impact' || e.kind === 'atmosphere-entry')).map((e) => e.altitude);
       key = alts.length ? `Closest to ${bodyName(body)} ${fromSurface(Math.min(...alts), body)}` : `${bodyName(body)}: no approach`;
-    } else key = `Δv ${Math.round(r.result.deltaV).toLocaleString('en-US')} m/s`;
+    } else key = `Δv ${Math.round(r.result.totalDeltaV).toLocaleString('en-US')} m/s${r.result.ascent ? ' total' : ''}`;
   }
-  if (errs.plan.length + errs.burns.size > 0) return { tone: 'fail', icon: '⚠', text: 'Plan has errors', key };
+  if (errorCount(errs) > 0) return { tone: 'fail', icon: '⚠', text: 'Plan has errors', key };
   if (!r || !current || s.replayStatus !== 'idle' || r.preview !== null) return { tone: 'busy', icon: '…', text: 'Replaying', key };
   const ev = r.evaluation;
   const out = r.result.outcome;

@@ -6,6 +6,7 @@
  * sits on screen is the layout's business (layout.ts).
  */
 import { el, fillBodySelect, formatMet, section } from './dom';
+import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { frameLabel, frameExplain, type FrameSpec } from './frames';
 import { hasSurfaceFrame } from './orientation';
 import { formatSpeed } from './format';
@@ -59,6 +60,8 @@ export const SHORTCUTS: readonly [string, string][] = [
 /** Map marker legend (help dialog). */
 export const LEGEND: readonly [string, string][] = [
   ['◉ Burn 1 (orange, boxed)', 'A maneuver node you placed; ▶ / ■ mark where the burn starts and ends. The thick orange stretch of the path is the burn itself.'],
+  ['✂ S2 → SC (teal)', 'A separation: the lower stage is dropped there with whatever propellant it holds, and the next stage fires the burns after it. On the timeline it is a teal scissors mark: drag it to move it, tap it to edit.'],
+  ['S2 / SC chip on a burn', 'The stage that fires the burn: S1, S2… are the launch vehicle\'s stages, SC the spacecraft'],
   ['◆ Periapsis, Apoapsis (blue)', 'Event from the replay: lowest / highest point of the orbit'],
   ['◆ Closest to Moon (yellow)', 'Event: closest approach to a body you actually pass near (or a mission target)'],
   ['◆ IMPACT (red)', 'Event: the flight ends here'],
@@ -85,7 +88,7 @@ export class Hud {
   private readonly date = el('div', { className: 'date' });
   private readonly utc = el('div', { className: 'utc' });
   private readonly tbDate = el('span', { className: 'tb-date' });
-  private readonly tbMet = el('span', { className: 'tb-met' });
+  private readonly tbMet = el('button', { className: 'tb-met', type: 'button' });
   private readonly chip = el('span', { className: 'chip' });
   private readonly key = el('span', { className: 'tb-key' });
   private readonly warp = el('span', { className: 'warp' });
@@ -177,6 +180,8 @@ export class Hud {
     overlay.append(this.loading, this.keys);
 
     store.subscribe((s, p) => this.render(s, p));
+    this.tbMet.onclick = () => setTimeMode(nextTimeMode(timeMode()));
+    onTimeMode(() => this.render(store.get(), null));
     this.render(store.get(), null);
   }
 
@@ -233,7 +238,9 @@ export class Hud {
       const u = tdbToUtc(s.t);
       this.utc.textContent = !u ? 'UTC not shown before 1972' : `${formatCalendar(u)} UTC${utcIsPredicted(s.t) ? ' (predicted: no new leap seconds)' : ''}`;
       this.tbDate.textContent = `${cal.slice(0, 16)} TDB`;
-      this.tbMet.textContent = formatMet(s.t - s.plan.epoch, 0);
+      this.tbMet.textContent = fmtTime(s.t - s.plan.epoch, 0);
+      this.tbMet.title = `${otherTime(s.t - s.plan.epoch)} · tap to show times as ${TIME_MODE_LABEL[nextTimeMode(timeMode())]}`;
+      this.tbMet.setAttribute('aria-label', `Time ${fmtTime(s.t - s.plan.epoch, 0)}; tap to show times as ${TIME_MODE_LABEL[nextTimeMode(timeMode())]}`);
     }
     if (!p || s.replay !== p.replay || s.plan !== p.plan || s.replayStatus !== p.replayStatus || s.missionId !== p.missionId) {
       const st = this.actions.status(s);

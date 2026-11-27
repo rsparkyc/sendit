@@ -29,6 +29,8 @@ export interface ViewSettings {
   discOpacity: number;
   /** Distances to bodies: altitude above the surface or radius from the centre (units.ts). */
   distances: 'alt' | 'radius';
+  /** Points in time: mission elapsed time, or absolute UTC / TDB (timefmt.ts). */
+  timeMode: 'met' | 'utc' | 'tdb';
 }
 
 export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -44,6 +46,7 @@ export const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   discRadius: 0,
   discOpacity: 0.25,
   distances: 'alt',
+  timeMode: 'met',
 };
 
 const KEY = 'sendit.view.v1';
@@ -55,6 +58,7 @@ export function loadViewSettings(): ViewSettings {
       const out = { ...DEFAULT_VIEW_SETTINGS };
       for (const k of Object.keys(out) as (keyof ViewSettings)[]) if (typeof v[k] === typeof out[k]) (out as Record<string, unknown>)[k] = v[k];
       if (out.distances !== 'alt' && out.distances !== 'radius') out.distances = 'alt';
+      if (!['met', 'utc', 'tdb'].includes(out.timeMode)) out.timeMode = 'met';
       return out;
     }
   } catch {

@@ -12,7 +12,8 @@
     "build:leaderboard": "vite build --config server/leaderboard/vite.config.ts",
     "bench:leaderboard": "pnpm build:leaderboard && for s in chunk lunar longest-escape; do node dist-server/leaderboard/bench.mjs $s; done",
     "gen:checkpoints": "node scripts/gen-checkpoints.mjs",
-    "gen:dop853": "python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts",
+    "gen:campaign-sites": "python3 scripts/gen-campaign-sites.py",
+    "gen:dop853":"python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts",
     "test:browsers": "playwright test --config e2e/playwright.config.ts",
     "bench:ephemeris": "BENCH=1 vitest run test/ephemeris-bench.test.ts --silent=false"
   },
