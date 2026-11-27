@@ -222,6 +222,8 @@ test('porkchop zoom: two box zooms into the Earth to Mars 2026 minimum, back and
   await fresh(page);
   await page.getByRole('button', { name: 'Transfer planner…' }).click();
   const pl = page.locator('.planner');
+  // Sandbox suggests the next window after its 2027 liftoff; this test is about the 2026 one.
+  for (const [title, v] of [['Earliest departure', '2026-09-01'], ['Latest departure', '2026-12-31'], ['Earliest arrival', '2027-06-01'], ['Latest arrival', '2027-11-01']]) await pl.locator(`input[title="${title}"]`).fill(v);
   await pl.getByRole('button', { name: 'Compute porkchop' }).click();
   await expect(pl.locator('.pl-status')).toContainText('transfers in', { timeout: 60_000 });
   await pl.getByRole('button', { name: 'Select minimum' }).click();
@@ -357,6 +359,23 @@ test.describe('phone', () => {
     expect(sw).toBe(true);
     expect(errors).toEqual([]);
   });
+});
+
+test('porkchop dates follow the mission and its liftoff', async ({ page }) => {
+  await fresh(page);
+  await page.selectOption('select.mission-select', 'mars-flyby');
+  await settled(page);
+  await page.getByRole('button', { name: 'Transfer planner…' }).click();
+  const pl = page.locator('.planner');
+  await expect(pl.locator('select[title="Departure body"]')).toHaveValue('earth');
+  await expect(pl.locator('select[title="Arrival body"]')).toHaveValue('mars');
+  const v = async (t: string) => pl.locator(`input[title="${t}"]`).inputValue();
+  // Liftoff 2028-11-20, 400-day limit: departures from liftoff around the late-2028 window, arrivals by the limit.
+  expect(await v('Earliest departure')).toBe('2028-11-20');
+  expect(await v('Latest departure') > '2028-12-31').toBe(true);
+  expect(await v('Latest arrival') <= '2029-12-25').toBe(true);
+  await expect(pl.locator('.pl-status')).toContainText('window departs around');
+  expect(errors).toEqual([]);
 });
 
 test('check.html still reports PASS', async ({ page }) => {
