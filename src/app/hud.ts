@@ -5,6 +5,7 @@
  * Per-frame numbers (readouts, perf) come through `frame()`. Where each piece
  * sits on screen is the layout's business (layout.ts).
  */
+import { KeysDialog } from './keys-dialog';
 import { el, fillBodySelect, formatMet, section } from './dom';
 import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { frameLabel, frameExplain, type FrameSpec } from './frames';
@@ -41,63 +42,12 @@ export interface HudActions {
   status(s: AppState): Status;
 }
 
-export const SHORTCUTS: readonly [string, string][] = [
-  ['Space', 'Pause / resume'],
-  [', and .', 'Slower / faster time warp'],
-  ['N or Enter', 'Add a node at the picked trajectory point (else N: at the time cursor)'],
-  ['Ctrl / ⌘ Z', 'Undo the last plan edit (a drag or a burst of steps is one edit)'],
-  ['Shift Ctrl / ⌘ Z, Ctrl Y', 'Redo'],
-  ['W / S', 'Selected node: prograde + / −'],
-  ['D / A', 'Normal + / −'],
-  ['E / Q', 'Radial out + / −'],
-  ['[ and ]', 'Move the node earlier / later'],
-  ['Alt / none / Shift', 'with the above: small / medium / large step (0.1, 1, 10 m/s; 1 s, 1 min, 10 min)'],
-  ['Delete / Backspace', 'Delete the selected node (Undo brings it back)'],
-  ['Esc', 'Clear the selection'],
-  ['?', 'This reference'],
-];
-
-/** Map marker legend (help dialog). */
-export const LEGEND: readonly [string, string][] = [
-  ['◉ Burn 1 (orange, boxed)', 'A maneuver node you placed; ▶ / ■ mark where the burn starts and ends. The thick orange stretch of the path is the burn itself.'],
-  ['✂ S2 → SC (teal)', 'A separation: the lower stage is dropped there with whatever propellant it holds, and the next stage fires the burns after it. On the timeline it is a teal scissors mark: drag it to move it, tap it to edit.'],
-  ['S2 / SC chip on a burn', 'The stage that fires the burn: S1, S2… are the launch vehicle\'s stages, SC the spacecraft'],
-  ['◆ Periapsis, Apoapsis (blue)', 'Event from the replay: lowest / highest point of the orbit'],
-  ['◆ Closest to Moon (yellow)', 'Event: closest approach to a body you actually pass near (or a mission target)'],
-  ['◆ IMPACT (red)', 'Event: the flight ends here'],
-  ['▲ AN / ▼ DN (violet)', 'Ascending / descending node: where the orbit crosses the reference plane (cheapest place to change plane)'],
-  ['■ Launch site (green)', 'Launch site on the surface; the selected one is ringed'],
-  ['Faded marker, no name', 'Behind a planet as seen from the camera (not tappable); only the selected item and a failure keep their name'],
-  ['Pale marker', 'Far in time from the time cursor; names near the cursor and the selected item win the space'],
-  ['Name with a thin line', 'No room beside the marker (or it is over a planet): the name sits off to the side, the line points to the marker'],
-  ['Burn 1 +2 (ringed dot)', 'Several markers at one spot: tap to fan them out, then tap the one you want'],
-];
-
-/** The panels, briefly (help dialog; README "Flight-plan editor" says the same). */
-export const PANELS: readonly [string, string][] = [
-  ['Vehicle', 'The stack, stage by stage: masses, engines, thrust-to-weight, delta-v with everything above it. A mission\'s vehicle is read-only; in Sandbox it is an editor (presets, add / remove / reorder stages)'],
-  ['Start → launch feedback', 'What the ascent costs (total Δv includes it), which stage reaches orbit and what the upper stage has left; two charts of that against parking altitude and azimuth: tap or drag one to set the value'],
-  ['Separations', 'Flight actions like burns: “Separation at cursor”, or “separate after” a burn. Burns after a separation are fired by the next stage'],
-  ['Orbit', 'The orbit at the time cursor about the dominant (or a pinned) body: osculating elements, i.e. the two-body orbit matching this instant, which drift in an N-body flight; the replay\'s real next apsis alongside. The status bar shows the same orbit'],
-  ['Time display', 'Mission elapsed time (T+), UTC or TDB, in View or by tapping the time under the timeline / in the status bar; every point in time follows it. The transfer planner keeps calendar dates, with T+ alongside'],
-];
-
-export const GESTURES: readonly [string, string][] = [
-  ['Drag (one finger / mouse)', 'Orbit the camera'],
-  ['Pinch / wheel', 'Zoom'],
-  ['Two-finger drag', 'Tilt and turn'],
-  ['Click / tap the trajectory', 'Pick that point: the time cursor moves there and its time, altitude and speed show; then “Add node here” (or N / Enter). A click never adds a node by itself, and a click that ends a drag does nothing'],
-  ['Click / tap a marker', 'Says what it is; a node marker selects it, an AN / DN marker moves the time cursor there. Markers stay tappable when their names are hidden; a cluster (“+2”) fans out on the first tap'],
-  ['Tap the time (status bar or timeline)', 'Cycle the time display: MET → UTC → TDB'],
-  ['Double-click / double-tap', 'Focus what is under the pointer. If several things are there, the first of: the spacecraft; a maneuver node or burn marker; an event or AN / DN marker; a launch site; a body (the one nearest the camera, so a moon in front of its planet); a point on the trajectory (the time cursor moves there and the spacecraft is focused)'],
-  ['Drag a value’s ◂ ⠿ ▸ strip', 'Tune it by medium steps; ‹‹‹ ‹‹ ‹ and › ›› ››› either side step large / medium / small; 0 zeroes it, ± flips its sign'],
-];
-
 export class Hud {
   readonly timePanel: HTMLElement;
   readonly viewPanel: HTMLElement;
   readonly infoPanel: HTMLElement;
   readonly keys: HTMLDialogElement;
+  private readonly keysDialog: KeysDialog;
   // The Time panel's calendar lines and the status bar's second line are the "other mode" reference (data-time-other):
   // they show the instant in the other forms whatever the time-display setting is.
   private readonly date = el('div', { className: 'date', dataset: { timeOther: '1' } });
@@ -126,13 +76,13 @@ export class Hud {
     private readonly bodies: readonly HudBody[],
     private readonly actions: HudActions,
   ) {
-    const slower = el('button', { className: 'btn tb-btn', type: 'button', textContent: '«', title: 'Slower (,)', ariaLabel: 'Slower time warp' });
-    const faster = el('button', { className: 'btn tb-btn', type: 'button', textContent: '»', title: 'Faster (.)', ariaLabel: 'Faster time warp' });
+    const slower = el('button', { className: 'btn tb-btn', type: 'button', textContent: '«', title: 'Slower time warp (Shift+J or ,)', ariaLabel: 'Slower time warp' });
+    const faster = el('button', { className: 'btn tb-btn', type: 'button', textContent: '»', title: 'Faster time warp (Shift+K or .)', ariaLabel: 'Faster time warp' });
     slower.onclick = () => this.stepWarp(-1);
     faster.onclick = () => this.stepWarp(1);
     this.pauseBtn.onclick = () => store.set({ paused: !store.get().paused });
     const help = el('button', { className: 'btn tb-btn tb-help', type: 'button', textContent: '?', title: 'Shortcuts and gestures (?)', ariaLabel: 'Shortcuts and gestures' });
-    help.onclick = () => this.showKeys();
+    help.onclick = () => this.showKeys(help);
     const status = el('div', { className: 'tb-status', role: 'status' }, this.chip, this.key);
     status.setAttribute('aria-live', 'polite');
     topbar.append(
@@ -157,7 +107,7 @@ export class Hud {
       presets.append(b);
     }
     const help2 = el('button', { className: 'btn small keys-open', type: 'button', textContent: 'Shortcuts and gestures' });
-    help2.onclick = () => this.showKeys();
+    help2.onclick = () => this.showKeys(help2);
     presets.append(help2);
     this.timePanel = section('Time', 'time', this.date, this.utc, el('label', { className: 'sr-only', htmlFor: 'jump-date', textContent: 'Jump to a TDB date' }), jumpForm, this.jumpError, presets);
     this.jumpInput.id = 'jump-date';
@@ -183,15 +133,8 @@ export class Hud {
     this.infoPanel = el('section', { className: 'panel info' }, this.readouts, perfD);
     this.infoPanel.setAttribute('aria-label', 'Readouts');
 
-    this.keys = el('dialog', { className: 'keys' });
-    const close = el('button', { className: 'btn', type: 'button', textContent: 'Close' });
-    close.onclick = () => this.keys.close();
-    const table = (title: string, rows: readonly [string, string][]) =>
-      el('section', {}, el('h3', { textContent: title }), el('dl', {}, ...rows.flatMap(([k, v]) => [el('dt', {}, el('kbd', { textContent: k })), el('dd', { textContent: v })])));
-    this.keys.append(el('h2', { textContent: 'Shortcuts and gestures' }), el('div', { className: 'keys-grid' }, table('Keyboard', SHORTCUTS), table('Touch and mouse', GESTURES), table('Map markers', LEGEND), table('Panels', PANELS)), close);
-    this.keys.addEventListener('click', (e) => {
-      if (e.target === this.keys) this.keys.close();
-    });
+    this.keysDialog = new KeysDialog(() => (help.offsetParent !== null ? help : help2.offsetParent !== null ? help2 : null));
+    this.keys = this.keysDialog.root;
     overlay.append(this.loading, this.keys);
 
     store.subscribe((s, p) => this.render(s, p));
@@ -200,8 +143,8 @@ export class Hud {
     this.render(store.get(), null);
   }
 
-  showKeys(): void {
-    if (!this.keys.open) this.keys.showModal();
+  showKeys(opener?: HTMLElement): void {
+    this.keysDialog.show(opener);
   }
 
   stepWarp(d: number): void {
@@ -234,7 +177,7 @@ export class Hud {
     }
     if (!p || s.warpIndex !== p.warpIndex || s.paused !== p.paused) {
       this.warp.textContent = formatRate(WARP_RATES[s.warpIndex]);
-      this.warp.title = s.paused ? 'Time warp (paused)' : 'Time warp';
+      this.warp.title = `Time warp: simulated time per real second${s.paused ? ' (paused)' : ''}. Shift+J / Shift+K: slower / faster; hold J / K: move back / forward at this rate`;
     }
     if (!p || s.focus !== p.focus) this.focusSel.value = String(s.focus);
     if (!p || s.frame !== p.frame) {

@@ -40,6 +40,10 @@ on:
         description: Deploy even if the commit changes the physics or a mission version (you will run the printed reverify commands right after).
         type: boolean
         default: false
+      skip_tests:
+        description: Fast deploy - skip the unit tests (about 2.5 min). The release gate and the live smoke check still run.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -172,7 +176,8 @@ jobs:
         if: steps.guard.outputs.skip != 'true'
         run: |
           [[ -z "${IP_HASH_SALT}" ]] || { echo "::error::IP_HASH_SALT must never be set here"; exit 1; }
-          scripts/deploy-leaderboard.sh "$LEADERBOARD_STACK"
+          # An automatic deploy runs only after CI's unit-test job passed on this same commit.
+          SKIP_TESTS="${{ (inputs.automatic || inputs.skip_tests) && '1' || '0' }}" scripts/deploy-leaderboard.sh "$LEADERBOARD_STACK"
 
       - name: Deploy the site
         id: site
