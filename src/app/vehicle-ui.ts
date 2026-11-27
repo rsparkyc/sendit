@@ -61,6 +61,8 @@ export class VehiclePanel {
   private readonly totals = el('div', { className: 'stack-totals' });
   private readonly errs = el('div', { className: 'error' });
   private key = '';
+  /** The last finished replay's result, shown (dimmed) while a new one is pending so the panel keeps its height. */
+  private lastResult: { stages: number; result: NonNullable<AppState['replay']>['result'] } | null = null;
 
   constructor(private readonly ctx: UiContext) {
     this.preset.append(el('option', { value: '', textContent: 'Vehicle preset…' }), el('option', { value: '@none', textContent: 'Spacecraft only (free delivery to the parking orbit)' }));
@@ -98,7 +100,10 @@ export class VehiclePanel {
     const rows = stageRows(plan);
     const a = planAscent(plan, BODY_DATA);
     const sp = stagePlan(plan, a);
-    const r = s.replay && s.replay.plan === plan && s.replay.preview === null ? s.replay.result : null;
+    const fresh = s.replay && s.replay.plan === plan && s.replay.preview === null ? s.replay.result : null;
+    if (fresh) this.lastResult = { stages: rows.length, result: fresh };
+    const r = fresh ?? (this.lastResult && this.lastResult.stages === rows.length ? this.lastResult.result : null);
+    this.root.classList.toggle('replay-pending', !fresh);
     const cat = catalogueMatch(plan.lowerStages);
     this.editBar.style.display = locked ? 'none' : '';
     setText(this.note, locked

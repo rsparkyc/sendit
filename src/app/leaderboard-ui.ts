@@ -83,6 +83,9 @@ export class LeaderboardPanel {
     const ok = this.successNow();
     this.submitBtn.disabled = !ok || this.available === false;
     this.viewBtn.disabled = this.available === false;
+    // While a replay of the current plan is pending, keep the last note (its length changes the panel's height).
+    const pending = !s.replay || s.replay.plan !== s.plan || s.replay.preview !== null || s.replayStatus !== 'idle';
+    if (pending && this.available !== false && this.note.textContent) return;
     this.note.textContent =
       this.available === false ? 'The leaderboard is not online yet. Your plan is kept here and in its share link.'
       : ok ? VERIFY_LINE

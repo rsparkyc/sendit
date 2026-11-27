@@ -674,7 +674,7 @@ export class NodesPanel {
       nodeAction('Disable', 'toggle', 'Disable this node (kept below, Enable brings it back)', () => { const i = sel(); if (i !== null) ctx.editor.disableNode(i); }),
       nodeAction('Delete node', 'danger', 'Delete this node (Delete key; Undo brings it back)', () => { const i = sel(); if (i !== null) ctx.editor.removeNode(i); }),
       btn('Target flyby…', () => { const i = sel(); if (i !== null) ctx.openPlanner?.('target', i); }, 'Correct this burn toward a closest-approach altitude at a body'));
-    this.detail.append(this.timeTuner.root, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), this.readout, this.nodeErr, actions);
+    this.detail.append(this.timeTuner.root, ...this.dvTuners.map((t) => t.root), row('Frame', this.frameSel), row('Engine', this.engineSel), actions, this.nodeErr, this.readout);
     const addCursor = btn('+ Node at cursor', () => this.addAtCursor(), 'Add a burn at the time cursor (or click the trajectory)');
     this.addSepBtn = btn('✂ Separation at cursor', () => this.addSepAtCursor(), 'Drop the active stage at the time cursor (with whatever propellant it still holds)');
     this.addSepBtn.classList.add('sep-add');
@@ -766,6 +766,80 @@ export class NodesPanel {
     if (n) this.ctx.store.set({ t: s.plan.epoch + n.burn.start, paused: true, loadingTarget: s.plan.epoch + n.burn.start });
   }
 
+  // Kept list rows (by burn index, separation index, offer after burn i): built once, updated in place.
+  private readonly emptyHint = el('div', { className: 'hint' });
+  private lastReports: readonly { deltaV: number; burnTime: number; propellant: number }[] | null = null;
+  private readonly burnRows = new Map<number, { el: HTMLElement; chip: HTMLElement; chipKey: string; met: HTMLElement; dv: HTMLElement; frame: HTMLElement; act: HTMLElement; err: HTMLElement }>();
+  private readonly sepRows = new Map<number, { el: HTMLElement; met: HTMLElement; what: HTMLElement; drops: HTMLElement; err: HTMLElement }>();
+  private readonly offers = new Map<number, { el: HTMLElement; btn: HTMLButtonElement }>();
+
+  private parkedShown: unknown = null;
+  private readonly kvs = new Map<string, { row: HTMLElement; label: HTMLElement; b: HTMLElement }>();
+
+  /** A kept readout line (created on first use, in call order), its label and value set in place. */
+  private kv(key: string, label?: string, value?: string): { row: HTMLElement; label: HTMLElement; b: HTMLElement } {
+    let r = this.kvs.get(key);
+    if (!r) {
+      const l = el('span');
+      const b = el('b');
+      r = { row: el('div', { className: 'kv' }, l, b), label: l, b };
+      this.kvs.set(key, r);
+      this.readout.append(r.row);
+    }
+    if (label !== undefined) setText(r.label, label);
+    if (value !== undefined) {
+      setText(r.b, value);
+      r.b.title = value;
+    }
+    return r;
+  }
+
+  private burnRowFor(i: number) {
+    let r = this.burnRows.get(i);
+    if (r) return r;
+    const chip = el('span', { className: 'nchip' });
+    const met = el('span', { className: 'nmet' });
+    const dv = el('span', { className: 'ndv' });
+    const frame = el('span', { className: 'nframe' });
+    const act = el('span', { className: 'nact' });
+    const err = el('div', { className: 'nerr' });
+    const row = el('div', { className: 'node-row', dataset: { index: String(i) } }, el('span', { className: 'nidx', textContent: `#${i + 1}` }), chip, met, dv, frame, act);
+    row.onclick = () => this.ctx.store.set({ selectedNode: i, selectedSeparation: null });
+    activatable(row, `Burn ${i + 1}`);
+    row.append(el('span', { className: 'nrow-acts' },
+      nodeAction('Disable', 'toggle', `Disable burn ${i + 1}`, () => this.ctx.editor.disableNode(i)),
+      nodeAction('Delete', 'danger', `Delete burn ${i + 1}`, () => this.ctx.editor.removeNode(i))), err);
+    r = { el: row, chip, chipKey: '?', met, dv, frame, act, err };
+    this.burnRows.set(i, r);
+    return r;
+  }
+
+  private sepRowFor(j: number) {
+    let r = this.sepRows.get(j);
+    if (r) return r;
+    const met = el('span', { className: 'nmet' });
+    const what = el('span', { className: 'nsep' });
+    const drops = el('span', { className: 'nframe ndrops' });
+    const err = el('div', { className: 'nerr' });
+    const row = el('div', { className: 'node-row sep-row', dataset: { sep: String(j) } }, el('span', { className: 'nidx sep-icon', textContent: '✂' }), met, what, drops);
+    row.onclick = () => this.ctx.store.set({ selectedSeparation: j, selectedNode: null });
+    activatable(row);
+    row.append(el('span', { className: 'nrow-acts' }, nodeAction('Delete', 'danger', `Delete separation ${j + 1}`, () => this.ctx.editor.removeSeparation(j))), err);
+    r = { el: row, met, what, drops, err };
+    this.sepRows.set(j, r);
+    return r;
+  }
+
+  private offerFor(i: number) {
+    let o = this.offers.get(i);
+    if (o) return o;
+    const btn = el('button', { className: 'btn small sep-offer', type: 'button' });
+    btn.onclick = () => this.ctx.editor.separateAfter(i);
+    o = { el: el('div', { className: 'sep-offer-row' }, btn), btn };
+    this.offers.set(i, o);
+    return o;
+  }
+
   private render(): void {
     const s = this.ctx.store.get();
     const plan = s.plan;
@@ -773,60 +847,74 @@ export class NodesPanel {
     const errs = planErrors(plan);
     const reports = s.replay && s.replay.plan === plan && s.replay.preview === null ? s.replay.result.burns : null;
     setText(this.planErr, errs.plan.join('\n'));
-    // List: burns and separations in flight order, each burn with the stage that fires it.
-    this.list.replaceChildren();
+    // List: burns and separations in flight order, each burn with the stage that fires it. Rows are kept
+    // (keyed) and updated in place, so a replay finishing never rebuilds them under the pointer.
     const rows = stageRows(plan);
     const staged = rows.length > 1;
     const seps = separationsOf(plan);
     this.addSepBtn.style.display = staged ? '' : 'none';
-    if (infos.length === 0 && seps.length === 0) this.list.append(el('div', { className: 'hint', textContent: staged ? 'No burns yet. The first burn is fired by the stage that reached orbit.' : 'No burns yet.' }));
+    const want: HTMLElement[] = [];
+    if (infos.length === 0 && seps.length === 0) {
+      setText(this.emptyHint, staged ? 'No burns yet. The first burn is fired by the stage that reached orbit.' : 'No burns yet.');
+      want.push(this.emptyHint);
+    }
     const sepRow = (sp: (typeof seps)[number]) => {
       const e = errs.separations.get(sp.index);
-      const from = rows[sp.dropped];
-      const to = rows[sp.next];
-      const r = el('div', { className: `node-row sep-row${s.selectedSeparation === sp.index && s.selectedNode === null ? ' selected' : ''}${e ? ' invalid' : ''}`, dataset: { sep: String(sp.index) } },
-        el('span', { className: 'nidx sep-icon', textContent: '✂' }),
-        el('span', { className: 'nmet', textContent: fmtTime(sp.time, 0) }),
-        el('span', { className: 'nsep', textContent: `Separate ${from?.tag ?? '?'} → ${to?.tag ?? '?'}` }),
-        el('span', { className: 'nframe', textContent: sp.empty ? 'stage empty' : `drops ${fmtKg(sp.propellantLeft)} propellant` }),
-        e ? el('div', { className: 'nerr', textContent: e.join('; ') }) : null);
-      r.onclick = () => this.ctx.store.set({ selectedSeparation: sp.index, selectedNode: null });
-      activatable(r, `Separation ${sp.index + 1} at ${fmtTime(sp.time, 0)}`);
-      r.append(el('span', { className: 'nrow-acts' }, nodeAction('Delete', 'danger', `Delete separation ${sp.index + 1}`, () => this.ctx.editor.removeSeparation(sp.index))));
-      return r;
+      const r = this.sepRowFor(sp.index);
+      r.el.className = `node-row sep-row${s.selectedSeparation === sp.index && s.selectedNode === null ? ' selected' : ''}${e ? ' invalid' : ''}`;
+      setText(r.met, fmtTime(sp.time, 0));
+      setText(r.what, `Separate ${rows[sp.dropped]?.tag ?? '?'} → ${rows[sp.next]?.tag ?? '?'}`);
+      setText(r.drops, sp.empty ? 'stage empty' : `drops ${fmtKg(sp.propellantLeft)} propellant`);
+      r.el.setAttribute('aria-label', `Separation ${sp.index + 1} at ${fmtTime(sp.time, 0)}`);
+      setText(r.err, e ? e.join('; ') : '');
+      r.err.hidden = !e;
+      return r.el;
     };
+    // Replay-derived numbers keep their last value (dimmed) while a new replay is pending.
+    if (reports && reports.length === infos.length) this.lastReports = reports;
+    const shown = reports ?? (this.lastReports && this.lastReports.length === infos.length ? this.lastReports : null);
+    const stale = !reports;
     let si = 0;
     infos.forEach((x, i) => {
-      while (si < seps.length && seps[si].time <= x.burn.start) this.list.append(sepRow(seps[si++]));
+      while (si < seps.length && seps[si].time <= x.burn.start) want.push(sepRow(seps[si++]));
       const e = errs.burns.get(i);
       const frame = x.node.frame.kind === 'orbital' ? bodyName(x.node.frame.body) : 'inertial';
-      const actual = reports?.[i];
+      const actual = shown?.[i];
       const st = rows[x.stage];
-      const r = el('div', { className: `node-row${s.selectedNode === i ? ' selected' : ''}${e ? ' invalid' : ''}`, dataset: { index: String(i) } },
-        el('span', { className: 'nidx', textContent: `#${i + 1}` }),
-        staged && st ? stageChip(x.stage, st.isSpacecraft, st.tag, `Fired by ${st.name}`) : null,
-        el('span', { className: 'nmet', textContent: fmtTime(x.node.t, 0), title: otherTime(x.node.t) }),
-        el('span', { className: 'ndv', textContent: fmtDvFine(dvMagnitude(x.node.dv)) }),
-        el('span', { className: 'nframe', textContent: frame }),
-        actual ? el('span', { className: 'nact', textContent: `actual ${fmtDvFine(actual.deltaV)}` }) : null,
-        e ? el('div', { className: 'nerr', textContent: e.join('; ') }) : null,
-        x.short ? el('div', { className: 'nerr', textContent: staged ? `Not enough propellant in ${st?.name ?? 'this stage'}: this burn will be cut short. Separate before it, or split it across a separation.` : 'Not enough propellant: this burn will be cut short' }) : null);
-      r.onclick = () => this.ctx.store.set({ selectedNode: i, selectedSeparation: null });
-      activatable(r, `Burn ${i + 1}`);
-      r.append(el('span', { className: 'nrow-acts' },
-        nodeAction('Disable', 'toggle', `Disable burn ${i + 1}`, () => this.ctx.editor.disableNode(i)),
-        nodeAction('Delete', 'danger', `Delete burn ${i + 1}`, () => this.ctx.editor.removeNode(i))));
-      this.list.append(r);
+      const r = this.burnRowFor(i);
+      r.el.className = `node-row${s.selectedNode === i ? ' selected' : ''}${e ? ' invalid' : ''}`;
+      const chipKey = staged && st ? `${x.stage}/${st.tag}/${st.name}/${st.isSpacecraft}` : '';
+      if (r.chipKey !== chipKey) {
+        r.chipKey = chipKey;
+        r.chip.replaceChildren(...(staged && st ? [stageChip(x.stage, st.isSpacecraft, st.tag, `Fired by ${st.name}`)] : []));
+        r.chip.hidden = !chipKey;
+      }
+      setText(r.met, fmtTime(x.node.t, 0));
+      r.met.title = otherTime(x.node.t);
+      setText(r.dv, fmtDvFine(dvMagnitude(x.node.dv)));
+      setText(r.frame, frame);
+      setText(r.act, actual ? `actual ${fmtDvFine(actual.deltaV)}` : 'actual …');
+      r.act.classList.toggle('stale', stale);
+      // The selected row's problems are spelled out in the editor (below its buttons); the row keeps
+      // its ⚠ and border, so editing a burn never grows the list above the controls.
+      const msgs = [...(e ?? []), x.short ? (staged ? `Not enough propellant in ${st?.name ?? 'this stage'}: this burn will be cut short. Separate before it, or split it across a separation.` : 'Not enough propellant: this burn will be cut short') : ''].filter(Boolean);
+      r.el.title = msgs.join('\n');
+      setText(r.err, s.selectedNode === i ? '' : msgs.join('\n'));
+      r.err.hidden = s.selectedNode === i || !msgs.length;
+      want.push(r.el);
       // "Separate now": after the last burn of a lower stage (prominent when it left the stage dry).
       const offer = separationOffer(plan, i);
       if (offer) {
-        const b = el('button', { className: `btn small sep-offer${offer.empty ? ' empty' : ''}`, type: 'button', textContent: offer.empty ? `✂ ${rows[offer.stage].tag} is empty: separate now` : `✂ Separate ${rows[offer.stage].tag} after burn ${i + 1}` });
-        b.title = `Add a separation at ${fmtTime(offer.time, 0)}, one second after cutoff; later burns are fired by ${rows[offer.stage + 1]?.name ?? 'the next stage'}`;
-        b.onclick = () => this.ctx.editor.separateAfter(i);
-        this.list.append(el('div', { className: 'sep-offer-row' }, b));
+        const o = this.offerFor(i);
+        o.btn.className = `btn small sep-offer${offer.empty ? ' empty' : ''}`;
+        setText(o.btn, offer.empty ? `✂ ${rows[offer.stage].tag} is empty: separate now` : `✂ Separate ${rows[offer.stage].tag} after burn ${i + 1}`);
+        o.btn.title = `Add a separation at ${fmtTime(offer.time, 0)}, one second after cutoff; later burns are fired by ${rows[offer.stage + 1]?.name ?? 'the next stage'}`;
+        want.push(o.el);
       }
     });
-    while (si < seps.length) this.list.append(sepRow(seps[si++]));
+    while (si < seps.length) want.push(sepRow(seps[si++]));
+    const cur = this.list.children;
+    if (cur.length !== want.length || want.some((w, k) => cur[k] !== w)) this.list.replaceChildren(...want);
     // Detail.
     const i = s.selectedNode;
     const x = i !== null ? infos[i] : undefined;
@@ -846,18 +934,27 @@ export class NodesPanel {
       x.node.dv.forEach((v, k) => this.dvTuners[k].setValue(String(+v.toFixed(4))));
       const axisNames = x.node.frame.kind === 'inertial' ? ['ICRF x', 'ICRF y', 'ICRF z'] : AXES;
       this.dvTuners.forEach((t, k) => t.setLabel(axisNames[k]));
-      const rep = reports?.[i];
+      const rep = shown?.[i];
       const mdot = engines[x.burn.engine]?.thrust / ((engines[x.burn.engine]?.isp ?? 1) * 9.80665);
-      this.readout.innerHTML =
-        (staged && stage ? `<div class="kv stage-kv"><span>Fired by</span><b class="nstage-name" style="--stage:${stageStyle(x.stage, stage.isSpacecraft, stage.tag).colour}">${esc(stage.tag)} · ${esc(stage.name)}</b></div>` : '') +
-        `<div class="kv"><span>Requested Δv</span><b>${fmtDvFine(dvMagnitude(x.node.dv))}</b></div>` +
-        `<div class="kv"><span>Replay Δv (expended)</span><b class="${rep && Math.abs(rep.deltaV - dvMagnitude(x.node.dv)) > 0.05 * Math.max(1, dvMagnitude(x.node.dv)) ? 'warn' : ''}">${rep ? fmtDvFine(rep.deltaV) : s.replay?.plan === plan && s.replay.preview === null ? 'not flown' : '…'}</b></div>` +
-        `<div class="kv"><span>Burn</span><b>${x.burn.duration.toFixed(2)} s${rep ? ` (flown ${rep.burnTime.toFixed(2)} s)` : ''}</b></div>` +
-        `<div class="kv" data-time-other="1"><span>${timeMode() === 'met' ? 'Absolute' : 'Mission elapsed'}</span><b class="node-time-other">${esc(otherTime(x.node.t))}</b></div>` +
-        `<div class="kv"><span>Ignition → cutoff</span><b>${esc(fmtTime(x.burn.start, 1))} → ${esc(fmtTime(x.burn.start + x.burn.duration, 1))}</b></div>` +
-        `<div class="kv"><span>Mass</span><b>${fmtKg(x.m0)} → ${fmtKg(x.m1)}</b></div>` +
-        `<div class="kv"><span>Propellant</span><b>${fmtKg(x.m0 - x.m1)}${rep ? ` (flown ${fmtKg(rep.propellant)})` : ''} · ${Number.isFinite(mdot) ? mdot.toFixed(2) : '—'} kg/s</b></div>`;
-      setText(this.nodeErr, [...(errs.burns.get(i) ?? []), x.short ? 'Not enough propellant left for the requested Δv: the burn will run the tanks dry.' : ''].filter(Boolean).join('\n'));
+      // Kept lines, updated in place; replay values keep their last value (dimmed) while pending.
+      const req = dvMagnitude(x.node.dv);
+      const fired = this.kv('fired', 'Fired by', staged && stage ? `${stage.tag} · ${stage.name}` : '');
+      fired.row.hidden = !(staged && stage);
+      fired.b.className = 'nstage-name';
+      if (staged && stage) fired.b.style.setProperty('--stage', stageStyle(x.stage, stage.isSpacecraft, stage.tag).colour);
+      this.kv('req', 'Requested Δv', fmtDvFine(req));
+      const rd = this.kv('rep', 'Replay Δv (expended)', rep ? fmtDvFine(rep.deltaV) : reports ? 'not flown' : '…');
+      rd.b.className = rep && Math.abs(rep.deltaV - req) > 0.05 * Math.max(1, req) ? 'warn' : '';
+      this.kv('burn', 'Burn', `${x.burn.duration.toFixed(2)} s · flown ${rep ? `${rep.burnTime.toFixed(2)} s` : '…'}`);
+      const other = this.kv('other', timeMode() === 'met' ? 'Absolute' : 'Mission elapsed', otherTime(x.node.t));
+      other.row.dataset.timeOther = '1';
+      other.b.className = 'node-time-other';
+      this.kv('ign', 'Ignition → cutoff', `${fmtTime(x.burn.start, 1)} → ${fmtTime(x.burn.start + x.burn.duration, 1)}`);
+      this.kv('mass', 'Mass', `${fmtKg(x.m0)} → ${fmtKg(x.m1)}`);
+      this.kv('prop', 'Propellant', `${fmtKg(x.m0 - x.m1)} · flown ${rep ? fmtKg(rep.propellant) : '…'} · ${Number.isFinite(mdot) ? mdot.toFixed(2) : '—'} kg/s`);
+      for (const k of ['rep', 'burn', 'prop']) this.kv(k).row.classList.toggle('stale', stale);
+      const nodeMsgs = [...(errs.burns.get(i) ?? []), x.short ? 'Not enough propellant left for the requested Δv: the burn will run the tanks dry.' : ''].filter(Boolean).join('\n');
+      setText(this.nodeErr, nodeMsgs);
     }
     // Separation detail.
     const j = s.selectedNode === null ? s.selectedSeparation : null;
@@ -873,7 +970,9 @@ export class NodesPanel {
         `<div class="kv"><span>Then active</span><b>${esc(to?.name ?? '?')}</b></div>`;
       setText(this.sepErr, (errs.separations.get(sp.index) ?? []).join('\n'));
     }
-    // Parked.
+    // Parked (rebuilt only when the parked list itself changes).
+    if (s.parked === this.parkedShown) return;
+    this.parkedShown = s.parked;
     this.parked.replaceChildren();
     if (s.parked.length) {
       this.parked.append(el('div', { className: 'sub', textContent: 'Disabled (not flown)' }));
@@ -1074,7 +1173,7 @@ export class ResultsPanel {
   private readonly burns = el('table', { className: 'burns' });
   private readonly share = el('div', { className: 'share' });
   private readonly digest = el('div', { className: 'digest', title: 'Replay digest: two players with the same digest flew bit-identical flights' });
-  private readonly status = el('div', { className: 'status' });
+  private readonly status = el('div', { className: 'status results-status' });
   /** At the end of the flight: the final orbit and each objective's evidence (the status line shows the cursor). */
   private readonly evidence = el('div', { className: 'evidence' });
 
@@ -1114,7 +1213,8 @@ export class ResultsPanel {
       : s.replayStatus === 'chunks' ? 'Preparing the ephemeris for this flight…'
       : preview !== null && current ? `Preview: first ${(preview / DAY).toFixed(1)} of ${(s.plan.duration / DAY).toFixed(1)} days flown; refining…`
       : s.replayStatus === 'running' || !current ? 'Replaying…' : '');
-    this.status.className = `status${invalid ? ' error' : ''}`;
+    this.status.className = `status results-status${invalid ? ' error' : ''}`;
+    this.status.title = this.status.textContent ?? '';
     if (!r) {
       setText(this.outcome, '');
       return;

@@ -205,7 +205,7 @@ export class Hud {
       const st = this.actions.status(s);
       this.chip.className = `chip tone-${st.tone}`;
       this.chip.textContent = `${st.icon} ${st.text}`;
-      this.key.textContent = st.key;
+      this.key.textContent = st.key; this.key.title = st.key;
     }
     if (!p || s.loadingTarget !== p.loadingTarget || s.loadingChunks !== p.loadingChunks) {
       if (s.loadingTarget === null) this.loading.style.display = 'none';
