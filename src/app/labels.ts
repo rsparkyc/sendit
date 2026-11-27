@@ -44,6 +44,8 @@ export class Labels {
     private readonly onPick: (key: string, x: number, y: number) => void,
     /** Map element that gets gestures started on a label (a drag or a second finger), so labels never block orbiting or pinching. */
     private readonly gestureTarget?: HTMLElement,
+    /** The key of a marker dot within its tap radius of a client point, or null (a tap on text goes to the dot then). */
+    private readonly dotAt?: (x: number, y: number) => string | null,
   ) {
     if (gestureTarget) this.wireForwarding();
   }
@@ -113,11 +115,15 @@ export class Labels {
     text.className = 'text';
     el.append(dot, text);
     el.addEventListener('click', (ev) => {
-      if (el.dataset.cluster) {
-        this.expanded = item.key;
+      // A marker dot under the tap wins over this label's text (pick.ts dotUnderTap): the text may cover another
+      // marker's, or a cluster's, dot.
+      const key = this.dotAt?.(ev.clientX, ev.clientY) ?? item.key;
+      const target = this.entries.get(key)?.el ?? el;
+      if (target.dataset.cluster) {
+        this.expanded = key;
         return;
       }
-      this.onPick(item.key, ev.clientX, ev.clientY);
+      this.onPick(key, ev.clientX, ev.clientY);
     });
     this.root.append(el);
     e = { el, dot, text };

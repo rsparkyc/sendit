@@ -27,7 +27,7 @@ import { bodyOrientation, displayPole } from './orientation';
 import { Layout } from './layout';
 import { LeaderboardPanel } from './leaderboard-ui';
 import { MapInput } from './map-input';
-import { isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick';
+import { DOT_TAP_RADIUS, dotUnderTap, isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick';
 import { poolSizing } from './schedule';
 import { objectiveBodies, statusOf } from './status';
 import { formatMet, el } from './dom';
@@ -213,7 +213,19 @@ const labels = new Labels(overlay, (key, x, y) => {
   }
   lastLabelTap = { t: now, x, y };
   labelPick(key);
-}, canvas);
+}, canvas, (x, y) => {
+  // Marker dots that take a tap (as candidatesAt counts them: drawn, not occluded, not absorbed into a cluster).
+  const rect = canvas.getBoundingClientRect();
+  const touch = document.documentElement.classList.contains('touch');
+  const shown = new Map(lastLayout.map((p) => [p.key, p]));
+  const dots = lastItems.flatMap((it) => {
+    const p = shown.get(it.key);
+    const kind = kindOfLabel(it.key);
+    if (!p || p.hidden || p.clusteredInto || !it.marker || !it.onScreen || it.occluded || !kind || kind === 'body') return [];
+    return [{ key: it.key, x: p.x, y: p.y }];
+  });
+  return dotUnderTap(dots, x - rect.left, y - rect.top, touch ? DOT_TAP_RADIUS.touch : DOT_TAP_RADIUS.mouse);
+});
 /** What a single click on a label (or the map near one) does. */
 function labelPick(key: string): void {
   const lay = lastLayout.find((p) => p.key === key);

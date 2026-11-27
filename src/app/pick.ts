@@ -64,3 +64,24 @@ export const DOUBLE_PX = 36;
 export function isDoubleTap(prev: { t: number; x: number; y: number } | null, t: number, x: number, y: number): boolean {
   return !!prev && t - prev.t < DOUBLE_MS && t - prev.t >= 0 && Math.hypot(x - prev.x, y - prev.y) < DOUBLE_PX;
 }
+
+/**
+ * A label's text can lie over another marker's dot (the text boxes are laid out around dots, and on touch they
+ * carry padding for a finger). A dot must always take a tap at its centre, so a tap on label text first looks for
+ * a marker dot within `radius` px of the tap: the nearest one wins (its own label's dot included), and only
+ * where there is none does the text take the tap. The radius is the dot's own hit disc (small: text taps a little
+ * away from any dot still go to the text). Nothing moves, so the labels do not jitter.
+ */
+export const DOT_TAP_RADIUS = { mouse: 7, touch: 16 } as const;
+export function dotUnderTap(dots: readonly { key: string; x: number; y: number }[], x: number, y: number, radius: number): string | null {
+  let best: string | null = null;
+  let bd = radius;
+  for (const d of dots) {
+    const r = Math.hypot(d.x - x, d.y - y);
+    if (r <= bd) {
+      bd = r;
+      best = d.key;
+    }
+  }
+  return best;
+}

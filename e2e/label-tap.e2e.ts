@@ -13,7 +13,7 @@ import { frames, settleCamera } from './view';
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/label-tap';
 
-test.skip(({ browserName }) => browserName !== 'chromium', 'touch emulation runs in Chromium');
+test.skip(({ browserName }) => browserName === 'firefox', 'touch emulation runs in Chromium and WebKit');
 
 async function settled(page: Page): Promise<void> {
   await page.waitForFunction(() => {
@@ -50,9 +50,7 @@ async function setUp(page: Page): Promise<Cluster> {
     w.camera.elevation = 1.2;
   });
   // Search camera directions and distances (body frames are pole-up, so no one fixed direction suits every
-  // launch) for a cluster on open map whose dot really takes a tap: the map or the cluster's own label is the top
-  // element there (another label's text over the dot would take the tap instead), and the map's picking at the dot
-  // chooses the cluster itself.
+  // launch) for a cluster on open map where the map's picking at the dot chooses the cluster itself.
   const free = await page.evaluate(() => (window as any).sendit.layout.freeRect());
   const vp = page.viewportSize()!;
   const seen: string[] = [];
@@ -71,7 +69,9 @@ async function setUp(page: Page): Promise<Cluster> {
           const win = (window as any).sendit.pickAt(x, y, touch, false).winner;
           return { own, top: e ? `${(e.closest('.label') as HTMLElement | null)?.dataset.key ?? e.id ?? e.tagName}` : 'null', win: win?.key ?? null };
         }, [c.x, c.y, c.key, vp.width < 600] as const);
-        if (r.own && r.win === c.key) return c;
+        // Another label's text over the dot no longer matters (a dot under label text takes the tap, pick.ts
+        // dotUnderTap); the test below covers that case on purpose.
+        if (r.win === c.key) return c;
         seen.push(`az ${az ?? 'current'} el ${el} d ${d}: ${c.key} under ${r.top}, pick ${r.win}`);
       }
     }
@@ -120,6 +120,40 @@ for (const [size, use] of [
       if (pick!.key.startsWith('ev:')) expect(s.ev).toBe(Number(pick!.key.slice(3)));
       else expect(s.node).toBe(Number(pick!.key.split(':')[1]));
       await page.screenshot({ path: `${SHOTS}/${size}-3-member-picked.png` });
+    });
+
+    test(`${size}: another label's text laid over a cluster's dot does not take the tap; the cluster expands`, async ({ page }) => {
+      const touch = size === 'phone';
+      const c = await setUp(page);
+      // Build the overlap on purpose: a stylesheet rule (it outlasts relayouts) centres another shown label's text on
+      // the cluster's dot. That text is a click target of its own.
+      const other = await page.evaluate(([cx, cy, ck]) => {
+        const texts = [...document.querySelectorAll<HTMLElement>('#labels .label:not(.occluded) .text')].filter((t) => {
+          const k = t.closest<HTMLElement>('.label')!.dataset.key!;
+          const r = t.getBoundingClientRect();
+          return k !== ck && r.width > 0 && t.style.display !== 'none' && !!t.textContent?.trim();
+        });
+        const t = texts[0];
+        if (!t) return null;
+        const r = t.getBoundingClientRect();
+        const left = parseFloat(t.style.left || '0') + cx - (r.left + r.width / 2);
+        const top = parseFloat(t.style.top || '0') + cy - (r.top + r.height / 2);
+        const key = t.closest<HTMLElement>('.label')!.dataset.key!;
+        const st = document.createElement('style');
+        st.textContent = `#labels .label[data-key="${CSS.escape(key)}"] .text { left: ${left}px !important; top: ${top}px !important; }`;
+        document.head.append(st);
+        return key;
+      }, [c.x, c.y, c.key] as const);
+      expect(other, 'another label with text is on screen').toBeTruthy();
+      await frames(page, 2);
+      const top = await page.evaluate(([x, y]) => (document.elementFromPoint(x, y)?.closest('.label') as HTMLElement | null)?.dataset.key ?? null, [c.x, c.y] as const);
+      expect(top, `label ${other}'s text is the top element at the cluster ${c.key}'s dot (${c.x.toFixed(1)}, ${c.y.toFixed(1)})`).toBe(other);
+      await page.screenshot({ path: `${SHOTS}/${size}-4-text-over-dot.png` });
+      if (touch) await page.touchscreen.tap(c.x, c.y);
+      else await page.mouse.click(c.x, c.y);
+      await frames(page, 4);
+      const st = await page.evaluate(() => { const w = (window as any).sendit; const s = w.store.get(); return { expanded: w.labelState().expanded, node: s.selectedNode, ev: s.selectedEvent }; });
+      expect(st.expanded, `the tap at the dot expanded cluster ${c.key} (not label ${other}): ${JSON.stringify(st)}`).toBe(c.key);
     });
   });
 }

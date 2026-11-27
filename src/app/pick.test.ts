@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { History } from './history';
-import { isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick';
+import { DOT_TAP_RADIUS, dotUnderTap, isDoubleTap, kindOfLabel, pickTarget, type PickCandidate } from './pick';
 
 const c = (kind: PickCandidate['kind'], key: string, screenDist = 5, depth = 1e7): PickCandidate => ({ kind, key, screenDist, depth });
 
@@ -100,5 +100,20 @@ describe('History', () => {
     h.record(4, null, 10);
     expect(h.canRedo).toBe(false);
     expect([h.undo(5), h.undo(4), h.undo(3), h.undo(2)]).toEqual([4, 3, 2, null]);
+  });
+});
+
+describe('dotUnderTap: a marker dot under label text takes the tap', () => {
+  const dots = [{ key: 'ev:1', x: 100, y: 100 }, { key: 'node:0', x: 112, y: 100 }];
+  it('the nearest dot within the radius wins, for mouse and touch radii', () => {
+    expect(dotUnderTap(dots, 101, 100, DOT_TAP_RADIUS.mouse)).toBe('ev:1');
+    expect(dotUnderTap(dots, 110, 101, DOT_TAP_RADIUS.mouse)).toBe('node:0');
+    expect(dotUnderTap(dots, 104, 100, DOT_TAP_RADIUS.touch)).toBe('ev:1');
+    expect(dotUnderTap(dots, 120, 110, DOT_TAP_RADIUS.touch)).toBe('node:0');
+  });
+  it('text away from every dot keeps its tap', () => {
+    expect(dotUnderTap(dots, 140, 100, DOT_TAP_RADIUS.mouse)).toBeNull();
+    expect(dotUnderTap(dots, 100, 120, DOT_TAP_RADIUS.touch)).toBeNull();
+    expect(dotUnderTap([], 0, 0, DOT_TAP_RADIUS.touch)).toBeNull();
   });
 });
