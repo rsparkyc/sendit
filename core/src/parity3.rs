@@ -5,7 +5,7 @@ use crate::mission::mdata::MissionData;
 use crate::mission::plan::{decode_plan, encode_plan, parse_plan, validate_plan_issues, LaunchCheck, Plan};
 use crate::parity::Report;
 
-fn unhex(s: &str) -> String {
+pub fn unhex(s: &str) -> String {
     if s == "-" {
         return String::new();
     }

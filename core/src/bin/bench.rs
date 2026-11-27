@@ -105,7 +105,7 @@ fn bench_chunk() {
 
 /// Mission layer (also makes its code reachable for scripts/check-no-fma.sh).
 fn bench_mission() {
-    use sendit_core::mission::{launch, mdata::MissionData, plan};
+    use sendit_core::mission::{ascent, launch, mdata::MissionData, plan};
     let d = MissionData::parse(sendit_core::data::MISSION_JSON);
     let em = launch::EarthModel::new(&d);
     let site = d.sites[0].clone();
@@ -121,6 +121,19 @@ fn bench_mission() {
         }
     });
     println!("1000 x (launchState + directInjectionState + launchGeometry): {}", st.fmt("ms", 2));
+    let (_, f9) = d.vehicles.iter().find(|(id, _)| id == "falcon-9").unwrap();
+    let mut stack = f9.clone();
+    stack.push(plan::Stage { wet_mass: 2000.0, dry_mass: 600.0, engines: vec![plan::Engine { thrust: 4000.0, isp: 320.0, restartable: None, throttleable: None }] });
+    let earth = launch::earth_data(&d);
+    let geom = ascent::Geometry { along_track: 400.0, cross_track: 50.0 };
+    let st = wall(10, 2, || {
+        black_box(ascent::compute_ascent(&stack, earth.gm, earth.reference_radius, black_box(250e3), geom, &d.ascent_earth).unwrap());
+    });
+    println!("computeAscent (Falcon 9, 250 km): {}", st.fmt("ms", 2));
+    let st = wall(10, 2, || {
+        black_box(ascent::compute_direct_ascent(&stack, earth.gm, earth.reference_radius, black_box(-2e6), 200e3, geom, &d.ascent_earth).unwrap());
+    });
+    println!("computeDirectAscent (Falcon 9, C3 -2 km2/s2): {}", st.fmt("ms", 2));
     black_box(plan::decode_plan(black_box("x"), &d).is_ok());
 }
 

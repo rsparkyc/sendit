@@ -126,3 +126,8 @@ fn launch() {
     let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
     check(sendit_core::parity3::launch(&read("launch.txt"), &d));
 }
+#[test]
+fn ascent() {
+    let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
+    check(sendit_core::parity4::ascent(&read("ascent.txt"), &d));
+}

@@ -104,6 +104,32 @@ MUTATIONS = [
      'if !(spec.altitude_m > 0.0) {', 'if spec.altitude_m <= 0.0 {'),
     ('launch: geocentric added to Earth as geo + e (commutative)', 'src/mission/launch.rs',
      'let state = [e[0] + geo[0],', 'let state = [geo[0] + e[0],'),
+    # Layer two: the analytic ascent model.
+    ('ascent: drag v * v grouped', 'src/mission/ascent.rs',
+     '(0.5 * rho0 * rr * v * v * self.cd_a) / m', '0.5 * rho0 * rr * (v * v) * self.cd_a / m'),
+    ('ascent: midpoint half-step as 0.5 * (dt * vdot)', 'src/mission/ascent.rs',
+     'let vm = v + 0.5 * dt * out[0];', 'let vm = v + 0.5 * (dt * out[0]);'),
+    ('ascent: mass at step start as mdot * i * dt', 'src/mission/ascent.rs',
+     'let ma = m_start - mdot * (fi * dt);', 'let ma = m_start - mdot * fi * dt;'),
+    ('ascent: stage flow as thrust / isp / g0', 'src/mission/ascent.rs',
+     'q += e.thrust / (e.isp * G0);', 'q += e.thrust / e.isp / G0;'),
+    ('ascent: massAbove summed from the bottom', 'src/mission/ascent.rs',
+     'let mut j = stages.len() as isize - 1;\n    while j > k {\n        m = m + stages[j as usize].wet_mass;\n        j -= 1;\n    }',
+     'let mut j = k + 1;\n    while j < stages.len() as isize {\n        m = m + stages[j as usize].wet_mass;\n        j += 1;\n    }'),
+    ('ascent: parking kick bisection 49 steps', 'src/mission/ascent.rs',
+     'let mut hi = 0.5f64;\n    for _ in 0..50 {', 'let mut hi = 0.5f64;\n    for _ in 0..49 {'),
+    ('ascent: direct energy distributed: 0.5 x^2 + 0.5 y^2', 'src/mission/ascent.rs',
+     '0.5 * (x * x + y * y) - mu', '0.5 * x * x + 0.5 * y * y - mu'),
+    ('ascent: direct cutoff fraction as a reciprocal product', 'src/mission/ascent.rs',
+     '(e_goal - e0) / (e1 - e0)', '(e_goal - e0) * (1.0 / (e1 - e0))'),
+    ('ascent: drag area exponent as ln * 2 / 3', 'src/mission/ascent.rs',
+     'exp((2.0 / 3.0) * ln(m0 / 1000.0)?)?', 'exp(ln(m0 / 1000.0)? * 2.0 / 3.0)?'),
+    ('ascent: circularisation shortfall ln(m) - ln(dry)', 'src/mission/ascent.rs',
+     'need -= ve * ln(mass / dry)?;', 'need -= ve * (ln(mass)? - ln(dry)?);'),
+    ('ascent: non-throttleable flag ignored', 'src/mission/ascent.rs',
+     "!s.engines.iter().any(|e| e.throttleable == Some(false))", 'true'),
+    ('ascent: climb term as (rP - R) / (R rP)', 'src/mission/ascent.rs',
+     'let climb = (v_ins * v_ins + 2.0 * mu * (1.0 / r_ - 1.0 / r_p)).sqrt() - v_ins;', 'let climb = (v_ins * v_ins + 2.0 * mu * ((r_p - r_) / (r_ * r_p))).sqrt() - v_ins;'),
 ]
 
 # Mutations that are bit-identical by construction or almost never observable,
@@ -157,6 +183,14 @@ EXPECTED_INVISIBLE = {
     # and showed none. The same arithmetic where it is not absorbed (the
     # radial speed vr, eps above) IS caught.
     'launch: j2-mean radius term reassociated: eps * s2c2u / 6',
+    # EQUIVALENT MUTANTS (ascent): multiplying by 0.5 is exact for every
+    # finite value that is neither subnormal nor overflowing (ascent speeds,
+    # times and energies are O(1e-3..1e8)), so (0.5 * dt) * a = 0.5 * (dt * a)
+    # and 0.5 * (x^2 + y^2) = 0.5 x^2 + 0.5 y^2 bit for bit. Kept as controls;
+    # the non-exact regroupings next to them (mdot * i * dt, the drag v * v,
+    # the cutoff reciprocal) are caught.
+    'ascent: midpoint half-step as 0.5 * (dt * vdot)',
+    'ascent: direct energy distributed: 0.5 x^2 + 0.5 y^2',
 }
 
 

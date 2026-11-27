@@ -3,6 +3,7 @@
 //! follow). Each sub-layer is proven against vectors exported from the
 //! TypeScript before the next is ported (see core/README.md).
 
+pub mod ascent;
 pub mod jsfmt;
 pub mod launch;
 pub mod mdata;

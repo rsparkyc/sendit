@@ -147,6 +147,25 @@ observable (absorbed by `1 + x`, ~2e-4 chance per launch; the same change in
 the radial speed is caught). The bench binary has a `mission` mode so this
 code is in the native no-FMA scan.
 
+### Layer two: the analytic ascent model (`src/mission/ascent.rs`)
+
+Ported: ascent.ts computeAscent and computeDirectAscent (gravity turn with
+level hold, midpoint steps, kick bisection, staging, impulsive
+circularisation, per-stage accounting with the ascent charged in the upper
+stage's propellant, refusals with their messages, and the errors exactLn /
+exactExp throw), canShutDown, canRestart, massAbove. The vehicle catalogue is
+data (core/data/mission-data.json, generated). direct-planning.ts is not on
+the replay path (planning helpers only) and is not ported. Vectors
+(core/ts/export-ascent.vec.ts): every catalogue vehicle and the solid
+Minotaur V, flag variants, hot / weak / single-stage stacks and 400 random
+stacks x every site x azimuths x parking altitudes / C3 and injection
+altitude grids, the Moon's airless constants, synthetic geometries; every
+refusal path occurs. 52,780 values, 0 mismatches natively, scalar and SIMD
+wasm. Mutation check (`python3 scripts/mutation-check.py ascent.rs`): 10 of
+12 caught; the two left are exact rescalings by 0.5 (equivalent, argued in
+the script). Native: computeAscent (Falcon 9, 250 km) 3.3 ms,
+computeDirectAscent 3.0 ms (`cargo run --release --bin bench mission`).
+
 ## TypeScript behaviours reproduced deliberately
 
 - nbody.ts `fieldOf`: a zonal term whose `tesseral` list is present but
