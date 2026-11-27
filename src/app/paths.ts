@@ -15,6 +15,8 @@ export interface FrameContext {
   readonly evaluate: Evaluator;
   /** Body orientation, for surface-fixed frames. */
   readonly orient?: Orientation;
+  /** Display pole for body-centred inertial frames (BodySnapshot.pole). */
+  readonly pole?: (body: number, out: Float64Array) => boolean;
 }
 
 /** Points (3 per sample) in frame coordinates, plus the sample times. */
@@ -30,7 +32,7 @@ function scratch(ctx: FrameContext) {
 /** Frame state at t, or null if the ephemeris does not cover t. */
 export function frameAt(ctx: FrameContext, spec: FrameSpec, t: number, s = scratch(ctx)): FrameState | null {
   if (!ctx.evaluate(t, s.pos, s.vel)) return null;
-  return computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient }, s.fs);
+  return computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient, pole: ctx.pole }, s.fs);
 }
 
 /**
@@ -46,7 +48,7 @@ export function bodyPath(ctx: FrameContext, spec: FrameSpec, body: number, ta: n
   for (let i = 0; i <= n; i++) {
     const t = ta + ((tb - ta) * i) / n;
     if (!ctx.evaluate(t, s.pos, s.vel)) continue;
-    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient }, s.fs);
+    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient, pole: ctx.pole }, s.fs);
     toFrame(s.fs, s.pos, 3 * body, q, 0);
     pts.push(q[0], q[1], q[2]);
     ts.push(t);
@@ -64,7 +66,7 @@ export function trajectoryPath(ctx: FrameContext, spec: FrameSpec, tr: Trajector
     const o = i * SAMPLE_STRIDE;
     const t = tr.data[o];
     if (!ctx.evaluate(t, s.pos, s.vel)) continue;
-    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient }, s.fs);
+    computeFrame(spec, { count: ctx.count, pos: s.pos, vel: s.vel, gm: ctx.gm, t, orient: ctx.orient, pole: ctx.pole }, s.fs);
     toFrame(s.fs, tr.data, o + 1, pts, 3 * m);
     ts[m] = t;
     m++;

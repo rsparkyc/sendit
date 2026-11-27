@@ -39,7 +39,7 @@ async function open(page: Page, hash: string): Promise<void> {
   }, null, { timeout: 120_000 });
 }
 
-/** Point the orbit camera from body `focus` toward body `toward` (inertial ecliptic frame). */
+/** Point the orbit camera from body `focus` toward body `toward` (in the current frame's axes). */
 async function lookFrom(page: Page, focus: string, toward: string, dist: number): Promise<void> {
   await page.evaluate(([focus, toward, dist]) => {
     const s = (window as any).sendit;
@@ -48,8 +48,8 @@ async function lookFrom(page: Page, focus: string, toward: string, dist: number)
     s.eph.evaluate(s.store.get().t, pos, null);
     const a = ids.indexOf(focus as string), b = ids.indexOf(toward as string);
     const d = [pos[3 * b] - pos[3 * a], pos[3 * b + 1] - pos[3 * a + 1], pos[3 * b + 2] - pos[3 * a + 2]];
-    const e = (84381.406 / 3600) * (Math.PI / 180);
-    const x = d[0], y = Math.cos(e) * d[1] + Math.sin(e) * d[2], z = -Math.sin(e) * d[1] + Math.cos(e) * d[2];
+    const m: number[] = s.frameAxes();
+    const [x, y, z] = [0, 1, 2].map((r) => m[3 * r] * d[0] + m[3 * r + 1] * d[1] + m[3 * r + 2] * d[2]);
     s.camera.azimuth = Math.atan2(y, x);
     s.camera.elevation = Math.atan2(z, Math.hypot(x, y));
     s.camera.setDistance(dist as number, true);

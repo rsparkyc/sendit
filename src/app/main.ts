@@ -23,7 +23,7 @@ import { fromSurface, onDistanceMode, setDistanceMode } from './units';
 import { mul3 } from './body-rotation';
 import { computeFrame, frameCenter, frameKey, newFrameState, parseFrameKey, toFrame, type FrameSpec } from './frames';
 import { Hud, type Readout } from './hud';
-import { bodyOrientation } from './orientation';
+import { bodyOrientation, displayPole } from './orientation';
 import { Layout } from './layout';
 import { LeaderboardPanel } from './leaderboard-ui';
 import { MapInput } from './map-input';
@@ -870,7 +870,9 @@ window.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // Paths
 
-const ctx: FrameContext = { count: n, gm: BODY_GM, evaluate: (t, p, v) => eph.evaluate(t, p, v), orient: bodyOrientation };
+/** Body-centred inertial frames put the centre body's north pole (at the plan epoch) up on screen. */
+const framePole = (b: number, out: Float64Array): boolean => displayPole(b, store.get().plan.epoch, out);
+const ctx: FrameContext = { count: n, gm: BODY_GM, evaluate: (t, p, v) => eph.evaluate(t, p, v), orient: bodyOrientation, pole: framePole };
 
 interface PathState {
   center: number; // time the window is centred on
@@ -1213,7 +1215,7 @@ store.subscribe((s, p) => {
   if (s.frame !== p.frame) {
     invalidatePaths();
     camera.reset();
-  }
+  } else if (s.plan.epoch !== p.plan.epoch && s.frame.kind === 'inertial') invalidatePaths(); // the display pole is taken at the plan epoch
   if (s.focus !== p.focus) {
     camera.refocus();
     const r = s.focus === SPACECRAFT ? 2e6 : BODIES[s.focus].radius * 12;
@@ -1428,7 +1430,7 @@ function tick(now: number): void {
   renderCount++;
   if (eph.evaluate(t, pos, vel)) {
     const frame = s.frame;
-    computeFrame(frame, { count: n, pos, vel, gm: BODY_GM, t, orient: bodyOrientation }, fs);
+    computeFrame(frame, { count: n, pos, vel, gm: BODY_GM, t, orient: bodyOrientation, pole: framePole }, fs);
     for (let i = 0; i < n; i++) toFrame(fs, pos, 3 * i, framePos, 3 * i);
     updatePaths(t, frame, 2);
 
@@ -1613,6 +1615,26 @@ Object.assign(window, {
     drawn: () => drawn,
     editor,
     camera,
+    /** Rows of the current plotting frame's axes in ICRF (row-major 3x3); frame z is screen up. */
+    frameAxes: (): number[] => Array.from(fs.axes),
+    /** Client px of a body's centre and of the end of its north pole axis (1.8 radii out, ICRF pole at the time cursor), or null. */
+    poleOnScreen(body: string): { cx: number; cy: number; nx: number; ny: number } | null {
+      const b = bodyIndex(body);
+      const t = store.get().t;
+      const m = new Float64Array(9);
+      if (b < 0 || !Number.isFinite(bodyOrientation(b, t, m))) return null;
+      const c = framePos.subarray(3 * b, 3 * b + 3);
+      const R = 1.8 * BODIES[b].radius;
+      const end = [0, 0, 0];
+      // Pole tip in frame coordinates: centre + R * (axes * pole).
+      const a = fs.axes;
+      const pz = [m[2], m[5], m[8]];
+      for (let k = 0; k < 3; k++) end[k] = c[k] + R * (a[3 * k] * pz[0] + a[3 * k + 1] * pz[1] + a[3 * k + 2] * pz[2]);
+      const rc = canvas.getBoundingClientRect();
+      const p0 = { x: 0, y: 0 }, p1 = { x: 0, y: 0 };
+      if (!scene.project(c, 0, camera.position, p0) || !scene.project(Float64Array.from(end), 0, camera.position, p1)) return null;
+      return { cx: p0.x + rc.left, cy: p0.y + rc.top, nx: p1.x + rc.left, ny: p1.y + rc.top };
+    },
     metrics,
     eph,
     pool,
