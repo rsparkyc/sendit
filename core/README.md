@@ -36,10 +36,10 @@ composition with Kahan-compensated q and v, the generalised Stormer-Verlet
 harmonic pair forces with their reactions, the stage-time construction
 `(t0 + n h) + c_i h`, and `exportState`/`importState`. The proof would be the
 checkpoint asset's bytes (`src/physics/data/checkpoints-1950-2100.bin`) and the
-chunk coefficients of chunks -3..2, compared bit for bit. Also not ported:
-the mission layer (plan, ascent, events, replay, objectives), so the pinned
-mission replays (`src/fixtures/model2-replay.ts`, `staged-replay.ts`) are not
-yet reproduced.
+chunk coefficients of chunks -3..2, compared bit for bit. (Phase one's status; the integrator, the chunk builder, the plan codec,
+launch, ascent, events and replay have since been ported, see the layer
+sections below, and the pinned mission replays are reproduced. Still not
+ported: objectives, conformance, scoring and the campaign rules.)
 
 ## Running
 
