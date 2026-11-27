@@ -20,6 +20,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { AnchoredSegment } from './paths';
 import { BodyVisuals } from './body-visuals';
+import { MAP } from './palette';
 
 export const UNIT = 1000; // metres per render unit
 
@@ -80,13 +81,29 @@ class AnchoredLine {
 class ThickAnchoredLine {
   readonly group = new THREE.Group();
   private segs: { anchor: Float64Array; line: Line2 }[] = [];
-  constructor(readonly material: LineMaterial) {}
-  set(segments: AnchoredSegment[]): void {
+  /** One material per colour (each stage flies in its own colour, palette.ts). */
+  private readonly materials = new Map<number, LineMaterial>();
+  private readonly res = new THREE.Vector2(1, 1);
+  constructor(private readonly make: (hex: number) => LineMaterial) {}
+  private material(hex: number): LineMaterial {
+    let m = this.materials.get(hex);
+    if (!m) {
+      m = this.make(hex);
+      m.resolution.copy(this.res);
+      this.materials.set(hex, m);
+    }
+    return m;
+  }
+  setResolution(w: number, h: number): void {
+    this.res.set(w, h);
+    for (const m of this.materials.values()) m.resolution.set(w, h);
+  }
+  set(segments: (AnchoredSegment & { hex: number })[]): void {
     this.clear();
     for (const s of segments) {
       const g = new LineGeometry();
       g.setPositions(s.verts);
-      const line = new Line2(g, this.material);
+      const line = new Line2(g, this.material(s.hex));
       line.frustumCulled = false;
       this.group.add(line);
       this.segs.push({ anchor: s.anchor, line });
@@ -229,16 +246,16 @@ export class SceneView {
       this.scene.add(line.group);
       this.paths.push(line);
     }
-    this.trajectoryMaterial = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.9, depthWrite: false });
+    this.trajectoryMaterial = new THREE.LineBasicMaterial({ color: MAP.coast, transparent: true, opacity: 0.9, depthWrite: false });
     this.trajectory = new AnchoredLine(this.trajectoryMaterial);
-    this.trajectoryPast = new AnchoredLine(new THREE.LineBasicMaterial({ color: 0x3b7a58, transparent: true, opacity: 0.8, depthWrite: false }));
-    this.burnArcs = new ThickAnchoredLine(new LineMaterial({ color: 0xff8a3d, linewidth: 4.5, worldUnits: false, transparent: true, opacity: 0.95, depthWrite: false }));
+    this.trajectoryPast = new AnchoredLine(new THREE.LineBasicMaterial({ color: MAP.coastPast, transparent: true, opacity: 0.8, depthWrite: false }));
+    this.burnArcs = new ThickAnchoredLine((color) => new LineMaterial({ color, linewidth: 4.5, worldUnits: false, transparent: true, opacity: 0.95, depthWrite: false }));
     this.equatorDisc = new PlaneDisc(0x9fc6ff);
     this.targetDisc = new PlaneDisc(0xffd36b);
     this.scene.add(this.equatorDisc.mesh, this.targetDisc.mesh, this.axis.group);
     // Faint revolutions: each pixel is drawn at most once per frame (stencil), so 160 overlapping revolutions of a
     // parking orbit stay one faint trace instead of saturating into an opaque band over the planet.
-    const far = new THREE.LineBasicMaterial({ color: 0x7dffb0, transparent: true, opacity: 0.1, depthWrite: false, stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc, stencilZPass: THREE.ReplaceStencilOp });
+    const far = new THREE.LineBasicMaterial({ color: MAP.coastFar, transparent: true, opacity: 0.1, depthWrite: false, stencilWrite: true, stencilRef: 1, stencilFunc: THREE.NotEqualStencilFunc, stencilZPass: THREE.ReplaceStencilOp });
     this.farMaterial = far;
     this.trajectoryFarBefore = new AnchoredLine(far);
     this.trajectoryFarAfter = new AnchoredLine(far);
@@ -253,7 +270,7 @@ export class SceneView {
 
   resize(w: number, h: number): void {
     this.renderer.setSize(w, h, false);
-    this.burnArcs.material.resolution.set(w, h);
+    this.burnArcs.setResolution(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -271,8 +288,8 @@ export class SceneView {
     }
   }
 
-  /** Powered arcs, drawn over the trajectory in a distinct colour. */
-  setBurnArcs(segs: AnchoredSegment[] | null): void {
+  /** Powered arcs, drawn thick over the trajectory, each in its stage's colour (palette.ts). */
+  setBurnArcs(segs: (AnchoredSegment & { hex: number })[] | null): void {
     if (segs && segs.length) this.burnArcs.set(segs);
     else this.burnArcs.clear();
   }

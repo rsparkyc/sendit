@@ -75,6 +75,25 @@ const km = (m: number) => `${Math.round(m / 1000).toLocaleString('en-US')} km`;
 /** Osculating orbit about a body at the time cursor (orbit-ui.ts orbitAbout, angles to the body's equator), or null. */
 export type OrbitNow = (body: string) => { o: Pick<OrbitState, 'rp' | 'ra' | 'incDeg' | 'bound'> } | null;
 
+/**
+ * The orbit reached at the end of the flight about the mission's orbit target (the last periapsis and apoapsis
+ * the replay found), or null when the mission has no orbit goal or there is no closed orbit. The Results panel
+ * shows this (the final orbit); the status line shows the orbit at the time cursor.
+ */
+export function finalOrbit(s: AppState, bodyName: (id: string) => string): string | null {
+  const r = s.replay;
+  const m = missionById(s.missionId);
+  const tob = m?.def ? targetObjective(m.def.objectives) : null;
+  if (!r || tob?.kind !== 'orbit') return null;
+  const body = tob.body;
+  const ext = r.result.events.filter((e) => e.body === body && (e.kind === 'periapsis' || e.kind === 'apoapsis'));
+  const pe = [...ext].reverse().find((e) => e.kind === 'periapsis');
+  const ap = [...ext].reverse().find((e) => e.kind === 'apoapsis');
+  if (!pe || !ap) return null;
+  const inc = inclinationAt(body, pe.t, pe.rel);
+  return `${bodyName(body)} orbit Pe ${fromCentre(pe.distance, body)} · Ap ${fromCentre(ap.distance, body)}${Number.isFinite(inc) ? ` · i ${inc.toFixed(2)}°` : ''}`;
+}
+
 export function statusOf(s: AppState, bodyName: (id: string) => string, orbitNow?: OrbitNow): Status {
   const r = s.replay;
   const m = missionById(s.missionId);
@@ -88,16 +107,10 @@ export function statusOf(s: AppState, bodyName: (id: string) => string, orbitNow
     if (now) {
       // An orbit goal: the orbit at the time cursor, from orbit-elements.ts, exactly as the Orbit panel shows it.
       const { o } = now;
-      key = `${bodyName(body!)} orbit now: Pe ${fromCentre(o.rp, body!)} · Ap ${o.bound ? fromCentre(o.ra, body!) : 'none (escape)'} · i ${o.incDeg.toFixed(2)}°`;
+      key = `At cursor · ${bodyName(body!)} orbit: Pe ${fromCentre(o.rp, body!)} · Ap ${o.bound ? fromCentre(o.ra, body!) : 'none (escape)'} · i ${o.incDeg.toFixed(2)}°`;
     } else if (tob?.kind === 'orbit' && body) {
       // No state at the cursor: the orbit reached at the end (last apsides about the body), from the same osculating maths.
-      const ext = r.result.events.filter((e) => e.body === body && (e.kind === 'periapsis' || e.kind === 'apoapsis'));
-      const pe = [...ext].reverse().find((e) => e.kind === 'periapsis');
-      const ap = [...ext].reverse().find((e) => e.kind === 'apoapsis');
-      if (pe && ap) {
-        const inc = inclinationAt(body, pe.t, pe.rel);
-        key = `${bodyName(body)} orbit Pe ${fromCentre(pe.distance, body)} · Ap ${fromCentre(ap.distance, body)}${Number.isFinite(inc) ? ` · i ${inc.toFixed(2)}°` : ''}`;
-      } else key = `${bodyName(body)}: no closed orbit`;
+      key = finalOrbit(s, bodyName) ?? `${bodyName(body)}: no closed orbit`;
     } else if (body) {
       const alts = r.result.events.filter((e) => e.body === body && (e.kind === 'periapsis' || e.kind === 'impact' || e.kind === 'atmosphere-entry')).map((e) => e.altitude);
       key = alts.length ? `Closest to ${bodyName(body)} ${fromSurface(Math.min(...alts), body)}` : `${bodyName(body)}: no approach`;

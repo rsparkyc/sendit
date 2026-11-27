@@ -352,7 +352,9 @@ test.describe('desktop', () => {
     expect(kourou.offered).toBe(true);
     const kName = String(kourou.name).split(',')[0];
     // The objectives shown are Kourou's limits (the ones evaluate applies), not another site's.
-    const fmt = (v: number) => `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m/s`;
+    // Limits are whole m/s (numfmt.ts fmtDv): no false decimal.
+    expect(Number.isInteger(kourou.maxDeltaV)).toBe(true);
+    const fmt = (v: number) => `${Math.round(v).toLocaleString('en-US')} m/s`;
     await expect(page.locator('.objectives')).toContainText(`Use at most ${fmt(kourou.maxDeltaV)}`);
     for (const o of others.filter((x: any) => x.maxDeltaV !== kourou.maxDeltaV)) await expect(page.locator('.objectives')).not.toContainText(`Use at most ${fmt(o.maxDeltaV)}`);
     expect(await page.evaluate(() => (window as any).sendit.store.get().replay.evaluation.site)).toBe('kourou');

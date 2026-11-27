@@ -40,6 +40,9 @@ import { nodesOf, separationsOf, stageAt } from './nodes';
 import { orbitAbout, OrbitPanel, type OrbitSource } from './orbit-ui';
 import { ECLIPTIC_POLE } from './orbit-elements';
 import { separationTag, stageRows } from './vehicle';
+import { MAP, stageStyle } from './palette';
+import { siteShort } from './numfmt';
+import { MapLegend } from './legend';
 import { VehiclePanel, ascentMetrics } from './vehicle-ui';
 import { anchorSegments, bodyPath, frameAt, trajectoryPath, type FrameContext, type FramePath } from './paths';
 import { BODIES, BODY_DATA, BODY_GM, bodyIndex, Ephemeris } from './physics';
@@ -423,6 +426,7 @@ const orbitPanel: OrbitPanel = new OrbitPanel(store, orbitSrc = {
   stage: (tm) => { const p = store.get().plan; if (!(p.lowerStages?.length)) return null; const k = stageAt(p, tm); const row = stageRows(p)[k]; return row ? { tag: row.tag, name: row.name } : null; },
 });
 layout.add(orbitPanel.root, 'orbit', 'right');
+orbitPanel.onDetails = () => layout.showTab('orbit');
 layout.add(hud.infoPanel, 'view', 'right');
 const timeline = new Timeline(store, {
   events: () => listed.filter((x) => !x.distant).map((x) => ({ t: x.ev.t, label: eventMarker(x, bodyName), kind: x.failure ? 'failure' : 'event' })),
@@ -430,12 +434,23 @@ const timeline = new Timeline(store, {
   period: (t) => periodAt(t),
   separations: () => { const p = store.get().plan; return separationsOf(p).map((x) => ({ t: p.epoch + x.time, label: `Separation ${separationTag(p, x)}` })); },
   moveSeparation: (j, t) => { editor.moveSeparation(j, t - store.get().plan.epoch); },
-  selectSeparation: (j) => { const p = store.get().plan; const sp = p.separations?.[j]; store.set({ selectedSeparation: j, selectedNode: null, ...(sp ? { t: p.epoch + sp.time, paused: true, loadingTarget: p.epoch + sp.time } : {}) }); if (layout.mode !== 'wide') layout.showTab('nodes'); },
+  selectSeparation: (j) => { const p = store.get().plan; const sp = p.separations?.[j]; store.set({ selectedSeparation: j, selectedNode: null, ...(sp ? { t: p.epoch + sp.time, paused: true, loadingTarget: p.epoch + sp.time } : {}) }); layout.showTab('nodes'); },
 });
 layout.bottom.prepend(timeline.root);
+// Above the timeline: the orbit at the cursor as one line (wide mode; CSS hides it elsewhere) and the map legend.
+const legend = new MapLegend(store);
+const mapStrip = el('div', { className: 'map-strip' }, orbitPanel.strip, legend.root);
+layout.bottom.prepend(mapStrip);
+// Phones and tablets: the legend lives in the View tab (no map area spent on it); on a desktop, beside the timeline.
+const placeLegend = () => {
+  const target = layout.mode === 'wide' ? mapStrip : viewOptions.root;
+  if (legend.root.parentElement !== target) target.append(legend.root);
+};
+layout.onChange(placeLegend);
+placeLegend();
 // Selecting a node on a phone brings its editor up.
 store.subscribe((s, p) => {
-  if (s.selectedNode !== null && s.selectedNode !== p.selectedNode && layout.mode !== 'wide') layout.showTab('nodes');
+  if (s.selectedNode !== null && s.selectedNode !== p.selectedNode) layout.showTab('nodes');
 });
 
 let viewDirty = true;
@@ -949,9 +964,11 @@ function rebuildTrajectory(frame: FrameSpec): void {
   scene.setTrajectory(anchorSegments(path.points, UNIT));
   scene.setTrajectoryDim(r.plan !== s.plan);
   // Burn arcs: the samples between each burn's actual ignition and cutoff.
-  const arcs: ReturnType<typeof anchorSegments> = [];
+  const arcs: (ReturnType<typeof anchorSegments>[number] & { hex: number })[] = [];
   const times = path.times;
+  const burnNodes = nodesOf(r.plan);
   r.result.burns.forEach((b, i) => {
+    const hex = burnStyle(r.plan, burnNodes[i]?.stage).hex;
     if (!(b.burnTime > 0)) return;
     const ta = r.plan.epoch + r.plan.burns[i].start;
     const tb = ta + b.burnTime;
@@ -961,12 +978,20 @@ function rebuildTrajectory(frame: FrameSpec): void {
     while (hi < times.length && times[hi] <= tb) hi++;
     const from = Math.max(0, lo - 1);
     const to = Math.min(times.length, hi + 1);
-    if (to - from >= 2) arcs.push(...anchorSegments(path.points.slice(3 * from, 3 * to), UNIT));
+    if (to - from >= 2) arcs.push(...anchorSegments(path.points.slice(3 * from, 3 * to), UNIT).map((x) => ({ ...x, hex })));
   });
   scene.setBurnArcs(arcs);
   updateDrawn();
   crossingsDirty = true;
   rebuildMarkers(frame);
+}
+
+/** Stage style of the stage that flies a burn (`stage`: its index from nodesOf; the spacecraft if unknown). */
+function burnStyle(plan: MissionPlan, stage: number | undefined) {
+  const rows = stageRows(plan);
+  const k = stage ?? rows.length - 1;
+  const row = rows[k];
+  return stageStyle(k, !row || row.isSpacecraft, row?.tag);
 }
 
 /** Index of the last vertex at or before t. */
@@ -1144,7 +1169,7 @@ function rebuildMarkers(frame: FrameSpec): void {
       cls: `marker ev ${x.failure ? 'failure' : ''} ${x.role} ${s.selectedEvent === x.index ? 'selected' : ''}`,
       pos,
       priority: x.failure ? 900 : s.selectedEvent === x.index ? 800 : x.role === 'closest' ? 20 : 12,
-      color: x.failure ? '#ff4d4d' : x.role === 'closest' ? '#ffd36b' : '#9fc6ff',
+      color: x.failure ? MAP.failure : x.role === 'closest' ? MAP.closest : MAP.event,
       title: eventExplain(x, bodyName),
       t: x.ev.t,
     });
@@ -1156,7 +1181,10 @@ function rebuildMarkers(frame: FrameSpec): void {
       const pos = place(r.plan.epoch + x.node.t);
       if (!pos) return;
       const sel = s.selectedNode === i;
-      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: '#ff8a3d', title: `Maneuver node ${i + 1}: the centre of a planned burn. Tap to edit it, double-tap to focus it.`, t: r.plan.epoch + x.node.t });
+      const ss = burnStyle(r.plan, x.stage);
+      const staged = (r.plan.lowerStages?.length ?? 0) > 0;
+      const tag = staged ? ` · ${ss.tag}` : '';
+      markers.push({ key: `node:${i}`, text: `Burn ${i + 1}${tag}`, cls: `marker node ${sel ? 'selected' : ''}`, pos, priority: sel ? 950 : 700, color: ss.colour, title: `Maneuver node ${i + 1}${staged ? `, flown by ${ss.tag}` : ''}: the centre of a planned burn. Tap to edit it, double-tap to focus it.`, t: r.plan.epoch + x.node.t });
       const flown = r.result.burns[i];
       if (!flown || !(flown.burnTime > 0)) return;
       const t0 = r.plan.epoch + r.plan.burns[i].start;
@@ -1166,8 +1194,8 @@ function rebuildMarkers(frame: FrameSpec): void {
       const b = place(t1);
       if (!a || !b) return;
       const dur = flown.burnTime >= 120 ? `${(flown.burnTime / 60).toFixed(1)} min` : `${flown.burnTime.toFixed(0)} s`;
-      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1} start${sel ? ` ${fmtTime(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: '#ff8a3d', t: t0 };
-      const end: Marker = { key: `burn:${i}:e`, text: short ? `■ B${i + 1} cut short · ${dur} · out of propellant` : `■ B${i + 1} end · ${dur}`, cls: `marker burn-end end ${short ? 'short' : ''} ${sel ? 'selected' : ''}`, pos: b, priority: short ? 945 : sel ? 940 : 690, color: short ? '#ff4d4d' : '#ff8a3d', t: t1 };
+      const start: Marker = { key: `burn:${i}:s`, text: `▶ B${i + 1}${tag} start${sel ? ` ${fmtTime(r.plan.burns[i].start, 0)}` : ''}`, cls: `marker burn-end start ${sel ? 'selected' : ''}`, pos: a, priority: sel ? 940 : 690, color: ss.colour, t: t0 };
+      const end: Marker = { key: `burn:${i}:e`, text: short ? `■ B${i + 1}${tag} cut short · ${dur} · out of propellant` : `■ B${i + 1}${tag} end · ${dur}`, cls: `marker burn-end end ${short ? 'short' : ''} ${sel ? 'selected' : ''}`, pos: b, priority: short ? 945 : sel ? 940 : 690, color: short ? MAP.failure : ss.colour, t: t1 };
       burnEnds.push({ node: `node:${i}`, start, end });
     });
     // Separations: where a stage is dropped (distinct from burns and events: teal, scissors).
@@ -1176,7 +1204,7 @@ function rebuildMarkers(frame: FrameSpec): void {
       const pos = place(r.plan.epoch + sp.time);
       if (!pos) continue;
       const sel = s.selectedSeparation === sp.index && s.selectedNode === null;
-      markers.push({ key: `sep:${sp.index}`, text: `✂ ${separationTag(r.plan, sp)}`, cls: `marker sep ${sel ? 'selected' : ''}`, pos, priority: sel ? 930 : 680, color: '#3fd0c0', title: `Separation: ${rows[sp.dropped]?.name ?? 'the stage'} is dropped here${sp.empty ? ' (empty)' : ` with ${Math.round(sp.propellantLeft).toLocaleString('en-US')} kg of propellant`}; ${rows[sp.next]?.name ?? 'the next stage'} fires from now on. Tap to edit it.`, t: r.plan.epoch + sp.time });
+      markers.push({ key: `sep:${sp.index}`, text: `✂ ${separationTag(r.plan, sp)}`, cls: `marker sep ${sel ? 'selected' : ''}`, pos, priority: sel ? 930 : 680, color: MAP.separation, title: `Separation: ${rows[sp.dropped]?.name ?? 'the stage'} is dropped here${sp.empty ? ' (empty)' : ` with ${Math.round(sp.propellantLeft).toLocaleString('en-US')} kg of propellant`}; ${rows[sp.next]?.name ?? 'the next stage'} fires from now on. Tap to edit it.`, t: r.plan.epoch + sp.time });
     }
   }
 }
@@ -1198,7 +1226,6 @@ store.subscribe((s, p) => {
 
 const ROT_S = new Float64Array(9);
 /** "Cape Canaveral SFS SLC-40, Florida, USA" -> "Cape Canaveral". */
-const siteShort = (name: string) => name.split(',')[0].replace(/ (SFS|SFB|Space|Cosmodrome|Launch|LC|SLC|Site)\b.*$/, '');
 const ROT_F = new Float64Array(9);
 const sitePos = new Float64Array(3);
 
@@ -1459,7 +1486,7 @@ function tick(now: number): void {
     }
     if (scVisible) {
       const on = scene.project(scFrame, 0, camera.position, proj);
-      items.push({ key: 'sc', text: 'Spacecraft', color: '#7dffb0', priority: s.focus === SPACECRAFT ? 1000 : 13.5, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, occluded: on && behindBody(scFrame, 0) });
+      items.push({ key: 'sc', text: 'Spacecraft', color: '#ffffff', priority: s.focus === SPACECRAFT ? 1000 : 13.5, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, occluded: on && behindBody(scFrame, 0) });
     }
     // Markers are drawn in the frame at their own time; in a moving frame they sit on the drawn path, as the path does.
     for (const m of markers) {
@@ -1484,7 +1511,7 @@ function tick(now: number): void {
         const on = scene.project(p, 0, camera.position, proj);
         const next = k === nextA || k === nextD;
         const text = `${c.ascending ? 'AN' : 'DN'} ${c.inclinationDeg.toFixed(2)}°${next ? ` · in ${fmtIn(c.t - t)}` : ''}`;
-        items.push({ key: `pn:${k}`, text, color: '#c9a2ff', priority: next ? 600 : 300, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker pnode ${c.ascending ? 'asc' : 'desc'}`, title: `${c.ascending ? 'Ascending' : 'Descending'} node: crosses ${crossingLabel} at ${c.inclinationDeg.toFixed(2)}° relative inclination. Tap to move the time cursor here.`, occluded: on && behindBody(p, 0), t: c.t });
+        items.push({ key: `pn:${k}`, text, color: MAP.planeNode, priority: next ? 600 : 300, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker pnode ${c.ascending ? 'asc' : 'desc'}`, title: `${c.ascending ? 'Ascending' : 'Descending'} node: crosses ${crossingLabel} at ${c.inclinationDeg.toFixed(2)}° relative inclination. Tap to move the time cursor here.`, occluded: on && behindBody(p, 0), t: c.t });
       }
     }
     // Launch sites on Earth: in Earth's surface frame, or when Earth is large on screen.
@@ -1510,7 +1537,7 @@ function tick(now: number): void {
             siteFrame.set(key, Float64Array.from(sitePos));
             const title = `Launch site ${site.name} (${site.latDeg.toFixed(2)}°, ${site.lonDeg.toFixed(2)}°)${sel ? ', the selected site' : ''}.`;
             siteAndAxisTitles.set(key, title);
-            items.push({ key, text: sel || pxE > 320 ? siteShort(site.name) : '', color: '#7dffb0', priority: sel ? 500 : 40, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker site${sel ? ' selected' : ''}`, title, occluded: on && behindBody(sitePos, 0) });
+            items.push({ key, text: sel || pxE > 320 ? siteShort(site.name) : '', color: MAP.site, priority: sel ? 500 : 40, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker site${sel ? ' selected' : ''}`, title, occluded: on && behindBody(sitePos, 0) });
           }
         }
       }
@@ -1628,6 +1655,8 @@ Object.assign(window, {
     listedEvents: () => listed,
     /** What a tap on a map label or marker does (labelPick), for tests. */
     pickLabel: (key: string) => labelPick(key),
+    /** The label layout's cluster radius in the last frame (px; 22 in touch mode, 7 with a mouse), and its clusters. */
+    labelState: () => ({ clusterRadius: labels.clusterRadius, expanded: labels.expanded, clusters: lastLayout.filter((p) => p.clusterSize > 0).map((p) => ({ key: p.key, x: p.x, y: p.y, size: p.clusterSize })) }),
     /** Screen disc (client px) of a body this frame, or null. */
     bodyDisc(id: string): { x: number; y: number; r: number } | null {
       const i = BODIES.findIndex((b) => b.id === id);

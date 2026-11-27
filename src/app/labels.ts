@@ -127,6 +127,8 @@ export class Labels {
 
   /** Leader of the expanded cluster (a tap on a cluster expands it; a tap elsewhere or a new selection collapses it). */
   expanded: string | null = null;
+  /** Cluster radius of the last layout, px (larger in touch mode). */
+  clusterRadius = 7;
 
   update(items: LabelItem[], ctx: { cursor: number; fadeScale: number; discs: readonly Disc[]; touch: boolean } = { cursor: 0, fadeScale: 0, discs: [], touch: false }): Placed[] {
     // Remove entries no longer present (event and node markers come and go).
@@ -141,10 +143,11 @@ export class Labels {
     const h = this.root.clientHeight;
     const shown = items.filter((i) => i.onScreen);
     if (this.expanded && !shown.some((i) => i.key === this.expanded)) this.expanded = null;
+    this.clusterRadius = ctx.touch ? 22 : 7;
     const layout = layoutLabels(shown.map((i) => ({
       key: i.key, text: i.text, priority: i.priority, x: i.x, y: i.y, marker: i.marker, offset: i.offset, t: i.t,
       selected: /\bselected\b/.test(i.className ?? ''), keep: /\bfailure\b/.test(i.className ?? ''), occluded: i.occluded, body: /^\d+$/.test(i.key),
-    })), { width: w, height: h, cursor: ctx.cursor, fadeScale: ctx.fadeScale, discs: ctx.discs, clusterRadius: ctx.touch ? 22 : 7, expanded: this.expanded });
+    })), { width: w, height: h, cursor: ctx.cursor, fadeScale: ctx.fadeScale, discs: ctx.discs, clusterRadius: this.clusterRadius, expanded: this.expanded });
     const byKey = new Map(layout.map((p) => [p.key, p]));
     for (const item of items) {
       const e = this.entry(item);
@@ -168,6 +171,7 @@ export class Labels {
       e.el.style.opacity = p.opacity < 1 && !item.occluded ? p.opacity.toFixed(2) : '';
       e.dot.style.display = item.marker ? '' : 'none';
       e.dot.style.background = item.color;
+      if (e.el.style.getPropertyValue('--mc') !== item.color) e.el.style.setProperty('--mc', item.color); // marker colour for rings and boxes (style.css)
       if (e.text.textContent !== p.text) e.text.textContent = p.text;
       e.text.style.display = p.label ? '' : 'none';
       if (p.label) {

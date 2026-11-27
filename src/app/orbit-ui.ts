@@ -72,6 +72,13 @@ export class OrbitPanel {
   private readonly pin = el('select', { className: 'orbit-body', title: 'Reference body of the orbit readout' });
   private readonly grid = el('div', { className: 'orbit-grid' });
   private readonly note = el('div', { className: 'hint orbit-note', textContent: 'Osculating elements: the two-body orbit that matches the position and velocity at this instant. This is an N-body flight, so they drift as other bodies and the planet’s oblateness pull; the replay’s real next apsis is shown alongside when known.' });
+  /**
+   * The same readout as one line, for the strip above the timeline (wide mode): the orbit at the time cursor,
+   * labelled so, next to the map and visible from every tab. "Details" opens the full panel.
+   */
+  readonly strip = el('div', { className: 'orbit-strip', role: 'status' });
+  private readonly stripText = el('span', { className: 'os-text' });
+  onDetails: () => void = () => {};
   private pinned = '';
   private raf = 0;
   /** Last computed state (tests and the status line read it). */
@@ -85,6 +92,9 @@ export class OrbitPanel {
     this.pin.append(el('option', { value: '', textContent: 'Auto (dominant body)' }));
     for (const b of BODIES) this.pin.append(el('option', { value: b.id, textContent: b.name }));
     this.pin.onchange = () => { this.pinned = this.pin.value; this.schedule(); };
+    const det = el('button', { className: 'btn small os-more', type: 'button', textContent: 'Details', title: 'Open the full Orbit readout' });
+    det.onclick = () => this.onDetails();
+    this.strip.append(el('span', { className: 'os-label', textContent: 'At cursor' }), this.stripText, det);
     this.root = section('Orbit', 'orbit', el('div', { className: 'row wrap' }, this.titleEl, this.pin), this.grid, this.note);
     store.subscribe((s, p) => { if (s.t !== p.t || s.replay !== p.replay) this.schedule(); });
     onDistanceMode(() => this.schedule());
@@ -103,6 +113,7 @@ export class OrbitPanel {
     const t = s.t;
     if (!r || !this.src.craft(t, this.sc) || !this.src.bodies(t, this.pos, this.vel)) {
       setText(this.titleEl, 'Orbit: no flight at the cursor');
+      setText(this.stripText, 'no flight at the cursor');
       this.grid.replaceChildren();
       this.last = null;
       return;
@@ -114,7 +125,21 @@ export class OrbitPanel {
     const B = BODIES[c];
     const { o, rel, plane } = cur;
     this.last = { body: id, o, alt: o.r - B.refRadius, plane };
-    setText(this.titleEl, `Orbit about ${B.name}${this.pinned ? ' (pinned)' : ''}`);
+    setText(this.titleEl, `Orbit about ${B.name}${this.pinned ? ' (pinned)' : ''} · at cursor`);
+    {
+      const [dl, dv] = distanceRow(o.r, id, B.name);
+      const st0 = this.src.stage(t - s.plan.epoch);
+      setText(this.stripText, [
+        `${B.name}${this.pinned ? ' (pinned)' : ''}`,
+        `Pe ${fromCentre(o.rp, id)}`,
+        `Ap ${o.bound ? fromCentre(o.ra, id) : 'escape'}`,
+        `i ${o.incDeg.toFixed(2)}°`,
+        o.bound ? `T ${dur(o.period)}` : `v∞ ${ms(o.vInf)}`,
+        /^Altitude/.test(dl) ? `now ${dv} alt` : /^Radius/.test(dl) ? `now ${dv} radius` : `now ${dv} from the centre`,
+        `${ms(o.speed)}`,
+        st0 ? `${st0.tag} ${Math.round(this.sc[6]).toLocaleString('en-US')} kg` : '',
+      ].filter(Boolean).join(' · '));
+    }
     // Now.
     const rows: [string, string, string?][] = [];
     const head = (x: string) => rows.push([x, '', 'h']);

@@ -297,19 +297,25 @@ test.describe('desktop', () => {
     await h.focus();
     await page.keyboard.press('ArrowRight');
     expect((await page.locator('.dock.right').boundingBox())!.width).toBeLessThan(after!.width);
-    // Collapse a panel by its header and the left dock by its toggle; reload keeps all of it.
+    // Collapse a panel by its header; reload keeps the width and the collapse. (Wide mode has one dock, on the right.)
     await page.locator('.panel.events .sec-title').click();
-    await page.locator('.dock.left .dock-toggle').click();
     const w1 = (await page.locator('.dock.right').boundingBox())!.width;
     await page.reload();
     await settled(page);
     expect((await page.locator('.dock.right').boundingBox())!.width).toBeCloseTo(w1, 0);
     await expect(page.locator('.panel.events')).toHaveClass(/collapsed/);
-    await expect(page.locator('#hud')).toHaveAttribute('data-left-collapsed', 'true');
     await page.screenshot({ path: `${SHOTS}/9-docks-resized.png` });
+    // Collapse the dock to its rail by its toggle; reload keeps it; expand it again.
+    await page.locator('.dock.right .side-toggle').click();
+    await expect(page.locator('#hud')).toHaveAttribute('data-right-collapsed', 'true');
+    expect((await page.locator('.dock.right').boundingBox())!.width).toBeLessThan(80);
+    await page.reload();
+    await settled(page);
+    await expect(page.locator('#hud')).toHaveAttribute('data-right-collapsed', 'true');
+    await page.locator('.dock.right .side-toggle').click();
+    await expect(page.locator('#hud')).toHaveAttribute('data-right-collapsed', 'false');
     await page.locator('.dock.right .dock-resize').dblclick();
     expect(Math.abs((await page.locator('.dock.right').boundingBox())!.width - before!.width)).toBeLessThan(2);
-    await page.locator('.dock.left .dock-toggle').click();
     await page.screenshot({ path: `${SHOTS}/9b-docks-default.png` });
   });
 

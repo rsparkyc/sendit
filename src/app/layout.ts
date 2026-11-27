@@ -4,10 +4,16 @@
  *
  * Three modes, from the viewport (re-evaluated on resize and orientation change):
  *
- *  - 'wide'  (>= 1200 x 600, desktop): two docked columns at the edges, every
- *    panel open at once (each collapsible), a thin status bar on top and the
- *    timeline below the map. Each dock collapses to a slim rail. Dense and
- *    keyboard-first: what a KSP player expects of a planning tool.
+ *  - 'wide'  (>= 1200 x 600, desktop): one docked column on the right, wide
+ *    enough that values do not wrap (27 % of the window, 360-460 px, resizable),
+ *    with the same tabs as the other modes at its top, here as section links
+ *    over one scrolling column ordered by how often a panel is touched while
+ *    flying: Nodes (list and the selected node's editor) first, then Mission and
+ *    Start (set once; each collapses by its header to a one-line summary,
+ *    remembered), Events, Results, Orbit, View. The tab of the section at the
+ *    top of the column is highlighted as it scrolls. The orbit at the cursor is
+ *    also a one-line strip above the timeline, next to the map. The dock
+ *    collapses to a rail of tab buttons. Selecting a node scrolls to Nodes.
  *  - 'side'  (landscape >= 900 wide, or any landscape phone): one tabbed
  *    column on the right (collapsible to a rail of tab buttons); the map keeps
  *    the rest.
@@ -59,6 +65,8 @@ export interface FreeRect {
 }
 
 const STORE_KEY = 'sendit.layout.v1';
+/** Wide mode's column order: what is touched while tuning a burn first, what is set once next, then the rest. */
+const WIDE_RANK: Record<TabId, number> = { nodes: 0, mission: 1, start: 2, events: 3, results: 4, orbit: 5, view: 6 };
 export const DOCK_MIN = 220;
 export const DOCK_MAX = 520;
 const clampWidth = (w: number) => Math.round(Math.max(DOCK_MIN, Math.min(DOCK_MAX, Math.min(w, (typeof window !== 'undefined' ? window.innerWidth : 2000) * 0.4))));
@@ -74,6 +82,7 @@ export class Layout {
   private readonly sheet = el('section', { className: 'sheet', ariaLabel: 'Panels' });
   private readonly grip = el('button', { className: 'sheet-grip', type: 'button', ariaLabel: 'Resize panel' }, el('span'));
   private readonly tabBar = el('div', { className: 'tabs', role: 'tablist' });
+  private readonly tabRow = el('div', { className: 'tabrow' });
   private readonly sheetBody = el('div', { className: 'sheet-body' });
   private readonly tabButtons = new Map<TabId, HTMLButtonElement>();
   private readonly entries: Entry[] = [];
@@ -82,6 +91,8 @@ export class Layout {
   tab: TabId = 'mission';
   sheetState: SheetState = 'peek';
   private collapsed = { left: false, right: false, side: false };
+  /** A tab press is scrolling the wide column: the scroll spy waits. */
+  private scrolling = false;
   /** Dock widths set by dragging their inner edge (px; null: the default for the window size). */
   private widths: { left: number | null; right: number | null } = { left: null, right: null };
   /** Collapsed panels, by their section class. */
@@ -132,14 +143,28 @@ export class Layout {
     }
     const sideToggle = el('button', { className: 'btn side-toggle', type: 'button' });
     sideToggle.onclick = () => {
-      this.collapsed.side = !this.collapsed.side;
+      const k = this.mode === 'wide' ? 'right' : 'side';
+      this.collapsed[k] = !this.collapsed[k];
       this.persist();
       this.apply();
     };
     this.sheetBody.id = 'sheet-body';
     this.sheetBody.setAttribute('role', 'tabpanel');
-    this.sheet.append(this.grip, el('div', { className: 'tabrow' }, this.tabBar, sideToggle), this.sheetBody);
+    this.tabRow.append(this.tabBar, sideToggle);
+    this.sheet.append(this.grip, this.tabRow, this.sheetBody);
     this.bottom.append(this.bottomExtra);
+    // Wide: the tab of the section at the top of the scrolled column is highlighted.
+    this.rightBody.addEventListener('scroll', () => {
+      if (this.mode !== 'wide' || this.scrolling) return;
+      const top = this.rightBody.getBoundingClientRect().top + 8;
+      let cur: Entry | null = null;
+      for (const e of [...this.entries].sort((a, b) => WIDE_RANK[a.tab] - WIDE_RANK[b.tab] || a.order - b.order)) {
+        if (e.dock === 'bottom') continue;
+        if (e.el.getBoundingClientRect().top <= top) cur = e;
+      }
+      const t = cur?.tab ?? 'nodes';
+      if (t !== this.tab) { this.tab = t; this.apply(); }
+    }, { passive: true });
     root.append(this.topbar, this.left, this.right, this.bottom, this.sheet);
     this.wireGrip();
 
@@ -186,7 +211,7 @@ export class Layout {
     if (this.mode === 'sheet' && open && this.sheetState === 'peek') this.sheetState = 'half';
     if (this.mode === 'side' && open) this.collapsed.side = false;
     if (this.mode === 'wide') {
-      const e = this.entries.find((x) => x.tab === tab);
+      const e = this.entries.find((x) => x.tab === tab && x.dock !== 'bottom');
       if (e) {
         e.el.classList.remove('collapsed');
         const side = e.dock === 'left' ? 'left' : e.dock === 'right' ? 'right' : null;
@@ -194,7 +219,13 @@ export class Layout {
           this.collapsed[side] = false;
           this.persist();
         }
-        requestAnimationFrame(() => e.el.scrollIntoView({ block: 'nearest' }));
+        this.scrolling = true;
+        requestAnimationFrame(() => {
+          // Bring the section to the top of the column (not the page).
+          const b = this.rightBody;
+          b.scrollTop += e.el.getBoundingClientRect().top - b.getBoundingClientRect().top;
+          setTimeout(() => { this.scrolling = false; }, 120);
+        });
       }
     }
     this.persist();
@@ -240,8 +271,12 @@ export class Layout {
 
   /** Put each panel into the container of the current mode. */
   private place(): void {
-    for (const e of this.entries) {
-      const target = this.mode === 'wide' ? (e.dock === 'left' ? this.leftBody : e.dock === 'right' ? this.rightBody : this.bottomExtra) : this.sheetBody;
+    // One column in wide mode: the tab row heads the right dock (the left dock is not used).
+    if (this.mode === 'wide') { if (this.tabRow.parentElement !== this.right || this.tabRow.nextElementSibling !== this.rightBody) this.right.insertBefore(this.tabRow, this.rightBody); }
+    else if (this.tabRow.parentElement !== this.sheet) this.sheet.insertBefore(this.tabRow, this.sheetBody);
+    const list = this.mode === 'wide' ? [...this.entries].sort((a, b) => WIDE_RANK[a.tab] - WIDE_RANK[b.tab] || a.order - b.order) : this.entries;
+    for (const e of list) {
+      const target = this.mode === 'wide' ? (e.dock === 'bottom' ? this.bottomExtra : this.rightBody) : this.sheetBody;
       if (e.el.parentElement !== target || target.lastElementChild !== e.el) target.append(e.el);
     }
   }
@@ -266,7 +301,7 @@ export class Layout {
     const tabbed = this.mode !== 'wide';
     for (const e of this.entries) e.el.hidden = tabbed && e.tab !== this.tab;
     for (const [id, b] of this.tabButtons) {
-      const on = id === this.tab && (this.mode === 'sheet' ? this.sheetState !== 'peek' : this.mode === 'side' ? !this.collapsed.side : true);
+      const on = id === this.tab && (this.mode === 'sheet' ? this.sheetState !== 'peek' : this.mode === 'side' ? !this.collapsed.side : !this.collapsed.right);
       b.setAttribute('aria-selected', String(id === this.tab));
       b.classList.toggle('active', on);
       b.tabIndex = id === this.tab ? 0 : -1;
@@ -280,9 +315,11 @@ export class Layout {
       b.title = b.ariaLabel;
       b.setAttribute('aria-expanded', String(!c));
     }
-    const st = this.sheet.querySelector('.side-toggle') as HTMLButtonElement;
-    st.textContent = this.collapsed.side ? '‹' : '›';
-    st.ariaLabel = this.collapsed.side ? 'Show panels' : 'Hide panels';
+    const st = this.tabRow.querySelector('.side-toggle') as HTMLButtonElement;
+    const hid = this.mode === 'wide' ? this.collapsed.right : this.collapsed.side;
+    st.textContent = hid ? '‹' : '›';
+    st.ariaLabel = hid ? 'Show panels' : 'Hide panels';
+    st.setAttribute('aria-expanded', String(!hid));
     st.title = st.ariaLabel;
     this.grip.setAttribute('aria-expanded', String(this.sheetState !== 'peek'));
     this.grip.ariaLabel = `Panel height: ${this.sheetState}. Tap to change.`;

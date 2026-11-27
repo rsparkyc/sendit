@@ -1,6 +1,7 @@
 /*
  * Layout system (layout.ts sets data-mode on #hud and <html>):
- *  wide  >= 1200 x 600: two docks at the edges, status bar on top, timeline below the map.
+ *  wide  >= 1200 x 600: one tabbed dock on the right (27% of the width), status bar on top,
+ *        orbit-at-cursor strip and timeline below the map.
  *  side  landscape tablets / phones: one tabbed column on the right.
  *  sheet portrait phones / tablets: full-screen map, bottom sheet with tabs (peek / half / full).
  * Dark only: a space map reads best on black; color-scheme is declared dark.
@@ -19,7 +20,7 @@
   --burn: #ff8a3d;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --dock-l: 280px;
-  --dock-r: 290px;
+  --dock-r: clamp(360px, 27vw, 460px);
   --side-w: min(340px, 36vw);
   --tap: 30px;
   --gap: 8px;
@@ -56,9 +57,8 @@ html.touch .label .text { padding: 8px 6px; margin: -8px -6px; line-height: 16px
 
 /* Status bar: always visible. */
 .topbar { position: absolute; top: calc(var(--sa-t) + 6px); left: calc(var(--sa-l) + 6px); right: calc(var(--sa-r) + 6px); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 5; }
-#hud[data-mode="wide"] .topbar { left: calc(var(--dock-l) + 18px); right: calc(var(--dock-r) + 18px); }
-#hud[data-mode="wide"][data-left-collapsed="true"] .topbar { left: 56px; }
-#hud[data-mode="wide"][data-right-collapsed="true"] .topbar { right: 56px; }
+#hud[data-mode="wide"] .topbar { right: calc(var(--dock-r) + 18px); }
+#hud[data-mode="wide"][data-right-collapsed="true"] .topbar { right: 76px; }
 #hud[data-mode="side"] .topbar { right: calc(var(--side-w) + var(--sa-r) + 12px); }
 #hud[data-mode="side"][data-side-collapsed="true"] .topbar { right: calc(var(--sa-r) + 64px); }
 .tb-clock { display: flex; align-items: center; gap: 4px; }
@@ -93,7 +93,15 @@ html.touch .ed .sec-title { min-height: 40px; }
 .dock > * { pointer-events: auto; }
 .dock.left { left: calc(var(--sa-l) + 6px); }
 .dock.right { right: calc(var(--sa-r) + 6px); width: var(--dock-r); }
-#hud[data-mode="wide"] .dock { display: flex; }
+#hud[data-mode="wide"] .dock.right { display: flex; }
+/* Wide: the tab row heads the dock; collapsed, the dock is a rail of tab buttons. */
+#hud[data-mode="wide"] .dock.right .tabrow { background: var(--panel-solid); border: 1px solid var(--line); border-radius: 6px; }
+#hud[data-mode="wide"] .dock.right .tab { min-height: 40px; }
+#hud[data-mode="wide"] .dock-toggle { display: none; }
+#hud[data-mode="wide"] .side-toggle { display: block; min-width: 32px; }
+#hud[data-mode="wide"][data-right-collapsed="true"] .dock.right { width: 64px; }
+#hud[data-mode="wide"][data-right-collapsed="true"] .dock.right .tabrow { flex-direction: column-reverse; }
+#hud[data-mode="wide"][data-right-collapsed="true"] .dock.right .tabs { flex-direction: column; }
 .dock-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 6px; scrollbar-width: thin; overscroll-behavior: contain; }
 .dock-body > * { flex: none; }
 .dock { --rz: 10px; }
@@ -114,9 +122,8 @@ html.touch .ed .sec-title { min-height: 40px; }
 /* Bottom bar: timeline (+ readouts in wide mode). */
 .bottom { position: absolute; left: calc(var(--sa-l) + 6px); right: calc(var(--sa-r) + 6px); bottom: calc(var(--sa-b) + 6px); display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 .bottom > * { pointer-events: auto; }
-#hud[data-mode="wide"] .bottom { left: calc(var(--dock-l) + 18px); right: calc(var(--dock-r) + 18px); }
-#hud[data-mode="wide"][data-left-collapsed="true"] .bottom { left: 56px; }
-#hud[data-mode="wide"][data-right-collapsed="true"] .bottom { right: 56px; }
+#hud[data-mode="wide"] .bottom { right: calc(var(--dock-r) + 18px); }
+#hud[data-mode="wide"][data-right-collapsed="true"] .bottom { right: 76px; }
 #hud[data-mode="side"] .bottom { right: calc(var(--side-w) + var(--sa-r) + 12px); }
 #hud[data-mode="side"][data-side-collapsed="true"] .bottom { right: calc(var(--sa-r) + 64px); }
 #hud[data-mode="sheet"] .bottom { bottom: calc(var(--sheet-h, 0px) + 4px); left: calc(var(--sa-l) + 4px); right: calc(var(--sa-r) + 4px); }
@@ -449,9 +456,7 @@ html.touch .fctl .btn.small { min-width: 44px; flex: 1 0 44px; }
 .apsis-group .ename { color: var(--muted); }
 
 /* Narrower docks on smaller desktop windows (1280 x 720 keeps ~60% of the width for the map); resizable (layout.ts). */
-@media (max-width: 1439px) {
-  :root { --dock-l: 248px; --dock-r: 264px; }
-}
+/* (wide mode's single dock is sized by --dock-r: 27% of the window, 360-460 px; resizable in layout.ts.) */
 
 /* Marker kinds: events are blue / yellow diamonds with plain text; maneuver nodes and burn ends are orange, bold, boxed;
    plane nodes are violet triangles; launch sites green squares. Shape and weight differ, not only colour. */
@@ -586,3 +591,71 @@ html.touch .scrub-met { min-height: 44px; }
 .fctl input.date-input { min-width: 13.5em; flex: 1 1 13.5em; font-size: 12px; }
 #hud[data-mode="sheet"] .tb-key { white-space: normal; overflow: visible; }
 .fctl:has(> input.az-input), .fctl:has(> input.date-input) { flex-wrap: wrap; }
+
+/* Orbit-at-cursor strip and map legend (above the timeline). */
+.map-strip { display: flex; align-items: flex-start; gap: 6px; pointer-events: none; }
+.map-strip > * { pointer-events: auto; }
+.orbit-strip { display: none; flex: 1 1 auto; min-width: 0; align-items: center; gap: 8px; padding: 3px 4px 3px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font: 12px var(--mono); }
+#hud[data-mode="wide"] .orbit-strip { display: flex; }
+.os-label { font: 700 11px system-ui, sans-serif; text-transform: uppercase; letter-spacing: 0.04em; color: #0b1220; background: #dde5ee; border-radius: 3px; padding: 1px 5px; white-space: nowrap; }
+.os-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.os-more { flex: none; }
+.map-legend { margin-left: auto; flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; max-width: min(360px, 100%); }
+.map-legend > summary { cursor: pointer; padding: 4px 10px; min-height: var(--tap); display: flex; align-items: center; color: var(--muted); list-style: none; }
+.map-legend > summary::before { content: '▸ '; white-space: pre; }
+.map-legend[open] > summary::before { content: '▾ '; }
+.lg-list { list-style: none; margin: 0; padding: 0 10px 8px; display: grid; gap: 3px; max-height: 45vh; overflow-y: auto; }
+.lg-list li { display: flex; align-items: center; gap: 8px; }
+.lg-sw { flex: none; width: 26px; display: inline-flex; align-items: center; justify-content: center; color: var(--c); font: 700 11px var(--mono); }
+.lg-line { height: 2px; background: var(--c); }
+.lg-line.lg-faint { opacity: 0.5; height: 1px; }
+.lg-burn { height: 14px; border-radius: 2px; background: var(--c); color: #0b0b12; }
+.lg-burn:empty { height: 5px; }
+.lg-dot::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 2px #000, 0 0 0 3px var(--c); }
+.lg-diamond::before { content: ''; width: 7px; height: 7px; background: var(--c); transform: rotate(45deg); }
+.lg-bold::before { width: 9px; height: 9px; }
+.lg-tri::before { content: ''; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid var(--c); }
+.lg-square::before { content: ''; width: 8px; height: 8px; background: var(--c); border-radius: 1px; }
+.lg-glyph { font-size: 13px; }
+
+/* Stage identity (palette.ts): chips, timeline spans striped in the stage colour with the tag written on them. */
+.nstage, .nstage.sc { background: var(--stage); color: #0b0b12; }
+.span.burn { background: repeating-linear-gradient(45deg, var(--stage, var(--burn)) 0 3px, color-mix(in srgb, var(--stage, var(--burn)) 45%, transparent) 3px 6px); }
+.span.burn .span-tag { position: absolute; left: 2px; top: -13px; font: 700 11px/1 var(--mono); color: var(--stage); text-shadow: 0 0 2px #000; pointer-events: none; white-space: nowrap; }
+.label.marker.node .dot, .label.marker.burn-end .dot { box-shadow: 0 0 0 2px #000, 0 0 0 3px var(--mc, #ff8a3d); }
+.label.marker.node .text { border-color: var(--mc, #ff8a3d); }
+.label.marker.node.selected .dot, .label.marker.burn-end.selected .dot { box-shadow: 0 0 0 2px #000, 0 0 0 4px #fff; }
+
+/* Launch cost line (Start panel): what this launch costs or saves against the reference, what it leaves. */
+.launch-cost { border-left: 3px solid var(--accent); padding: 4px 0 4px 8px; margin-bottom: 6px; }
+.launch-cost .lc-main { font-size: 14px; }
+.launch-cost .lc-ref { color: var(--muted); font-size: 12px; }
+.launch-cost .cost { color: var(--warn); }
+.launch-cost .save { color: var(--accent); }
+
+/* Results: the final orbit and each objective's evidence. */
+.evidence .final-orbit b { font: 12px var(--mono); }
+.evidence-list { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 4px; }
+.evidence-list li { font-size: 12px; overflow-wrap: anywhere; }
+.evidence-list li .mark { font-weight: 700; }
+.evidence-list li.ok .mark { color: var(--accent); }
+.evidence-list li.no .mark { color: var(--bad); }
+.evidence-list small { display: block; color: var(--muted); }
+
+/* Long names wrap instead of being cut; a select shows a short name with the full one in its title and below. */
+.site-info { overflow-wrap: anywhere; }
+.stage-name, .orbit-title { overflow-wrap: anywhere; }
+.ascent-summary .kv b, .inc-value { white-space: nowrap; }
+/* Tabbed modes: no orbit strip (the Orbit tab holds it) and the legend sits in the View tab (main.ts), so the strip takes no map height. */
+#hud:not([data-mode="wide"]) .map-strip { display: none; }
+.sheet-body .map-legend, .dock-body .map-legend { margin: 6px 0 0; max-width: none; }
+/* A stage's result: the tag and name on one line, its figures under it (no three-line squeeze). */
+.kv.stage-line { flex-wrap: wrap; }
+.kv.stage-line > span { flex: 1 1 100%; }
+.kv.stage-line > b { flex: 1 1 100%; text-align: left; padding-left: 8px; font-weight: 400; }
+/* A collapsed set-once section keeps a one-line summary after its title (dom.ts setSummary). */
+.ed.collapsed .sec-title[data-summary]:not([data-summary=""])::after { content: ' · ' attr(data-summary); text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--fg); }
+.ed.collapsed .sec-title { line-height: 1.35; }
+.launch-cost .lc-parts { color: var(--muted); font-size: 12px; }
+/* Outside wide mode the cost line stays one line (it is sticky over the charts); its detail is in the title and the wide column. */
+#hud:not([data-mode="wide"]) .launch-cost .lc-ref { display: none; }

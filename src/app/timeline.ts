@@ -22,6 +22,8 @@
 import { el, formatMet, setText } from './dom';
 import { axisTime, fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { nodesOf } from './nodes';
+import { stageStyle } from './palette';
+import { stageRows } from './vehicle';
 import type { AppState, Store } from './store';
 import { formatCalendar, tdbToCalendar } from './time';
 
@@ -393,14 +395,22 @@ export class Timeline {
     const out: HTMLElement[] = [];
     const r = s.replay;
     const flown = r && r.plan === s.plan && r.preview === null ? r.result.burns : null;
+    const rows = stageRows(s.plan);
+    const staged = rows.length > 1;
     nodesOf(s.plan).forEach((n, i) => {
+      const row = rows[n.stage];
+      const ss = stageStyle(n.stage, !row || row.isSpacecraft, row?.tag);
       const t0 = ep + n.burn.start;
       const dur = flown?.[i] ? flown[i].burnTime : n.burn.duration;
       const short = !!flown?.[i] && flown[i].burnTime < n.burn.duration * 0.999;
       const x0 = ((t0 - w0) / (w1 - w0)) * 100;
       const w = (dur / (w1 - w0)) * 100;
       if (x0 > 100 || x0 + w < 0) return;
-      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}: ${fmtTime(n.burn.start, 0)} to ${fmtTime(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
+      const sp = el('span', { className: `span burn${short ? ' short' : ''}${s.selectedNode === i ? ' selected' : ''}`, title: `Burn ${i + 1}${staged ? ` (${ss.tag})` : ''}: ${fmtTime(n.burn.start, 0)} to ${fmtTime(n.burn.start + dur, 0)}${short ? ' (cut short: out of propellant)' : ''}` });
+      sp.style.setProperty('--stage', ss.colour);
+      sp.dataset.stage = ss.tag;
+      // The tag written on the span when there is room (CSS hides it on narrow spans); colour is the second cue.
+      if (staged && w > 3) sp.append(el('span', { className: 'span-tag', textContent: ss.tag }));
       sp.style.left = `${Math.max(0, x0)}%`;
       sp.style.width = `${Math.min(100 - Math.max(0, x0), Math.max(w, 0))}%`;
       out.push(sp);

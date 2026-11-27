@@ -421,6 +421,26 @@ The main page is the game's core loop: an editable mission plan, replayed live.
   plan is also kept in local storage. The replay digest is shown under the flight panel.
 - Panels: `editor-ui.ts` (plain DOM, built once and updated in place from the store;
   helpers in `dom.ts`), events filtering in `events-view.ts`, editing actions in `editor.ts`.
+- **Layout** (`layout.ts`): one instance of every panel, the same tabs in every mode. On a
+  desktop (>= 1200 x 600) a single dock on the right (27 % of the width, 360-460 px,
+  resizable, collapsible to a rail of tabs, all persisted) holds the tabs: Nodes (node list,
+  selected node's editor, events and the full Orbit readout, next to the map), Mission and
+  Start (set once), Results and View. The orbit at the time cursor is also a one-line strip
+  marked "At cursor" above the timeline; the Results panel shows the final orbit and each
+  objective's evidence. Map share with a node selected (grid sample, Chromium): 1280 x 720
+  59 %, 1440 x 900 62 %, 1920 x 1080 67 % (two docks before: 51 / 54 / 64 %).
+- **Map colours and shapes** (`palette.ts`, with a legend next to the timeline): trajectory
+  near-white ahead of the cursor and grey behind it; burns drawn thick in the colour of the
+  stage that flies them (S1 magenta, S2 cyan, S3 pink, S4 lavender, spacecraft orange) with
+  the stage tag written on node and ignition / cutoff markers ("B1 · S2 end") and on timeline
+  spans; events blue diamonds, closest approach amber, failures red and bold, separations
+  teal ✂ "S1 → S2", plane AN / DN violet triangles, launch sites green squares (the only
+  green on the map). Every kind differs by shape or text as well as colour.
+- **Number formats** (`numfmt.ts`): one precision per quantity. Budgets, limits and totals in
+  whole m/s; a single burn's Δv to 0.1 m/s; masses in kg (t from 100 t); site names shortened
+  without their parenthetical, the full name in the title and under the site selector. The
+  Start panel's first line says what the launch leaves for the flight and what it costs or
+  saves in ascent Δv against the mission's reference launch.
 - **Planner** (`planner-ui.ts`, a full-window mode opened from the nodes panel):
   porkchop heatmap (viridis, contours, Type I/II boundary, real-date axes; tap, drag or
   hover to read, release to select), launch opportunities into a plane containing the

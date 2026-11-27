@@ -13,15 +13,17 @@
  *
  * Each panel builds its DOM once and updates it from the store.
  */
-import { el, esc, fillBodySelect, formatMet, parseDuration, section, setText, setValue } from './dom';
+import { el, esc, fillBodySelect, formatMet, parseDuration, section, setSummary, setText, setValue } from './dom';
 import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import type { Editor } from './editor';
 import { Tuner } from './tuner';
-import { tooShort, objectiveBodies } from './status';
+import { tooShort, objectiveBodies, finalOrbit } from './status';
+import { stageChip, stageStyle } from './palette';
 import { bandFromCentre, bodyRadius, convertText, distanceMode, fromCentre, fromSurface, onDistanceMode } from './units';
 import { eventLabel, listEvents, type ListedEvent } from './events-view';
 import { groupCrossings, type PlaneCrossing } from './plane-nodes';
 import { formatDistance, formatSpeed } from './format';
+import { fmtAngle, fmtDv, fmtDvFine, fmtMass, tidyDetail, siteName } from './numfmt';
 import {
   LAUNCH_SITES, PAR_SCORE, allowedSites, briefingText, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, errorCount, simulationStartOffset,
   type BriefingDistance, type MissionDefinition, type MissionPlan, type Objective, type PlanFrame,
@@ -39,7 +41,7 @@ export function siteSummary(def: MissionDefinition, site: string): string | null
   if (!o.offered) return `Not offered: ${o.reason}`;
   const d = (x: number) => (x >= DAY ? `${(x / DAY).toFixed(1)} d` : `${(x / 3600).toFixed(1)} h`);
   // Limits are whole m/s (rounded up to 10 m/s): no false decimal.
-  return `Reference ${fmtDv(o.deltaV)}, ${d(o.time)} · limits ${Math.round(o.maxDeltaV).toLocaleString('en-US')} m/s, ${d(o.maxTime)}`;
+  return `Reference ${fmtDv(o.deltaV)}, ${d(o.time)} · limits ${fmtDv(o.maxDeltaV)}, ${d(o.maxTime)}`;
 }
 import { conformance, craftPerformance, launchOf, missionById, MISSIONS, SPACECRAFT_PRESETS } from './missions';
 import { budget, dvMagnitude, elementsFromState, nodesOf, separationOffer, separationRefusal, separationsOf, stageAt, stateFromElements, type OrbitElements } from './nodes';
@@ -67,8 +69,7 @@ export function bodyName(id: string): string {
   return i >= 0 ? BODIES[i].name : id;
 }
 
-const fmtDv = (v: number) => (Number.isFinite(v) ? `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} m/s` : '—');
-const fmtKg = (v: number) => `${Math.round(v).toLocaleString('en-US')} kg`;
+const fmtKg = fmtMass;
 
 function numInput(title: string, step: string, onCommit: (v: number) => void, cls = ''): HTMLInputElement {
   const i = el('input', { type: 'text', title, className: `num ${cls}`, inputMode: 'decimal', enterKeyHint: 'done', spellcheck: false, autocomplete: 'off' });
@@ -147,6 +148,7 @@ export class MissionPanel {
       const m = missionById(s.missionId);
       setValue(this.sel, s.missionId);
       setText(this.blurb, m?.def ? briefingText(m.def, briefingDistance) : (m?.blurb ?? ''));
+      setSummary(this.root, m?.title ?? '');
     }
     if (!p || s.replay !== p.replay || s.missionId !== p.missionId || s.plan !== p.plan) {
       const m = missionById(s.missionId);
@@ -175,15 +177,15 @@ export class MissionPanel {
           this.objectives.append(
             el('li', { className: `obj ${state}${current ? '' : ' stale'}` },
               el('span', { className: 'mark', textContent: state === 'ok' ? '✓' : state === 'no' ? '✗' : '…' }),
-              el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), el('small', { textContent: convertText(r?.detail ?? '', objectiveBodies([o])[0] ?? null) }), extend)));
+              el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), el('small', { textContent: tidyDetail(convertText(r?.detail ?? '', objectiveBodies([o])[0] ?? null)) }), extend)));
         }
         if (ev?.success) {
           const k = ev.keys;
-          setText(this.score, `MISSION COMPLETE · score ${(k?.score ?? ev.score).toLocaleString('en-US')} · Δv total ${k ? fmtDv(k.deltaV / 10) : fmtDv(ev.deltaV)}${ev.ascentDeltaV > 0 ? ` (ascent ${fmtDv(ev.ascentDeltaV)} + flown ${fmtDv(ev.flightDeltaV)})` : ''} · time ${((k?.time ?? ev.missionTime) / DAY).toFixed(2)} d`);
+          setText(this.score, `MISSION COMPLETE · score ${(k?.score ?? ev.score).toLocaleString('en-US')} · Δv total ${k ? fmtDvFine(k.deltaV / 10) : fmtDvFine(ev.deltaV)}${ev.ascentDeltaV > 0 ? ` (ascent ${fmtDv(ev.ascentDeltaV)} + flown ${fmtDv(ev.flightDeltaV)})` : ''} · time ${((k?.time ?? ev.missionTime) / DAY).toFixed(2)} d`);
         } else setText(this.score, ev ? (ev.ruleViolations?.length ? 'Not scored: the plan breaks the mission rules' : 'Objectives not met yet') : '');
         this.score.className = `score${ev?.success ? ' success' : ''}`;
         const sc = m.def.scoring;
-        const siteNote = m.def.launchSites?.length ? ` Par is the same for every site; the Δv and time limits above are for the chosen site${s.plan.start.kind === 'launch' ? ` (${LAUNCH_SITES.find((x) => x.id === (s.plan.start as { site: string }).site)?.name ?? ''})` : ''}.` : '';
+        const siteNote = m.def.launchSites?.length ? ` Par is the same for every site; the Δv and time limits above are for the chosen site${s.plan.start.kind === 'launch' ? ` (${siteName(LAUNCH_SITES.find((x) => x.id === (s.plan.start as { site: string }).site)?.name ?? '')})` : ''}.` : '';
         const vehicleNote = m.def.rules.vehicle ? ' Δv is the TOTAL: the ascent (what the vehicle spends reaching your parking orbit) plus everything flown after insertion, by any stage. The reference drops the upper stage with propellant still in it, so par can be beaten: a better site, azimuth or parking orbit, or using more of the upper stage, all lower the total.' : '';
         setText(this.par, `Par (the best site's reference solution): Δv ${fmtDv(sc.deltaVRef)}, ${(sc.timeRef / DAY).toFixed(1)} d.${vehicleNote}${siteNote} Matching par scores ${PAR_SCORE.toLocaleString('en-US')}; less Δv and less time score higher. Leaderboards also rank by total Δv alone and by time alone.`);
         const issues = conformance(m, s.plan);
@@ -263,7 +265,7 @@ export class StartPanel {
         ctx.editor.setLaunch({ ...m.launch, time: ctx.store.get().plan.epoch });
       }
     };
-    for (const s of LAUNCH_SITES) this.site.append(el('option', { value: s.id, textContent: `${s.name} (${s.latDeg.toFixed(1)}°)` }));
+    for (const s of LAUNCH_SITES) this.site.append(el('option', { value: s.id, textContent: `${siteName(s.name)} ${fmtAngle(s.latDeg, 1)}` }));
     this.siteInfo.className = 'hint site-info';
     const launch = () => this.launch();
     this.site.onchange = () => {
@@ -419,12 +421,15 @@ export class StartPanel {
         const o = def ? siteOption(def, site.id) : undefined;
         const off = !!allowed && !allowed.includes(site.id);
         opt.disabled = off;
-        const extra = o && o.offered ? ` · ref ${Math.round(o.deltaV).toLocaleString('en-US')} m/s, max ${o.maxDeltaV.toLocaleString('en-US')} m/s` : off ? ' · not offered' : '';
-        opt.textContent = `${site.name} (${site.latDeg.toFixed(1)}°)${extra}`;
-        opt.title = def ? (siteSummary(def, site.id) ?? '') : '';
+        // Short name and latitude first (what a closed select shows); the full name is in the title and the line below.
+        const extra = off ? ' · not offered' : '';
+        opt.textContent = `${siteName(site.name)} ${fmtAngle(site.latDeg, 1)}${extra}`;
+        opt.title = `${site.name}${def ? `. ${siteSummary(def, site.id) ?? ''}` : ''}`;
       }
     }
-    setText(this.siteInfo, def ? (siteSummary(def, current) ?? '') : '');
+    const full = LAUNCH_SITES.find((x) => x.id === current)?.name ?? '';
+    setText(this.siteInfo, `${full}${def ? ` · ${siteSummary(def, current) ?? ''}` : ''}`);
+    this.site.setAttribute('aria-description', full);
   }
 
   private render(plan: MissionPlan): void {
@@ -464,6 +469,7 @@ export class StartPanel {
       const inc = (Math.acos(Math.max(-1, Math.min(1, c))) * 180) / Math.PI;
       this.incOut.innerHTML = `<span>Inclination</span><b class="inc-value">${inc.toFixed(2)}°</b><span>steer ${groundRelativeAzimuthDeg(site, l.azimuthDeg).toFixed(1)}° ground-rel. · insertion T+${simulationStartOffset(st)} s</span>`;
       this.renderAzChoices(plan);
+      setSummary(this.root, `${siteName(site.name)} · az ${fmtAngle(l.azimuthDeg, 1)} · ${fromSurface(l.altitudeM, 'earth')} · i ${fmtAngle(inc)}`);
     } else {
       const i = bodyIndex(st.center);
       if (i >= 0) {
@@ -798,11 +804,11 @@ export class NodesPanel {
       const st = rows[x.stage];
       const r = el('div', { className: `node-row${s.selectedNode === i ? ' selected' : ''}${e ? ' invalid' : ''}`, dataset: { index: String(i) } },
         el('span', { className: 'nidx', textContent: `#${i + 1}` }),
-        staged && st ? el('span', { className: `nstage${st.isSpacecraft ? ' sc' : ''}`, textContent: st.tag, title: `Fired by ${st.name}` }) : null,
+        staged && st ? stageChip(x.stage, st.isSpacecraft, st.tag, `Fired by ${st.name}`) : null,
         el('span', { className: 'nmet', textContent: fmtTime(x.node.t, 0), title: otherTime(x.node.t) }),
-        el('span', { className: 'ndv', textContent: fmtDv(dvMagnitude(x.node.dv)) }),
+        el('span', { className: 'ndv', textContent: fmtDvFine(dvMagnitude(x.node.dv)) }),
         el('span', { className: 'nframe', textContent: frame }),
-        actual ? el('span', { className: 'nact', textContent: `actual ${fmtDv(actual.deltaV)}` }) : null,
+        actual ? el('span', { className: 'nact', textContent: `actual ${fmtDvFine(actual.deltaV)}` }) : null,
         e ? el('div', { className: 'nerr', textContent: e.join('; ') }) : null,
         x.short ? el('div', { className: 'nerr', textContent: staged ? `Not enough propellant in ${st?.name ?? 'this stage'}: this burn will be cut short. Separate before it, or split it across a separation.` : 'Not enough propellant: this burn will be cut short' }) : null);
       r.onclick = () => this.ctx.store.set({ selectedNode: i, selectedSeparation: null });
@@ -843,9 +849,9 @@ export class NodesPanel {
       const rep = reports?.[i];
       const mdot = engines[x.burn.engine]?.thrust / ((engines[x.burn.engine]?.isp ?? 1) * 9.80665);
       this.readout.innerHTML =
-        (staged && stage ? `<div class="kv stage-kv"><span>Fired by</span><b class="nstage-name">${esc(stage.tag)} · ${esc(stage.name)}</b></div>` : '') +
-        `<div class="kv"><span>Requested Δv</span><b>${fmtDv(dvMagnitude(x.node.dv))}</b></div>` +
-        `<div class="kv"><span>Replay Δv (expended)</span><b class="${rep && Math.abs(rep.deltaV - dvMagnitude(x.node.dv)) > 0.05 * Math.max(1, dvMagnitude(x.node.dv)) ? 'warn' : ''}">${rep ? fmtDv(rep.deltaV) : s.replay?.plan === plan && s.replay.preview === null ? 'not flown' : '…'}</b></div>` +
+        (staged && stage ? `<div class="kv stage-kv"><span>Fired by</span><b class="nstage-name" style="--stage:${stageStyle(x.stage, stage.isSpacecraft, stage.tag).colour}">${esc(stage.tag)} · ${esc(stage.name)}</b></div>` : '') +
+        `<div class="kv"><span>Requested Δv</span><b>${fmtDvFine(dvMagnitude(x.node.dv))}</b></div>` +
+        `<div class="kv"><span>Replay Δv (expended)</span><b class="${rep && Math.abs(rep.deltaV - dvMagnitude(x.node.dv)) > 0.05 * Math.max(1, dvMagnitude(x.node.dv)) ? 'warn' : ''}">${rep ? fmtDvFine(rep.deltaV) : s.replay?.plan === plan && s.replay.preview === null ? 'not flown' : '…'}</b></div>` +
         `<div class="kv"><span>Burn</span><b>${x.burn.duration.toFixed(2)} s${rep ? ` (flown ${rep.burnTime.toFixed(2)} s)` : ''}</b></div>` +
         `<div class="kv" data-time-other="1"><span>${timeMode() === 'met' ? 'Absolute' : 'Mission elapsed'}</span><b class="node-time-other">${esc(otherTime(x.node.t))}</b></div>` +
         `<div class="kv"><span>Ignition → cutoff</span><b>${esc(fmtTime(x.burn.start, 1))} → ${esc(fmtTime(x.burn.start + x.burn.duration, 1))}</b></div>` +
@@ -875,7 +881,7 @@ export class NodesPanel {
         this.parked.append(el('div', { className: 'node-row parked-row' },
           el('span', { className: 'nidx', textContent: 'off' }),
           el('span', { className: 'nmet', textContent: fmtTime(n.t, 0) }),
-          el('span', { className: 'ndv', textContent: fmtDv(dvMagnitude(n.dv)) }),
+          el('span', { className: 'ndv', textContent: fmtDvFine(dvMagnitude(n.dv)) }),
           el('span', { className: 'nrow-acts' },
             nodeAction('Enable', 'toggle', `Enable the disabled node at ${fmtTime(n.t, 0)}`, () => this.ctx.editor.enableParked(k)),
             nodeAction('Delete', 'danger', `Delete the disabled node at ${fmtTime(n.t, 0)}`, () => this.ctx.editor.deleteParked(k)))));
@@ -1069,6 +1075,8 @@ export class ResultsPanel {
   private readonly share = el('div', { className: 'share' });
   private readonly digest = el('div', { className: 'digest', title: 'Replay digest: two players with the same digest flew bit-identical flights' });
   private readonly status = el('div', { className: 'status' });
+  /** At the end of the flight: the final orbit and each objective's evidence (the status line shows the cursor). */
+  private readonly evidence = el('div', { className: 'evidence' });
 
   constructor(private readonly ctx: UiContext) {
     const copy = el('button', { className: 'btn small', textContent: 'Copy share link', type: 'button' });
@@ -1087,7 +1095,7 @@ export class ResultsPanel {
       setTimeout(() => (copy.textContent = 'Copy share link'), 1500);
     };
     this.share.append(copy);
-    this.root = section('Flight', 'results', this.status, this.outcome, this.table, this.burns, this.share, this.digest);
+    this.root = section('Flight', 'results', this.status, this.outcome, this.evidence, this.table, this.burns, this.share, this.digest);
     ctx.store.subscribe((s, p) => {
       if (s.replay !== p.replay || s.plan !== p.plan || s.replayStatus !== p.replayStatus) this.render();
     });
@@ -1115,6 +1123,10 @@ export class ResultsPanel {
     const bad = res.outcome !== 'completed' && !(res.outcome === 'atmosphere' && r.evaluation?.success);
     this.outcome.className = `outcome o-${res.outcome}${bad ? ' fail' : ''}${current ? '' : ' stale'}`;
     this.outcome.innerHTML = `<b>${esc(OUTCOME_TEXT[res.outcome] ?? res.outcome)}</b> ${res.reason ? `<span>${esc(res.reason)}</span>` : ''}`;
+    const fin = finalOrbit(s, bodyName);
+    const evObjs = r.evaluation?.objectives ?? [];
+    this.evidence.innerHTML = (fin ? `<div class="kv final-orbit"><span>Final orbit (end of flight)</span><b>${esc(fin)}</b></div>` : '') +
+      (evObjs.length ? `<ul class="evidence-list">${evObjs.map((o) => `<li class="${o.ok ? 'ok' : 'no'}"><span class="mark">${o.ok ? '✓' : '✗'}</span> <b>${esc(objectiveText(o.objective))}</b> <small>${esc(tidyDetail(convertText(o.detail ?? '', objectiveBodies([o.objective])[0] ?? null)))}</small></li>`).join('')}</ul>` : '');
     const b = budget(r.plan);
     const rows = stageRows(r.plan);
     const staged = rows.length > 1;
@@ -1128,12 +1140,13 @@ export class ResultsPanel {
       const row = rows[x.stage];
       const fate = x.droppedInAscent ? 'dropped in the ascent' : x.separatedAt !== null ? `separated ${fmtTime(x.separatedAt, 0)}` : 'to the end';
       const orbit = res.ascent && res.ascent.upperStage === x.stage ? ' · reached orbit' : '';
-      return `<div class="kv stage-line"><span>${esc(row?.tag ?? '')} ${esc(row?.name ?? '')}</span><b>Δv ${fmtDv(x.deltaV)}${x.ascentDeltaV > 0 && x.ascentDeltaV < x.deltaV - 0.05 ? ` (ascent ${fmtDv(x.ascentDeltaV)})` : ''} · ${fmtKg(x.propellantUsed)} used · ${fmtKg(x.propellantLeft)} left · ${fate}${orbit}</b></div>`;
+      const ss = stageStyle(x.stage, !!row?.isSpacecraft, row?.tag);
+      return `<div class="kv stage-line"><span><span class="nstage" style="--stage:${ss.colour}">${esc(ss.tag)}</span> ${esc(row?.name ?? '')}</span><b>Δv ${fmtDv(x.deltaV)}${x.ascentDeltaV > 0 && x.ascentDeltaV < x.deltaV - 0.05 ? ` (ascent ${fmtDv(x.ascentDeltaV)})` : ''} · ${fmtKg(x.propellantUsed)} used · ${fmtKg(x.propellantLeft)} left · ${fate}${orbit}</b></div>`;
     }).join('') : '';
     this.table.innerHTML =
       (res.launch ? `<div class="kv"><span>Orbit insertion (replay)</span><b>${esc(fmtTime(res.launch.t - r.plan.epoch, 0))}${res.launch.inclinationDeg !== undefined ? ` · inclination ${res.launch.inclinationDeg.toFixed(2)}°` : ''}</b></div>` : '') +
       (res.ascent
-        ? `<div class="kv dv-total"><span>Δv total (ranked)</span><b>${fmtDv(res.totalDeltaV)}</b></div>` +
+        ? `<div class="kv dv-total"><span>Δv total (ranked)</span><b>${fmtDvFine(res.totalDeltaV)}</b></div>` +
           `<div class="kv"><span>= ascent + flown</span><b>${fmtDv(res.ascent.deltaV)} + ${fmtDv(res.deltaV)}</b></div>`
         : `<div class="kv dv-total"><span>Δv used (replay)</span><b>${fmtDv(res.totalDeltaV)}</b></div>`) +
       `<div class="kv"><span>Δv requested (spacecraft nodes)</span><b>${fmtDv(b.requested)}</b></div>` +
@@ -1145,7 +1158,7 @@ export class ResultsPanel {
     const nodes = nodesOf(r.plan);
     this.burns.innerHTML = res.burns.length
       ? `<tr><th>#</th><th>planned</th><th>flown</th><th>time</th><th>prop.</th></tr>` +
-        res.burns.map((x, i) => `<tr><td>${i + 1}</td><td>${fmtDv(dvMagnitude(nodes[i]?.node.dv ?? [0, 0, 0]))}</td><td>${fmtDv(x.deltaV)}</td><td>${x.burnTime.toFixed(1)} s</td><td>${fmtKg(x.propellant)}</td></tr>`).join('')
+        res.burns.map((x, i) => `<tr><td>${i + 1}</td><td>${fmtDvFine(dvMagnitude(nodes[i]?.node.dv ?? [0, 0, 0]))}</td><td>${fmtDvFine(x.deltaV)}</td><td>${x.burnTime.toFixed(1)} s</td><td>${fmtKg(x.propellant)}</td></tr>`).join('')
       : '';
     setText(this.digest, `digest ${res.digest} · ${res.steps} steps · replay ${r.replayMs.toFixed(0)} ms · edit→redraw ${r.latencyMs.toFixed(0)} ms`);
   }

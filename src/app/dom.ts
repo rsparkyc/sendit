@@ -130,3 +130,9 @@ export function section(title: string, cls: string, ...children: (Node | string 
   };
   return s;
 }
+
+/** One-line summary of a section, shown after its title while it is collapsed (style.css). */
+export function setSummary(panel: HTMLElement, text: string): void {
+  const head = panel.querySelector(':scope > .sec-h > .sec-title') as HTMLElement | null;
+  if (head && head.dataset.summary !== text) head.dataset.summary = text;
+}

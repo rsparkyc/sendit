@@ -66,7 +66,7 @@ for (const [size, opts] of [['desktop', { viewport: { width: 1440, height: 900 }
         await setT(page, tm);
         await page.waitForFunction(() => (window as any).sendit.orbit() !== null);
         const status = (await page.locator('.tb-status').textContent()) ?? '';
-        const m = /Earth orbit now: Pe ([\d,]+) km alt · Ap ([\d,]+) km alt · i ([\d.]+)°/.exec(status);
+        const m = /At cursor · Earth orbit: Pe ([\d,]+) km alt · Ap ([\d,]+) km alt · i ([\d.]+)°/.exec(status);
         expect(m, `status at T+${tm}: ${status}`).not.toBeNull();
         const grid = (await page.locator('.orbit-grid').innerText()).replace(/\s+/g, ' ');
         const pe = /Periapsis ([\d,]+) km alt/.exec(grid), ap = /Apoapsis ([\d,]+) km alt/.exec(grid), inc = /Inclination ([\d.]+)°/.exec(grid);

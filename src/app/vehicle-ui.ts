@@ -17,18 +17,20 @@
  *    range-safety corridor), computed in ascent-worker.ts point by point.
  *    Tap or drag a chart to set the value (committed on release).
  */
-import { el, esc, section, setText } from './dom';
+import { el, esc, section, setSummary, setText } from './dom';
 import type { UiContext } from './editor-ui';
+import { stageChip } from './palette';
 import { PARKING_BAND, VEHICLES, azimuthAllowed, catalogueStages, launchPlane, launchSite, planAscent, planErrors, vehicleStages, type AscentResult, type MissionPlan, type Spacecraft } from './mission-layer';
-import { launchOf, missionById } from './missions';
+import { launchOf, missionById, withLaunch, withLaunchRule } from './missions';
 import { BODY_DATA } from './physics';
 import type { AppState } from './store';
-import { bodyRadius, distanceMode, onDistanceMode } from './units';
+import { bodyRadius, distanceMode, fromSurface, onDistanceMode } from './units';
+const fromSurfaceKm = (m: number) => fromSurface(m, 'earth');
 import { catalogueMatch, stagePlan, stageRows } from './vehicle';
 import type { AscentJob, FromAscent } from './ascent-protocol';
+import { fmtDv, fmtDvDelta, fmtMass, siteName } from './numfmt';
 
-const fmtDv = (v: number) => (Number.isFinite(v) ? `${Math.round(v).toLocaleString('en-US')} m/s` : '—');
-const fmtKg = (v: number) => (Number.isFinite(v) ? `${Math.round(v).toLocaleString('en-US')} kg` : '—');
+const fmtKg = fmtMass;
 const fmtKn = (n: number) => `${(n / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 })} kN`;
 
 /** Chart and ascent timings for the report and the tests. */
@@ -109,6 +111,7 @@ export class VehiclePanel {
       `<div class="kv"><span>Total budget (ideal, from the pad)</span><b class="budget-total">${fmtDv(budget)}</b></div>` +
       (ok ? `<div class="kv"><span>Ascent needs</span><b>${fmtDv(ok.deltaV)} · reaches orbit on ${esc(rows[ok.upperStage]?.tag ?? '')}</b></div>` : a && !a.ok ? `<div class="kv bad"><span>Ascent</span><b>cannot reach orbit</b></div>` : '') +
       (r ? `<div class="kv"><span>Flown (replay)</span><b>ascent ${fmtDv(r.ascent?.deltaV ?? 0)} + flight ${fmtDv(r.deltaV)} = ${fmtDv(r.totalDeltaV)}</b></div>` : '');
+    setSummary(this.root, `${cat ? cat.name : rows.length === 1 ? 'Spacecraft only' : 'Custom vehicle'} · budget ${fmtDv(budget)}${ok ? ` · ascent ${fmtDv(ok.deltaV)}` : ''}`);
     // Stack, top (spacecraft) first in the DOM, so it reads as a rocket: stage 1 at the bottom.
     const k = JSON.stringify([locked, plan.lowerStages, plan.spacecraft, distanceMode()]);
     const focused = this.stack.contains(document.activeElement);
@@ -138,7 +141,7 @@ export class VehiclePanel {
     const row = rows[k];
     const n = rows.length;
     const head = el('div', { className: 'stage-head' },
-      el('span', { className: `nstage${row.isSpacecraft ? ' sc' : ''}`, textContent: row.tag }),
+      stageChip(row.index, row.isSpacecraft, row.tag),
       el('b', { className: 'stage-name', textContent: row.name }));
     const figs = el('div', { className: 'stage-figs' });
     figs.innerHTML =
@@ -304,7 +307,7 @@ export class LaunchFeedback {
     const L = a.losses;
     const req = L.orbitalSpeed + L.rotation + L.gravity + L.drag + L.backPressure + L.steering + L.circularization;
     this.summary.className = 'ascent-summary';
-    this.summary.innerHTML =
+    this.summary.innerHTML = this.costLine(plan, a) +
       `<div class="kv big"><span>Upper stage left at insertion</span><b class="upper-reserve">${fmtDv(stagePlanDv(plan, a))} · ${fmtKg(a.upperPropellant)}</b></div>` +
       `<div class="kv"><span>Reaches orbit on</span><b>${esc(up?.tag ?? '')} ${esc(up?.name ?? '')}</b></div>` +
       `<div class="kv"><span>Ascent Δv required</span><b class="ascent-required">${fmtDv(req)}</b></div>` +
@@ -318,6 +321,41 @@ export class LaunchFeedback {
       (L.circularization > 0 ? line('Circularisation at apogee', L.circularization) : '') +
       line(L.rotation <= 0 ? 'Earth rotation credit' : 'Earth rotation (against)', L.rotation, L.rotation <= 0 ? 'credit' : 'bad') +
       line('= Required', req, 'total') + `</details>`;
+  }
+
+  /**
+   * One plain line: what this launch costs or saves against the mission's reference launch in ascent Δv
+   * (which is part of the ranked total), and the Δv it leaves for the flight (upper-stage reserve plus every
+   * stage above it). Display only: the reference is the mission's default launch, recomputed here.
+   */
+  private costLine(plan: MissionPlan, a: Extract<AscentResult, { ok: true }>): string {
+    const flight = (p: MissionPlan, x: Extract<AscentResult, { ok: true }>) => {
+      const rows = stageRows(p);
+      return stagePlanDv(p, x) + rows.slice(x.upperStage + 1).reduce((sum, r) => sum + r.deltaV, 0);
+    };
+    const mine = flight(plan, a);
+    const rows0 = stageRows(plan);
+    const parts = [`${rows0[a.upperStage]?.tag ?? ''} ${fmtDv(stagePlanDv(plan, a))}`, ...rows0.slice(a.upperStage + 1).map((r) => `${r.tag} ${fmtDv(r.deltaV)}`)];
+    const entry = missionById(this.ctx.store.get().missionId);
+    const l = launchOf(plan);
+    // `short`: the verdict that stays on one line (always shown); `ref`: the detail (wide mode, and the title).
+    let short = '';
+    let ref: string;
+    if (entry?.def && l) {
+      const R = entry.launch;
+      const refPlan = withLaunchRule(entry, withLaunch(plan, { ...R, time: l.time }));
+      const ra = planAscent(refPlan, BODY_DATA);
+      const same = R.site === l.site && Math.abs(R.azimuthDeg - l.azimuthDeg) < 1e-6 && Math.abs(R.altitudeM - l.altitudeM) < 1;
+      const refName = `${siteName(launchSite(R.site).name)}, az ${R.azimuthDeg.toFixed(1)}°, ${fromSurfaceKm(R.altitudeM)}`;
+      if (same) { short = 'the reference launch'; ref = `This is the mission's reference launch (${refName}).`; }
+      else if (ra && ra.ok) {
+        const d = a.deltaV - ra.deltaV;
+        short = Math.abs(d) <= 0.5 ? 'same as the reference launch' : `<b class="${d > 0 ? 'cost' : 'save'}">${d > 0 ? 'costs' : 'saves'} ${fmtDv(Math.abs(d))}</b> vs the reference launch`;
+        ref = `Ascent ${fmtDvDelta(d)} against the reference launch (${refName}), the same on the ranked total. Reference leaves ${fmtDv(flight(refPlan, ra))}.`;
+      } else ref = `The reference launch (${refName}) cannot be computed for this vehicle.`;
+    } else ref = 'Sandbox: no reference launch.';
+    const detail = `${parts.length > 1 ? `Before your burns: ${parts.join(' + ')}. ` : ''}${ref}`;
+    return `<div class="launch-cost" role="status" title="${esc(detail)}"><div class="lc-main">Leaves <b class="lc-flight">${fmtDv(mine)}</b> for the flight${short ? ` · ${short}` : ''}</div><div class="lc-ref">${esc(detail)}</div></div>`;
   }
 
   // ----- charts -----

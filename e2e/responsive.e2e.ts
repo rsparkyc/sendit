@@ -114,8 +114,8 @@ for (const [name, opts] of Object.entries(SIZES)) {
       console.log(`${name}: ${JSON.stringify(a0)}`);
       expect(a0.docW).toBeLessThanOrEqual(a0.W);
       expect(a0.bodyW).toBeLessThanOrEqual(a0.W);
-      // Wide: two expanded docks at 1280 x 720 leave ~49% uncovered (they collapse to rails); elsewhere the map has the majority.
-      expect(a0.freeMap, 'map keeps most of the screen').toBeGreaterThan(a0.mode === 'wide' ? 0.45 : 0.5);
+      // Wide: one dock at 1280 x 720 leaves ~59% uncovered (two docks left ~51%); elsewhere the map has the majority.
+      expect(a0.freeMap, 'map keeps most of the screen').toBeGreaterThan(a0.mode === 'wide' ? 0.55 : 0.5);
       expect(a0.minFont).toBeGreaterThanOrEqual(10.5);
       expect(a0.overlaps).toEqual([]);
       expect(a0.small).toEqual([]);
