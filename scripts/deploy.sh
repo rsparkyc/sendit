@@ -11,8 +11,9 @@ if [[ -z "$STACK_NAME" ]]; then
   echo "usage: AWS_PROFILE=<profile> $0 <stack-name>" >&2
   exit 2
 fi
-if [[ -z "${AWS_PROFILE:-}" ]]; then
-  echo "AWS_PROFILE is not set" >&2
+# Credentials: a named profile, or (CI, GitHub OIDC) temporary keys already in the environment.
+if [[ -z "${AWS_PROFILE:-}" && -z "${AWS_SESSION_TOKEN:-}" ]]; then
+  echo "AWS_PROFILE is not set (and no temporary credentials in the environment)" >&2
   exit 2
 fi
 export AWS_REGION=us-east-1

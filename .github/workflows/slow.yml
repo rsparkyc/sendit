@@ -1,0 +1,53 @@
+name: Slow validation
+
+# The SLOW=1 suites that the default CI path skips (README, "CI"), so they cannot rot unnoticed:
+# weekly on main, and on demand (Actions > Slow validation > Run workflow, any branch).
+# The solvers that regenerate the references (mission-campaign-solve, mission-campaign-sites-solve:
+# hours each) are generators, not checks, and are not run here.
+
+on:
+  schedule:
+    - cron: '17 3 * * 1' # Mondays 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  slow:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Campaign missions (all, SLOW=1)
+            run: SLOW=1 pnpm vitest run test/mission-campaign.test.ts
+          - name: Campaign missions per launch site (SLOW=1)
+            run: SLOW=1 pnpm vitest run test/mission-campaign-sites.test.ts
+          - name: Voyager 2 Jupiter flyby, variant (a) (SLOW=1)
+            run: SLOW=1 pnpm vitest run test/voyager2-jupiter.test.ts
+          - name: N-body moons over decades (pnpm test:slow)
+            run: pnpm test:slow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run
+        env:
+          CMD: ${{ matrix.run }}
+        run: bash -c "$CMD"

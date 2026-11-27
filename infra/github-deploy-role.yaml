@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  sendit: the IAM role GitHub Actions assumes (OIDC federation, no long-lived keys) to run
+  scripts/deploy-leaderboard.sh and scripts/deploy.sh from .github/workflows/deploy.yml, and
+  optionally the account's GitHub OIDC provider. The role can update the leaderboard stack's
+  two functions to a new bundle, upload the bundle and the site files, and invalidate the
+  distribution; nothing else (no table access, no IAM changes, no other stacks). Changes to
+  infra/leaderboard.yaml beyond the bundle (new resources, roles, table settings) fail under
+  this role and are deployed by hand, as before. Deploy in us-east-1; see README.md,
+  "Automatic deploy: one-time setup".
+
+Parameters:
+  Repository:
+    Type: String
+    Description: GitHub repository allowed to assume the role, as owner/name.
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  DeployEnvironment:
+    Type: String
+    Default: production
+    Description: GitHub environment of the deploy job (.github/workflows/deploy.yml).
+    AllowedPattern: '^[A-Za-z0-9_.-]+$'
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: 'false if the account already has the token.actions.githubusercontent.com provider (aws iam list-open-id-connect-providers).'
+  SiteStackName:
+    Type: String
+    Description: Stack created from infra/site.yaml.
+  SiteBucketName:
+    Type: String
+    Description: The site stack's output BucketName.
+  DistributionId:
+    Type: String
+    Description: The site stack's output DistributionId.
+    AllowedPattern: '^[A-Z0-9]{8,20}$'
+  LeaderboardStackName:
+    Type: String
+    Description: Stack created from infra/leaderboard.yaml (its functions are <stack>-submit and <stack>-read).
+  ArtifactBucket:
+    Type: String
+    Description: Private bucket holding the leaderboard bundles (scripts/deploy-leaderboard.sh writes under leaderboard/).
+
+Rules:
+  RequireUsEast1:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
+        AssertDescription: Deploy this stack in us-east-1 (next to the site and leaderboard stacks).
+
+Conditions:
+  MakeProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      # IAM no longer checks the thumbprint for this provider (it trusts the issuer's CA), but the
+      # property is still accepted; this is GitHub's published value.
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: sendit automatic deploy from GitHub Actions (main branch, deploy environment only)
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - MakeProvider
+                - !Ref GitHubOidcProvider
+                - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Needs the repository's OIDC subject template to include the ref (README: one-time
+                # setup), so the subject names both the environment and the branch. A pull request
+                # (fork or not) has subject repo:<owner>/<name>:pull_request and can never match;
+                # a job on any other branch, or outside the environment, cannot either.
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${Repository}:environment:${DeployEnvironment}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: sendit-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Both scripts read stack outputs; the workflow's pre-flight reads the leaderboard stack's
+              # template to refuse a deploy whose infra/leaderboard.yaml differs from what is deployed.
+              - Sid: ReadStacks
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${SiteStackName}/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${LeaderboardStackName}/*'
+              - Sid: LeaderboardTemplate
+                Effect: Allow
+                Action: cloudformation:GetTemplate
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${LeaderboardStackName}/*'
+              # aws cloudformation deploy (awscli customizations/cloudformation/deployer.py): DescribeStacks,
+              # GetTemplateSummary (which parameters may keep their previous value), CreateChangeSet, the
+              # change-set waiter (DescribeChangeSet), ExecuteChangeSet, the stack waiter (DescribeStacks).
+              # An empty change set is left FAILED, not deleted, so no DeleteChangeSet.
+              - Sid: LeaderboardChangeSets
+                Effect: Allow
+                Action:
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${LeaderboardStackName}/*'
+              # The stack runs with the caller's permissions (no service role), so a bundle update needs the
+              # AWS::Lambda::Function update handler's calls for a zip function outside a VPC, without KMS,
+              # code signing or tag changes (from the handler's published permission list); anything else in
+              # the template cannot change under this role. Concurrency is re-applied with the template's value.
+              - Sid: LeaderboardFunctions
+                Effect: Allow
+                Action:
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:GetFunctionRecursionConfig
+                  - lambda:GetRuntimeManagementConfig
+                  - lambda:ListTags
+                  - lambda:PutFunctionConcurrency
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${LeaderboardStackName}-submit'
+                  - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${LeaderboardStackName}-read'
+              # Only if CloudFormation re-sends the functions' existing execution roles with a configuration update.
+              - Sid: PassOnlyTheFunctionsOwnRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LeaderboardStackName}-*'
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: lambda.amazonaws.com
+              # deploy-leaderboard.sh: head-object, then cp under leaderboard/; Lambda reads the zip with these credentials.
+              # No s3:ListBucket: a missing key then answers 403 instead of 404, which the script treats the same (upload).
+              - Sid: BundleObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:AbortMultipartUpload]
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/leaderboard/*'
+              # deploy.sh: aws s3 sync (list, upload, --delete).
+              - Sid: SiteList
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${SiteBucketName}'
+              - Sid: SiteObjects
+                Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+                Resource: !Sub 'arn:${AWS::Partition}:s3:::${SiteBucketName}/*'
+              - Sid: Invalidate
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}'
+
+Outputs:
+  RoleArn:
+    Description: Set as the repository variable AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt DeployRole.Arn

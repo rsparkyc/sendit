@@ -18,9 +18,14 @@ if [[ -z "$STACK" ]]; then
   echo "usage: AWS_PROFILE=<profile> SITE_STACK=<site-stack> ARTIFACT_BUCKET=<bucket> $0 <leaderboard-stack>" >&2
   exit 2
 fi
-for v in AWS_PROFILE SITE_STACK ARTIFACT_BUCKET; do
+for v in SITE_STACK ARTIFACT_BUCKET; do
   if [[ -z "${!v:-}" ]]; then echo "$v is not set" >&2; exit 2; fi
 done
+# Credentials: a named profile, or (CI, GitHub OIDC) temporary keys already in the environment.
+if [[ -z "${AWS_PROFILE:-}" && -z "${AWS_SESSION_TOKEN:-}" ]]; then
+  echo "AWS_PROFILE is not set (and no temporary credentials in the environment)" >&2
+  exit 2
+fi
 export AWS_REGION=us-east-1
 
 cd "$(dirname "$0")/.."

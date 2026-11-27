@@ -1,0 +1,226 @@
+name: Deploy
+
+# Deploys the leaderboard stack, then the site, from one commit, with scripts/deploy-leaderboard.sh and
+# scripts/deploy.sh, then smoke-tests the live site (scripts/smoke-check.mjs). README, "Deploy pipeline".
+#
+# - Called by ci.yml on a push to main after every verification job passed (while DEPLOY_ENABLED is 'true').
+# - Run by hand (Actions > Deploy > Run workflow, from main) to redeploy, roll back to an earlier commit of
+#   main (input sha), or deploy a physics / mission version change on purpose (version_change_acknowledged).
+#
+# Configuration (environment "production"; see README, "Automatic deploy: one-time setup"):
+#   secret   AWS_DEPLOY_ROLE_ARN   RoleArn output of infra/github-deploy-role.yaml (a secret so the account
+#                                  id stays out of this public repository's logs)
+#   variable SITE_URL              https://<site>, no trailing slash
+#   variable SITE_STACK            stack from infra/site.yaml
+#   variable LEADERBOARD_STACK     stack from infra/leaderboard.yaml
+#   variable ARTIFACT_BUCKET       bucket for the leaderboard bundles
+# IP_HASH_SALT is deliberately not configured anywhere in GitHub: the leaderboard stack keeps the value set
+# on its first (manual) deploy, and this workflow forces the variable empty.
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        type: string
+        required: true
+      automatic:
+        type: boolean
+        default: false
+      version_change_acknowledged:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit of main to deploy (empty = the current head of main). An older commit rolls back.
+        type: string
+        required: false
+        default: ''
+      version_change_acknowledged:
+        description: Deploy even if the commit changes the physics or a mission version (you will run the printed reverify commands right after).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.sha || github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Protection rules of this environment (README): deployment branches = main only; optionally required
+    # reviewers, which turns every deploy into a manual approval.
+    environment:
+      name: production
+      url: ${{ vars.SITE_URL }}
+    # One deploy at a time, never cancelled half-way. A newer queued deploy replaces an older queued one.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ inputs.sha || github.sha }}
+      AUTOMATIC: ${{ inputs.automatic && 'true' || 'false' }}
+      SITE_URL: ${{ vars.SITE_URL }}
+      SITE_STACK: ${{ vars.SITE_STACK }}
+      LEADERBOARD_STACK: ${{ vars.LEADERBOARD_STACK }}
+      ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+      # Never reset the stored salt or the plan-exposure setting: the leaderboard script only passes these
+      # parameters when they are non-empty, and CloudFormation then keeps the stack's current values.
+      IP_HASH_SALT: ''
+      EXPOSE_PLANS: ''
+    steps:
+      - name: Refuse anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Deploys run only from main (this run is on $GITHUB_REF)."
+          exit 1
+
+      - name: Check the configuration
+        run: |
+          missing=()
+          for v in SITE_URL SITE_STACK LEADERBOARD_STACK ARTIFACT_BUCKET; do [[ -n "${!v}" ]] || missing+=("$v"); done
+          if (( ${#missing[@]} )); then echo "::error::Missing variables in environment production: ${missing[*]} (README, one-time setup)"; exit 1; fi
+          if [[ ! "$SHA" =~ ^[0-9a-f]{7,40}$ ]]; then echo "::error::sha must be a commit hash, not '$SHA'"; exit 1; fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Is this commit on main, and still the newest?
+        id: guard
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          git fetch --quiet --no-tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$SHA is not a commit of main; refusing to deploy it."
+            exit 1
+          fi
+          HEAD="$(git rev-parse origin/main)"
+          if [[ "$AUTOMATIC" == true && "$SHA" != "$HEAD" ]]; then
+            # A later push's run will deploy the newer commit; deploying this one now would roll it back.
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "### Deploy skipped: $SHA is superseded by $HEAD on main (its own run deploys it)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "### Deploying \`$SHA\`$([[ "$SHA" != "$HEAD" ]] && echo " (older than main's head \`$HEAD\`: a rollback)")" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.guard.outputs.skip != 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        if: steps.guard.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the leaderboard bundle (expected catalogue)
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          pnpm build:leaderboard
+          node dist-server/leaderboard/admin.mjs missions | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Stops here (nothing deployed) when this commit changes the physics or a mission version, unless a
+      # person ran this workflow with version_change_acknowledged. It prints the reverify commands either way.
+      - name: Release gate (physics and mission versions vs. the live server)
+        id: gate
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          VERSION_CHANGE_ACKNOWLEDGED: ${{ (!inputs.automatic && inputs.version_change_acknowledged) && '1' || '0' }}
+        run: node scripts/release-gate.mjs
+
+      - name: AWS credentials (OIDC)
+        if: steps.guard.outputs.skip != 'true'
+        uses: aws-actions/configure-aws-credentials@45666896f5d8e0f10ae255413f3a4cdd03bdc8f5 # v6.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: sendit-deploy-${{ github.run_id }}
+          aws-region: us-east-1
+          mask-aws-account-id: true
+
+      # The role can only swap the bundle; a change to infra/leaderboard.yaml beyond that would fail half-way
+      # inside CloudFormation, so refuse it up front and leave it to a manual deploy.
+      - name: Pre-flight (stacks exist; deployed leaderboard template matches this commit)
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          for s in "$SITE_STACK" "$LEADERBOARD_STACK"; do
+            aws cloudformation describe-stacks --stack-name "$s" --query 'Stacks[0].StackStatus' --output text \
+              || { echo "::error::Stack $s is not readable; the first deploy is manual (README)."; exit 1; }
+          done
+          aws cloudformation get-template --stack-name "$LEADERBOARD_STACK" --template-stage Original \
+            --query TemplateBody --output text > "$RUNNER_TEMP/deployed-leaderboard.yaml"
+          if ! diff -q <(sed -e 's/[[:space:]]*$//' "$RUNNER_TEMP/deployed-leaderboard.yaml") <(sed -e 's/[[:space:]]*$//' infra/leaderboard.yaml) >/dev/null; then
+            echo "::error::infra/leaderboard.yaml differs from the deployed template. Deploy it by hand once (README, 'Deploy by hand'); automatic deploys only swap the bundle."
+            diff <(sed -e 's/[[:space:]]*$//' "$RUNNER_TEMP/deployed-leaderboard.yaml") <(sed -e 's/[[:space:]]*$//' infra/leaderboard.yaml) | head -50 || true
+            exit 1
+          fi
+
+      - name: Deploy the leaderboard
+        id: leaderboard
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          [[ -z "${IP_HASH_SALT}" ]] || { echo "::error::IP_HASH_SALT must never be set here"; exit 1; }
+          scripts/deploy-leaderboard.sh "$LEADERBOARD_STACK"
+
+      - name: Deploy the site
+        id: site
+        if: steps.guard.outputs.skip != 'true'
+        run: scripts/deploy.sh "$SITE_STACK"
+
+      - name: Resolve Playwright version
+        id: pw
+        if: steps.guard.outputs.skip != 'true'
+        run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Chromium
+        id: pw-cache
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          if [[ "${{ steps.pw-cache.outputs.cache-hit }}" == true ]]; then pnpm exec playwright install-deps chromium
+          else pnpm exec playwright install --with-deps chromium; fi
+
+      - name: Smoke check the live site
+        if: steps.guard.outputs.skip != 'true'
+        run: node scripts/smoke-check.mjs
+
+      - name: Re-verification pending
+        if: steps.gate.outputs.reverify_pending == 'true'
+        run: |
+          echo "::warning::This deploy changed the physics or a mission version. Boards stay empty until the reverify commands in the job summary are run."
+          echo "**Re-verification PENDING: run the commands from the release gate above now.**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: What failed, and what to do
+        if: failure() && steps.guard.outputs.skip != 'true'
+        env:
+          LB: ${{ steps.leaderboard.outcome }}
+          SITE: ${{ steps.site.outcome }}
+        run: |
+          {
+            echo "### Deploy FAILED"
+            echo "Leaderboard step: \`$LB\`; site step: \`$SITE\`."
+            if [[ "$LB" == failure ]]; then
+              echo "The leaderboard update failed; CloudFormation rolls the stack back to the previous bundle by itself. The site was not touched. Check the stack's events, fix, push again."
+            elif [[ "$LB" == success && "$SITE" == failure ]]; then
+              echo "The server runs this commit but the site does not (it may be partly uploaded). Re-run this job (both scripts are idempotent), or roll both back: Actions > Deploy > Run workflow with the last good commit as sha."
+            elif [[ "$SITE" == success ]]; then
+              echo "Both deployed, but the smoke check failed: the live site does not behave like this commit. Roll back: Actions > Deploy > Run workflow with the last good commit as sha (README, 'Roll back')."
+            else
+              echo "Nothing was deployed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

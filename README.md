@@ -358,7 +358,50 @@ pnpm typecheck
 pnpm dev         # Vite dev server
 pnpm build       # static site in dist/
 pnpm preview     # serve dist/ locally
+pnpm test:browsers   # Playwright: every suite on Chromium, Firefox and WebKit (builds first)
 ```
+
+The browser suite can be narrowed the way CI splits it (`e2e/playwright.config.ts`):
+`PW_SUITE=engines` runs only the cross-engine determinism files (`determinism`, `ephemeris`),
+`PW_SUITE=ui` every other file; `PW_PREBUILT=1` serves the existing `dist/` instead of
+building first. For example `PW_SUITE=ui pnpm test:browsers --project=chromium --shard=2/4`.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push and pull request, as parallel jobs:
+
+| job | what | needs |
+|---|---|---|
+| `unit` | `pnpm typecheck`, `pnpm test` | |
+| `build` | `pnpm build` (uploaded as the artifact `site-dist`), `pnpm build:leaderboard` | |
+| `engines` (×3) | `PW_SUITE=engines` on Chromium, Firefox and WebKit, one job per engine, against `site-dist` | `build` |
+| `ui` (×4) | `PW_SUITE=ui` on Chromium, `--shard=1/4` … `4/4`, against `site-dist` | `build` |
+| `report` | merges every browser job's blob report into one HTML report and writes the run summary | `engines`, `ui` |
+| `deploy` | `.github/workflows/deploy.yml` (below); pushes to main only | all of the above |
+
+Dependencies come from the pnpm store cache (`actions/setup-node`), browsers from a cache per
+engine and Playwright version, and the site is built once and shared as an artifact, so no
+browser job rebuilds it. There are no retries: a flaky test fails its job (the summary table
+would mark a flaky pass separately if retries were ever turned on).
+
+Finding a failure: the run's Summary page lists every failed test with its file and line and
+the artifact that holds it. Each failing browser job uploads `playwright-report-engines-<engine>`
+or `playwright-report-ui-<shard>` (HTML report, traces); the merged report of all jobs is
+`playwright-report`. Failures are also annotated on the commit by Playwright's `github` reporter.
+
+Timings. The old single job took about 13 minutes, most of it the browser suite run
+serially. Measured locally (12-core laptop, heavily loaded by other work, so pessimistic):
+unit tests 43-150 s (depending on that load), typecheck 4 s, build 1 s, each engine's determinism files 7-8 s (4 tests), UI shards
+1-4: 171, 131, 139, 69 s with 2 workers (18, 21, 18, 13 tests; 70 UI tests, all passing). Expected on GitHub's 4-vCPU runners (not measured there): about
+1 minute of setup per job (checkout, pnpm install from cache, browser cache restore and
+`install-deps`), `unit` 3-5 min, `build` 1 min, `engines` 2-3 min, each `ui` shard 4-5 min,
+so about 6-7 minutes from push to green, bounded by `build` plus the slowest UI shard and
+by `unit`. More shards would shave the UI path further at the cost of more setup minutes.
+
+`.github/workflows/slow.yml` runs the `SLOW=1` validation suites that the default path skips
+(the campaign and per-site campaign suites, the Voyager 2 variant (a), `pnpm test:slow`) every
+Monday and on demand (Actions > Slow validation > Run workflow), one job each. The reference
+solvers (`*-solve.test.ts`) are generators that take hours and are not run there.
 
 ## Hosting
 
@@ -561,3 +604,128 @@ done
 The old versions' boards stay in the table but are no longer served. Rolling back means
 redeploying the previous commit's two bundles. The old boards are served again from that
 moment, and nothing has to be re-verified, because nothing was written to them.
+
+## Deploy pipeline
+
+On a push to main, once every CI job has passed, the `deploy` job
+(`.github/workflows/deploy.yml`, GitHub environment `production`) deploys that exact commit:
+
+1. Guards: runs only from main and only for a commit of main; an automatic run whose commit is
+   no longer main's head stops (the newer push's run deploys the newer commit, so a slow old run
+   cannot roll a new deploy back). One deploy at a time (`concurrency: deploy-production`, never
+   cancelled half-way).
+2. Release gate (`scripts/release-gate.mjs`): compares this commit's physics version and mission
+   versions (`admin.mjs missions` of a fresh `pnpm build:leaderboard`) with what the live
+   `/api/leaderboard/missions` serves. If the physics version or any existing mission's version
+   differs, it **stops before deploying anything** and prints, in the run summary, the exact
+   `reverify` commands (see "Re-verification" above). Reason: such a deploy empties those boards
+   until the stored plans are re-flown, re-verification needs table write access that the deploy
+   role deliberately does not have, and it must be checked with a dry run by a person. Deploying
+   blindly and flagging "pending" would leave boards empty for however long nobody notices.
+3. AWS credentials through GitHub OIDC (`infra/github-deploy-role.yaml`); no keys anywhere.
+4. Pre-flight: both stacks are readable, and the deployed leaderboard template is identical to
+   this commit's `infra/leaderboard.yaml`. The role can only swap the bundle; a template change
+   is deployed by hand once (below), then automation resumes.
+5. `scripts/deploy-leaderboard.sh` (it runs `pnpm test` again, builds and uploads the bundle,
+   updates the stack), with `IP_HASH_SALT` and `EXPOSE_PLANS` forced empty, so CloudFormation
+   keeps the stored salt and setting. The salt is not stored in GitHub at all.
+6. `scripts/deploy.sh` (site), same commit.
+7. Smoke check (`scripts/smoke-check.mjs`, Chromium against the live site): the missions endpoint
+   serves exactly this commit's physics and mission versions (polled for up to 4 minutes: the
+   reply may be cached for 60 s), `/` loads with no console errors, and `/check.html` reports
+   PASS overall and for its model-2 and staged replays, with this commit's model and data
+   fingerprint. Any failure fails the job, and the run summary says what was deployed and what
+   to do. The same check runs by hand: `pnpm build:leaderboard && SITE_URL=https://<site> node scripts/smoke-check.mjs`.
+
+Pull requests (from forks or not) can never reach the role: the deploy job runs only for
+`push` events on main, the `production` environment accepts only main, and the role's trust
+policy accepts only tokens whose subject is this repository's `production` environment on
+`refs/heads/main` (a pull request's subject is `repo:<owner>/<repo>:pull_request`).
+
+### Automatic deploy: one-time setup
+
+Prerequisites: the site and leaderboard stacks exist and were deployed by hand as above (the
+first leaderboard deploy sets the salt). Placeholders: `<owner>/<repo>`, `<profile>`,
+`<site-stack>`, `<leaderboard-stack>`, `<artifact-bucket>`, `<site.example.com>`.
+
+```sh
+# 1. Does the account already have GitHub's OIDC provider? (then CreateOidcProvider=false)
+aws iam list-open-id-connect-providers --profile <profile>
+
+# 2. The role stack (needs CAPABILITY_IAM). Bucket and distribution from the site stack's outputs.
+out() { aws cloudformation describe-stacks --profile <profile> --region us-east-1 --stack-name "$1" \
+  --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text; }
+aws cloudformation deploy --profile <profile> --region us-east-1 \
+  --stack-name sendit-github-deploy --template-file infra/github-deploy-role.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides Repository=<owner>/<repo> CreateOidcProvider=true \
+    SiteStackName=<site-stack> SiteBucketName="$(out <site-stack> BucketName)" \
+    DistributionId="$(out <site-stack> DistributionId)" \
+    LeaderboardStackName=<leaderboard-stack> ArtifactBucket=<artifact-bucket>
+ROLE_ARN="$(out sendit-github-deploy RoleArn)"
+
+# 3. Make the OIDC subject carry the branch as well as the environment (the trust policy expects
+#    repo:<owner>/<repo>:environment:production:ref:refs/heads/main).
+gh api -X PUT repos/<owner>/<repo>/actions/oidc/customization/sub \
+  -F use_default=false -f 'include_claim_keys[]=repo' -f 'include_claim_keys[]=context' -f 'include_claim_keys[]=ref'
+
+# 4. The environment, accepting deployments from main only. Add required reviewers in
+#    Settings > Environments > production if every deploy should wait for a manual approval.
+gh api -X PUT repos/<owner>/<repo>/environments/production \
+  -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST repos/<owner>/<repo>/environments/production/deployment-branch-policies -f name=main -f type=branch
+
+# 5. Configuration. The role ARN is a secret only to keep the account id out of public logs;
+#    the rest are plain environment variables. Nothing here is the IP-hash salt.
+gh secret set AWS_DEPLOY_ROLE_ARN --env production --repo <owner>/<repo> --body "$ROLE_ARN"
+gh variable set SITE_URL          --env production --repo <owner>/<repo> --body https://<site.example.com>
+gh variable set SITE_STACK        --env production --repo <owner>/<repo> --body <site-stack>
+gh variable set LEADERBOARD_STACK --env production --repo <owner>/<repo> --body <leaderboard-stack>
+gh variable set ARTIFACT_BUCKET   --env production --repo <owner>/<repo> --body <artifact-bucket>
+
+# 6. Switch automatic deploys on (a repository variable: ci.yml reads it before the environment).
+gh variable set DEPLOY_ENABLED --repo <owner>/<repo> --body true
+```
+
+| name | kind | sensitive | used for |
+|---|---|---|---|
+| `DEPLOY_ENABLED` | repository variable | no | kill switch: automatic deploys run only while it is `true` |
+| `AWS_DEPLOY_ROLE_ARN` | `production` secret | mildly (account id) | the role to assume |
+| `SITE_URL` | `production` variable | no | release gate, smoke check, environment link |
+| `SITE_STACK`, `LEADERBOARD_STACK` | `production` variables | no | passed to the two scripts |
+| `ARTIFACT_BUCKET` | `production` variable | no | bundle bucket for `deploy-leaderboard.sh` |
+| IP-hash salt | none | yes | never in GitHub: set once by the manual first deploy, kept by CloudFormation |
+
+### Pause, bypass, roll back
+
+- Pause: `gh variable set DEPLOY_ENABLED --repo <owner>/<repo> --body false` (CI still runs; the
+  deploy job is skipped). To stop every deploy, manual ones included, also disable the workflow:
+  `gh workflow disable Deploy`, or add required reviewers to `production` and decline.
+- Redeploy or roll back: Actions > Deploy > Run workflow (from main), `sha` = the commit of main
+  to deploy (empty = main's head), or `gh workflow run Deploy --ref main -f sha=<commit>`. The
+  same gate, pre-flight and smoke check apply; rolling back across a version change is stopped
+  by the gate like any other version change.
+- Deploy a physics or mission version change: preferably by hand (next section, then the
+  `reverify` commands the gate printed). Or run the Deploy workflow with
+  `version_change_acknowledged` checked: it deploys, and the summary marks re-verification as
+  pending; run the printed commands immediately.
+- If a deploy fails: a failed leaderboard update is rolled back by CloudFormation and the site is
+  left alone. If the leaderboard deployed but the site did not, the server runs the new commit
+  and players the old site: re-run the job (both scripts are idempotent) or roll back. If the
+  smoke check fails, both are live: roll back to the last good commit, then investigate.
+
+### Deploy by hand
+
+Still works exactly as before, with an operator profile, and is required for the first deploy,
+for changes to `infra/*.yaml`, and preferably for version changes:
+
+```sh
+AWS_PROFILE=<profile> SITE_STACK=<site-stack> ARTIFACT_BUCKET=<artifact-bucket> \
+  scripts/deploy-leaderboard.sh <leaderboard-stack>
+AWS_PROFILE=<profile> scripts/deploy.sh <site-stack>
+pnpm build:leaderboard && SITE_URL=https://<site.example.com> node scripts/smoke-check.mjs
+```
+
+Pause automatic deploys first (`DEPLOY_ENABLED=false`) if a push could land meanwhile; the
+role stack (`infra/github-deploy-role.yaml`) needs a redeploy only if a stack, bucket or
+distribution it names changes.
