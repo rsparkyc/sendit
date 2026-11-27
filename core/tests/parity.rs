@@ -89,6 +89,27 @@ fn corrector_propagations() {
     let c = &mut *g;
     check(parity::prop(&read("corrector.txt"), &mut c.eph, &mut c.fm, "corrector propagations"));
 }
+fn asset() -> Vec<u8> {
+    std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).expect("checkpoint asset")
+}
+#[test]
+fn builtin_world_matches_fixture_world() {
+    // The generated data/world.txt and the exporter's world.txt describe the same world.
+    let w = sendit_core::data::world();
+    let f = &lock().world;
+    assert_eq!(w.body_ids, f.body_ids);
+    assert_eq!(w.gm.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), f.gm.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+    assert_eq!(w.layout.chunk_length, f.layout.chunk_length);
+}
+#[test]
+fn nbody() {
+    check(sendit_core::parity2::nbody(&read("nbody.txt"), &sendit_core::data::world()));
+}
+#[test]
+fn chunks() {
+    let w = sendit_core::data::world();
+    check(sendit_core::parity2::chunks(&read("chunks.txt"), &w, &asset(), |name| std::fs::read(dir().join(name)).ok()));
+}
 #[test]
 fn derivative_relativistic() {
     check(parity::deriv_rel(&read("deriv-rel.txt")));
