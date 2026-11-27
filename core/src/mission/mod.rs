@@ -11,3 +11,4 @@ pub mod mdata;
 pub mod objectives;
 pub mod plan;
 pub mod replay;
+pub mod verify;

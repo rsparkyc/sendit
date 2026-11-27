@@ -154,6 +154,71 @@ MUTATIONS = [
      'h.f64(s.propellant_used).f64(s.propellant_left).f64(s.delta_v).f64(s.separated_at.unwrap_or(f64::NAN));', 'let _ = s;'),
     ('ascent: climb term as (rP - R) / (R rP)', 'src/mission/ascent.rs',
      'let climb = (v_ins * v_ins + 2.0 * mu * (1.0 / r_ - 1.0 / r_p)).sqrt() - v_ins;', 'let climb = (v_ins * v_ins + 2.0 * mu * ((r_p - r_) / (r_ * r_p))).sqrt() - v_ins;'),
+    # Layer two, step five: objectives, conformance, scoring, the leaderboard verdict.
+    ('score: delta-v key rounded to nearest', 'src/mission/objectives.rs',
+     'pub fn delta_v_key(delta_v: f64) -> f64 {\n    (delta_v * 10.0).ceil()', 'pub fn delta_v_key(delta_v: f64) -> f64 {\n    (delta_v * 10.0).round()'),
+    ('score: delta-v key as ceil(dv / 0.1)', 'src/mission/objectives.rs',
+     'pub fn delta_v_key(delta_v: f64) -> f64 {\n    (delta_v * 10.0).ceil()', 'pub fn delta_v_key(delta_v: f64) -> f64 {\n    (delta_v / 0.1).ceil()'),
+    ('score: time key rounded down', 'src/mission/objectives.rs',
+     '    mission_time.ceil()', '    mission_time.floor()'),
+    ('score: cost term reassociated: w * (dv / ref)', 'src/mission/objectives.rs',
+     '(w.delta_v_weight * dv) / w.delta_v_ref', 'w.delta_v_weight * (dv / w.delta_v_ref)'),
+    ('score: !(cost > 0) as cost <= 0 (NaN cost)', 'src/mission/objectives.rs',
+     'if !(cost > 0.0) {', 'if cost <= 0.0 {'),
+    ('score: dv quantised as key * 0.1', 'src/mission/objectives.rs',
+     'let dv = delta_v_key(delta_v) / 10.0;', 'let dv = delta_v_key(delta_v) * 0.1;'),
+    ('compareKeys: combined board score ascending', 'src/mission/objectives.rs',
+     'Board::Combined => or(or(b.score - a.score,', 'Board::Combined => or(or(a.score - b.score,'),
+    ('compareKeys: || treats NaN as a result', 'src/mission/objectives.rs',
+     'if x == 0.0 || x.is_nan() { y } else { x }', 'if x == 0.0 { y } else { x }'),
+    ('flyby: altitude band open at the top', 'src/mission/objectives.rs',
+     'e.altitude >= lo && e.altitude <= hi && e.speed <= vmax', 'e.altitude >= lo && e.altitude < hi && e.speed <= vmax'),
+    ('flyby: speed limit strict', 'src/mission/objectives.rs',
+     'e.altitude >= lo && e.altitude <= hi && e.speed <= vmax', 'e.altitude >= lo && e.altitude <= hi && e.speed < vmax'),
+    ('visit: within strict', 'src/mission/objectives.rs',
+     '.find(|e| e.distance <= *within)', '.find(|e| e.distance < *within)'),
+    ('return: max altitude strict', 'src/mission/objectives.rs',
+     'e.kind == EventKind::AtmosphereEntry || e.altitude <= *max_altitude', 'e.kind == EventKind::AtmosphereEntry || e.altitude < *max_altitude'),
+    ('reentry: speed limit inclusive', 'src/mission/objectives.rs',
+     'if last.speed > *ms {', 'if last.speed >= *ms {'),
+    ('escape: excess speed strict', 'src/mission/objectives.rs',
+     'let ok = vinf2 >= min_speed * min_speed;', 'let ok = vinf2 > min_speed * min_speed;'),
+    ('escape: r2 summed z first', 'src/mission/objectives.rs',
+     'for j in 0..3 {\n                r2 +=', 'for j in (0..3).rev() {\n                r2 +='),
+    ('orbit: revolutions reached strictly after', 'src/mission/objectives.rs',
+     'if e.t >= need {', 'if e.t > need {'),
+    ('orbit: period factor reassociated: rev * (2 pi)', 'src/mission/objectives.rs',
+     'need = ext[s].t + revolutions * 2.0 * PI * ((a * a * a) / mu).sqrt();', 'need = ext[s].t + revolutions * (2.0 * PI) * ((a * a * a) / mu).sqrt();'),
+    ('orbit: semi-major axis as rp/2 + ra/2', 'src/mission/objectives.rs',
+     'let a = 0.5 * (rp + ra);', 'let a = 0.5 * rp + 0.5 * ra;'),
+    ('orbit: inclination against the frame axis always', 'src/mission/objectives.rs',
+     'if !use_equator || !poles.at(k, e.t, &mut axis) {', 'if true {'),
+    ('orbit: next run starts at the failing extremum (s = j)', 'src/mission/objectives.rs',
+     '        s = j + 1;\n', '        s = j;\n'),
+    ('orbit: periapsis band open at the top', 'src/mission/objectives.rs',
+     'if !(e.distance >= band[0] && e.distance <= band[1]) {', 'if !(e.distance >= band[0] && e.distance < band[1]) {'),
+    ('evaluate: max-delta-v strict', 'src/mission/objectives.rs',
+     'ok: dv <= *max,', 'ok: dv < *max,'),
+    ('evaluate: max-time strict', 'src/mission/objectives.rs',
+     'ok: goals_ok && mission_time <= *max', 'ok: goals_ok && mission_time < *max'),
+    ('evaluate: mission time not relative to the epoch', 'src/mission/objectives.rs',
+     '} else { last - epoch };', '} else { last };'),
+    ("evaluate: limits not taken from the plan's site", 'src/mission/objectives.rs',
+     '        Some(s) => mission_for_site(mission0, s),', '        Some(_) => mission0.clone(),'),
+    ('conformance: sameBits as == (signed zero)', 'src/mission/objectives.rs',
+     'a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())', 'a == b || (a.is_nan() && b.is_nan())'),
+    ('conformance: parking band open at the bottom', 'src/mission/objectives.rs',
+     'if !(pn(2) >= v.altitude[0] && pn(2) <= v.altitude[1]) {', 'if !(pn(2) > v.altitude[0] && pn(2) <= v.altitude[1]) {'),
+    ('conformance: absent ascent time not defaulted', 'src/mission/objectives.rs',
+     '            let ascent = p(3).unwrap_or(default_ascent);\n            let downrange = p(4).unwrap_or(default_downrange);\n            let circ = circ_name(p(5).unwrap_or(0.0) == 1.0);\n            if !(pn(2) >= v.altitude[0]', '            let ascent = pn(3);\n            let downrange = p(4).unwrap_or(default_downrange);\n            let circ = circ_name(p(5).unwrap_or(0.0) == 1.0);\n            if !(pn(2) >= v.altitude[0]'),
+    ('conformance: old-version plans also get every other reason', 'src/mission/objectives.rs',
+     '        add("start-kind", "start.ascent".into(), OLD_VERSION_MESSAGE.into());\n        return out;', '        add("start-kind", "start.ascent".into(), OLD_VERSION_MESSAGE.into());'),
+    ('campaign-sites: loosest limit as min', 'src/mission/objectives.rs',
+     '            a = js_max(a, *max_delta_v);', '            a = js_min(a, *max_delta_v);'),
+    ('verify: rtol range open at the top', 'src/mission/verify.rs',
+     'plan.rtol >= rules.min_rtol && plan.rtol <= rules.max_rtol', 'plan.rtol >= rules.min_rtol && plan.rtol < rules.max_rtol'),
+    ('verify: verdict delta-v as key * 0.1', 'src/mission/verify.rs',
+     'delta_v: k.delta_v / 10.0', 'delta_v: k.delta_v * 0.1'),
 ]
 
 # Mutations that are bit-identical by construction or almost never observable,
@@ -228,7 +293,14 @@ EXPECTED_INVISIBLE = {
     'events: bisection midpoint as (lo + hi) * 0.5',
     'events: bisection capped at 60 iterations',
     'events: same-time events not ordered by kind',
+    # EQUIVALENT MUTANT (objectives): the run that starts at s stops at the
+    # first extremum j that is out of band, so restarting at j instead of
+    # j + 1 only re-tests ext[j], which fails again and is skipped.
+    'orbit: next run starts at the failing extremum (s = j)',
 }
+
+# Sections a mutated file can affect (others are skipped to save time).
+TESTS_FOR = {'src/mission/objectives.rs': ['objectives'], 'src/mission/verify.rs': ['objectives']}
 
 
 def main() -> int:
@@ -251,7 +323,7 @@ def main() -> int:
             failed += 1
             continue
         open(src, 'w').write(orig.replace(old, new, 1))
-        res = subprocess.run(['cargo', 'test', '-j', '4', '--release', '--test', 'parity', '--', '--test-threads=1'], cwd=work, env=env, capture_output=True, text=True)
+        res = subprocess.run(['cargo', 'test', '-j', '4', '--release', '--test', 'parity', '--', '--test-threads=1', *TESTS_FOR.get(path, [])], cwd=work, env=env, capture_output=True, text=True)
         out = res.stdout
         if res.returncode != 0 and not re.search(r'values compared, [1-9]', out):
             print(f'!! {name}: cargo test failed without a parity mismatch:')

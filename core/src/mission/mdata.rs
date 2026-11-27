@@ -94,6 +94,19 @@ pub struct MissionData {
     pub bisect_max: usize,
     pub vehicles: Vec<(String, Vec<Stage>)>,
     pub campaign: Vec<Mission>,
+    pub leaderboard: ServerRules,
+}
+
+/// The leaderboard's server rules (server/leaderboard/engine.ts SERVER_RULES) and step budget (config.ts default).
+#[derive(Clone, Debug)]
+pub struct ServerRules {
+    pub launch_only_by_default: bool,
+    pub earliest: f64,
+    pub latest: f64,
+    pub max_duration: f64,
+    pub min_rtol: f64,
+    pub max_rtol: f64,
+    pub max_steps: u64,
 }
 
 fn opt_num(v: &Value, k: &str) -> Option<f64> {
@@ -182,6 +195,7 @@ pub fn mission_of(v: &Value) -> Mission {
     let sc = v.get("scoring").unwrap();
     Mission {
         id: v.str_of("id").into(),
+        title: v.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string(),
         version: opt_num(v, "version"),
         objectives: v.arr("objectives").iter().map(objective_of).collect(),
         scoring: ScoreWeights { delta_v_ref: sc.num("deltaVRef"), delta_v_weight: sc.num("deltaVWeight"), time_ref: sc.num("timeRef"), time_weight: sc.num("timeWeight") },
@@ -201,7 +215,7 @@ pub fn mission_of(v: &Value) -> Mission {
                 .iter()
                 .map(|o| {
                     if o.get("offered").and_then(|b| b.as_bool()) == Some(true) {
-                        SiteOption::Offered { site: o.str_of("site").into(), max_delta_v: o.num("maxDeltaV"), max_time: o.num("maxTime") }
+                        SiteOption::Offered { site: o.str_of("site").into(), delta_v: opt_num(o, "deltaV"), ascent_delta_v: opt_num(o, "ascentDeltaV"), time: opt_num(o, "time"), max_delta_v: o.num("maxDeltaV"), max_time: o.num("maxTime") }
                     } else {
                         SiteOption::NotOffered { site: o.str_of("site").into(), reason: o.str_of("reason").into() }
                     }
@@ -277,6 +291,18 @@ impl MissionData {
             bisect_max: ev.num("bisectMax") as usize,
             vehicles: d.arr("vehicles").iter().map(|v| (v.str_of("id").to_string(), v.arr("stages").iter().map(stage_of).collect())).collect(),
             campaign: d.arr("campaign").iter().map(mission_of).collect(),
+            leaderboard: {
+                let b = d.get("leaderboard").unwrap();
+                ServerRules {
+                    launch_only_by_default: b.get("launchOnlyByDefault").and_then(|x| x.as_bool()) == Some(true),
+                    earliest: b.num("earliest"),
+                    latest: b.num("latest"),
+                    max_duration: b.num("maxDuration"),
+                    min_rtol: b.num("minRtol"),
+                    max_rtol: b.num("maxRtol"),
+                    max_steps: b.num("maxSteps") as u64,
+                }
+            },
         }
     }
 

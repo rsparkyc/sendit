@@ -33,6 +33,7 @@ pub mod parity;
 pub mod parity2;
 pub mod parity3;
 pub mod parity4;
+pub mod parity5;
 pub mod simd;
 pub mod spacecraft;
 #[cfg(target_arch = "wasm32")]

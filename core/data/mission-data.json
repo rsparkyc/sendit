@@ -2685,5 +2685,14 @@
     "timeWeight": 1
    }
   }
- ]
+ ],
+ "leaderboard": {
+  "launchOnlyByDefault": true,
+  "earliest": -1577880000,
+  "latest": 3155760000,
+  "maxDuration": 1262304000,
+  "minRtol": 1e-12,
+  "maxRtol": 1e-10,
+  "maxSteps": 100000
+ }
 }

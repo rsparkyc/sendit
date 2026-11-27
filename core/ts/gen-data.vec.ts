@@ -31,6 +31,8 @@ import { CAMPAIGN } from '../../src/mission/campaign';
 import { VEHICLES, SOLID_VEHICLES, PARKING_BAND } from '../../src/mission/vehicles';
 import { LIMITS, MAX_PARKING_ALTITUDE, DIRECT_C3_RANGE, DIRECT_ALTITUDE_RANGE, DIRECT_PARAMS } from '../../src/mission/plan';
 import { BISECT_MAX, NODES } from '../../src/mission/events';
+import { SERVER_RULES } from '../../server/leaderboard/engine';
+import { configFromEnv } from '../../server/leaderboard/config';
 
 const DATA = new URL('../data/', import.meta.url).pathname;
 mkdirSync(DATA, { recursive: true });
@@ -61,6 +63,8 @@ it('generate core/data', () => {
     parkingBand: PARKING_BAND,
     vehicles: [...VEHICLES, ...SOLID_VEHICLES].map((v) => ({ id: v.id, stages: v.stages })),
     campaign: CAMPAIGN,
+    // The leaderboard's server rules (server/leaderboard/engine.ts) and default step budget (config.ts).
+    leaderboard: { ...SERVER_RULES, maxSteps: configFromEnv({ TABLE_NAME: "x", IP_HASH_SALT: "0123456789abcdef" }).maxSteps },
   };
   writeFileSync(DATA + 'mission-data.json', exactJson(data) + '\n');
 });
