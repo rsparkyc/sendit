@@ -171,8 +171,168 @@ without a vehicle refuses extra stages and vehicle launches. `rules.launch` /
 - Soyuz-2.1b.
 - Electron (small).
 
-Use `withSpacecraft(vehicle, spacecraft)` to put a spacecraft on top. Direct injection
-(no parking orbit) is left for later: `LaunchSpec` already has room for another mode.
+Use `withSpacecraft(vehicle, spacecraft)` to put a spacecraft on top. `SOLID_VEHICLES`
+holds an all-solid example, Minotaur V (approximate), kept out of `VEHICLES` so the
+pinned ascent cases and the payload calibration are unchanged.
+
+### Direct injection (plan format 3, `ascent: 'direct'`)
+
+No parking orbit: the vehicle burns from liftoff straight into the departure conic, as
+a stack of solids must. It adds no constant and changes no existing code path's
+arithmetic, so `PHYSICS_MODEL` is unchanged and every existing result (golden digests,
+pinned fixtures, the ascent golden hash, the campaign suites) is bit-identical.
+
+**Propulsion flags.** `Engine.restartable` and `Engine.throttleable` are optional
+booleans, absent meaning true. `throttleable: false` means the engine cannot be shut down
+once lit and burns to depletion (a solid). `restartable: false` means it fires once in the
+whole flight, the ascent included. `SOLID` gives both flags. A plan that sets any flag to
+false is format 3: format 2 plus one flag byte per engine. The rules they bring:
+
+- A parking orbit refuses a stage that cannot shut down at orbital speed, and a
+  circularisation burn (for targets above 185 km) by a stage that cannot restart.
+- In flight, a non-restartable engine fires in at most one burn (`engine-restart`), and
+  never again once its stage was lit in the ascent.
+- A non-throttleable engine's burn must last at least the stage's full propellant divided
+  by that engine's flow (`engine-throttle`).
+
+**What the player specifies.** The start is `{ kind: 'launch', site, params, ascent:
+'direct' }` with exactly five params, `[launchTime, azimuthDeg, c3, injectionAltitudeM,
+flightStartS]`:
+
+- the site, liftoff time and inertial azimuth, as for a parking orbit;
+- the target C3 = v² − 2μ/r in m²/s². It is negative for an ellipse: about −2.04 km²/s²
+  puts the apogee at lunar distance (`c3ForApoapsis`). It is positive for a hyperbola,
+  with v∞ = √C3;
+- the injection altitude, where powered flight ends (150-2 000 km);
+- `flightStartS`, the declared start of the free flight. It is the earliest time of any
+  burn or separation and must not come before the computed burnout (`launch-burnout`).
+  It exists so that plan validation stays static. The flight itself is simulated from
+  the actual burnout.
+
+**The model** (`computeDirectAscent`). It uses the same vehicle model, atmosphere,
+integrator and gravity-turn pitch program as the parking ascent. The pitch-over kick is
+bisected so that powered flight ends at the injection altitude, within 5 km
+(`burnout.altitudeM` reports what was reached). The stages burn in order:
+
+- A liquid stage shuts down when the energy reaches the target (`cutoff: 'target'`).
+- A solid stage passing the target burns out anyway: the energy overshoots and no later
+  stage is lit.
+- If every lower stage runs dry first, the flight starts from what was reached, with
+  `shortfall` reporting the gap.
+
+Above circular speed the gravity turn lifts the nose, so the vehicle injects climbing.
+The flight-path angle is reported, and burnout is generally not the perigee. The time and
+downrange angle at burnout come out of the integration, not the parking orbit's fixed
+540 s and 13.5°. `directInjectionState` maps the burnout into ICRF with the same
+`launchPlane` and Earth-orientation model as the parking orbit.
+
+Assumptions beyond the parking model's:
+
+- Staging is instantaneous, and there are no fixed coasts between stages.
+- The pitch program has one parameter, so expect the losses to be 100-300 m/s
+  pessimistic for high-energy injections.
+- The burnout direction is the model's own, of order a degree from a real trajectory.
+  The planning aids use this same model.
+
+**Planning aids** (`direct-planning.ts`, advisory). `directInjectionWindows` returns the
+liftoff times and azimuths at which a direct injection from a site points its apoapsis at
+a body (for example the Moon at arrival) or its asymptote along a given direction, with
+the aim-error growth rate. `departureGeometry` gives the conic: eccentricity, apsides,
+asymptote, time to apoapsis. `directAimError`, `directAzimuthDeg`, `parkingAzimuthToward`
+and `windowSpan` measure window widths.
+
+**The trade-off** (`test/direct-comparison.test.ts`; 185 km; lunar C3 −2.04 km²/s², escape
+C3 10 km²/s²; window = liftoff span with the departure within 1° of the target, or for
+the parking orbit, a plane containing it with an in-corridor azimuth):
+
+| vehicle, site | target | payload direct / parking | total Δv direct / parking | window direct / parking |
+|---|---|---|---|---|
+| Atlas V 401, Cape | Moon | 2 986 / 3 669 kg | 13 377 / 12 772 m/s | 9 min / 530 min |
+| Atlas V 401, Cape | escape | 2 115 / 3 061 kg | 14 073 / 13 181 m/s | 10 min / 538 min |
+| Falcon 9, Cape | Moon | 7 284 / 7 267 kg | 12 165 / 12 170 m/s | 10 min / 535 min |
+| Minotaur V (solid), equator | Moon | 528 kg / impossible | 12 002 m/s / — | 8 min / — |
+| Minotaur V (solid), equator | escape | 408 kg / impossible | 12 551 m/s / — | 12 min / — |
+
+What the table shows:
+
+- A low thrust-to-weight upper stage (Centaur) pays heavily for climbing while it burns:
+  19-31 % less payload by direct injection. A parking orbit lets it burn horizontally at
+  perigee.
+- A high thrust-to-weight upper stage (Falcon 9) is indifferent: the model's parking
+  route has no restart penalty.
+- Solids cannot park at all.
+- The direct window is minutes; the parking window is hours. This is because the
+  departure direction is the site direction rotated by a fixed angle. For a short solid
+  ascent that angle puts the lunar apogee almost antipodal to the site, so windows exist
+  only on days when the Moon's declination is near minus the site's latitude: from Kourou,
+  one in 60 days near this epoch.
+
+Reality check:
+
+- LADEE (Minotaur V, all solid, 2013) had daily windows of 4-15 minutes over a 5-day
+  launch period.
+- Surveyor 1 (1966) flew a single-burn direct ascent on Atlas-Centaur. Its window opened
+  to the second, but the Surveyor direct-ascent windows were about 100 minutes (Surveyor
+  B: 06:51-08:33 EDT), because the injection was retargeted (azimuth and flight time)
+  through the window. The model's fixed-shape window is the lower bound of that.
+- Apollo, through a parking orbit, had windows of about 4.5 h with a narrower 72-108°
+  azimuth band.
+- Minotaur V's published TLI capability is 342 kg; the model gives 528 kg from the
+  equator (516 kg from the Cape), about 50 % high. The motor masses are approximate, and
+  the published figure includes an adapter and a Wallops launch.
+
+**Rules** (`objectives.ts`):
+
+- `rules.launchModes` (`['parking-orbit']` when absent, so every existing mission refuses
+  direct plans with `launch-mode`).
+- `rules.nonRestartableVehicle` (`vehicle-restartable`).
+- `VehicleLaunchRule.direct`, giving `injectionAltitude` and `c3` bands (`launch-altitude`,
+  `launch-c3`).
+- Vehicle and spacecraft comparisons now include the flags, so a liquid copy of a solid
+  vehicle is a `vehicle` mismatch.
+
+### Hand-off: direct injection
+
+**UI**
+
+- *Build.* `start: { kind: 'launch', site, params: directToParams({ mode: 'direct',
+  siteId, launchTime, azimuthDeg, c3, injectionAltitudeM, flightStartS }), ascent:
+  'direct' }`, then `makePlan` (it gives format 3). Test with `isDirectLaunch`; with
+  `isFlownLaunch` for either vehicle launch. `isVehicleLaunch` stays parking-only, so
+  `planAscent` returns null for direct plans. Add a direct branch beside it.
+- *What the player edits.* Site, liftoff, azimuth, C3 (or apogee through
+  `c3ForApoapsis`, or v∞), injection altitude, flight start (default: burnout rounded up,
+  for example 1 500 s for Atlas, 600 s for Minotaur). Engine flags go in the sandbox
+  vehicle editor.
+- *Launch feedback.* `computeDirectAscent(vehicleStages(plan), { gm, radius: referenceRadius,
+  c3, injectionAltitudeM }, launchGeometry(site, t, az), ASCENT_BODIES.earth)` gives
+  `achievedC3`, `shortfall`, `cutoff`, `upperStage` and `upperPropellant`, `burnout`
+  (time, altitude, speed, flight-path angle, downrange), `losses` and `stages`. It costs
+  about the same as `computeAscent`. Show "overshoot" when `cutoff === 'depletion' &&
+  achievedC3 > c3`; for solids, payload mass is what tunes the energy.
+- *What to chart.*
+  - The departure conic: `departureGeometry(burnout, gm, R)`.
+  - The aim error against liftoff time: `directAimError` over ±30 min. It shows the
+    instantaneous window.
+  - The windows from `directInjectionWindows` over the coming days. Flag `converged:
+    false` and `azimuthAllowed: false`.
+- *After a replay.* `result.directAscent` (with `launch.t` = the burnout), `result.stages`,
+  `totalDeltaV`. Validation codes: `launch-params`, `launch-c3`, `launch-altitude`,
+  `launch-ascent` (flight start), `launch-burnout` (in the replay reason), `engine-flags`,
+  `engine-restart`, `engine-throttle`, `stages`, `format`.
+- `simulationStartOffset(start)` returns `flightStartS` for a direct plan. The trajectory
+  actually starts slightly earlier, at the burnout (`result.launch.t`).
+
+**Leaderboard server**
+
+- Nothing is needed for decode, validate or replay. `decodePlan` reads format 3, and the
+  replay and digest are shared code.
+- Format-3 plans hash the burnout into the digest; formats 1 and 2 are unchanged.
+- `checkRules` requires a launch start, which direct plans are.
+- Before a mission allows direct injection, check `SERVER_RULES` and the plan-size limits
+  (format 3 adds 1 byte per engine), and give the mission a new version. No current
+  mission allows direct injection, so the deployed server refuses every direct plan with
+  `launch-mode`.
 
 ### Hand-off to part three
 

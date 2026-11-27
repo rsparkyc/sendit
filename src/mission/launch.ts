@@ -52,9 +52,10 @@
  *    elements; this choice gives the player the altitude asked for, which is
  *    what a planner expects. Measured numbers: test/launch.test.ts.
  *
- * DIRECT INJECTION (later): LaunchSpec is a tagged union on `mode`; a
- * 'direct' mode will share the site/plane geometry here (launchPlane) and
- * replace the circular-insertion step.
+ * DIRECT INJECTION: LaunchSpec member mode 'direct' (DirectInjectionLaunch)
+ * shares the site/plane geometry (launchPlane) and replaces the circular
+ * insertion with the burnout of ascent.ts computeDirectAscent
+ * (directInjectionState): time and downrange come from the ascent.
  */
 import { DEG, atan2, sincos } from '../physics/dmath';
 import { J2000_BODIES, bodyIndex, type BodyData } from '../physics/solar-system';
@@ -103,8 +104,83 @@ export interface ParkingOrbitLaunch {
   readonly circularization?: 'two-body' | 'j2-mean';
 }
 
-/** Room for later modes (e.g. 'direct' injection) as further union members. */
-export type LaunchSpec = ParkingOrbitLaunch;
+/**
+ * Direct injection (plan start ascent: 'direct'): no parking orbit. The
+ * vehicle burns from liftoff into the departure conic (ascent.ts
+ * computeDirectAscent); its burnout fixes time and downrange angle.
+ */
+export interface DirectInjectionLaunch {
+  readonly mode: 'direct';
+  readonly siteId: string;
+  /** Liftoff, seconds TDB from J2000. */
+  readonly launchTime: number;
+  /** Inertial launch azimuth, deg clockwise from north. */
+  readonly azimuthDeg: number;
+  /** Target C3 = v^2 - 2 mu / r at burnout, m^2/s^2. */
+  readonly c3: number;
+  /** Altitude where powered flight ends, above Earth's reference radius, m. */
+  readonly injectionAltitudeM: number;
+  /** Declared start of the free flight, s after liftoff (>= the computed burnout time). */
+  readonly flightStartS: number;
+}
+
+export type LaunchSpec = ParkingOrbitLaunch | DirectInjectionLaunch;
+
+/** params = [launchTime, azimuthDeg, c3, injectionAltitudeM, flightStartS] (plan.ts DIRECT_PARAMS). */
+export function directToParams(spec: DirectInjectionLaunch): number[] {
+  return [spec.launchTime, spec.azimuthDeg, spec.c3, spec.injectionAltitudeM, spec.flightStartS];
+}
+
+export function directFromParams(siteId: string, params: readonly number[]): DirectInjectionLaunch {
+  if (params.length !== 5) throw new Error(`direct injection expects 5 parameters, got ${params.length}`);
+  return { mode: 'direct', siteId, launchTime: params[0], azimuthDeg: params[1], c3: params[2], injectionAltitudeM: params[3], flightStartS: params[4] };
+}
+
+/** What directInjectionState needs of a computed direct ascent (ascent.ts DirectBurnout). */
+export interface BurnoutState {
+  readonly time: number;
+  readonly altitudeM: number;
+  readonly horizontalSpeed: number;
+  readonly radialSpeed: number;
+  readonly downrange: number;
+}
+
+/**
+ * Spacecraft state at direct-injection burnout. Deterministic (replay path).
+ * The launch plane is the parking orbit's (launchPlane at liftoff, inertial
+ * azimuth); the burnout point is `downrange` rad along it from the site
+ * direction, at radius R + altitude (R = Earth's referenceRadius), with the
+ * burnout's horizontal and radial inertial speeds.
+ */
+export function directInjectionState(spec: DirectInjectionLaunch, burnout: BurnoutState, ephem: Ephemeris, bodies: readonly BodyData[] = J2000_BODIES): LaunchResult {
+  const site = launchSite(spec.siteId);
+  if (!azimuthAllowed(site, spec.azimuthDeg)) {
+    throw new Error(`azimuth ${spec.azimuthDeg} deg outside ${site.id} range-safety corridor ${site.azimuthMinDeg}..${site.azimuthMaxDeg}`);
+  }
+  const earth = earthData(bodies);
+  const plane = launchPlane(site, spec.launchTime, spec.azimuthDeg);
+  const [st, ct] = sincos(burnout.downrange);
+  const u = plane.up;
+  const d = plane.downrange;
+  const rHat: V3 = [ct * u[0] + st * d[0], ct * u[1] + st * d[1], ct * u[2] + st * d[2]];
+  const vHat: V3 = [ct * d[0] - st * u[0], ct * d[1] - st * u[1], ct * d[2] - st * u[2]];
+  const r0 = earth.referenceRadius + burnout.altitudeM;
+  const vh = burnout.horizontalSpeed;
+  const vr = burnout.radialSpeed;
+  const geo: [number, number, number, number, number, number] = [
+    rHat[0] * r0, rHat[1] * r0, rHat[2] * r0,
+    vHat[0] * vh + rHat[0] * vr, vHat[1] * vh + rHat[1] * vr, vHat[2] * vh + rHat[2] * vr,
+  ];
+  const t = spec.launchTime + burnout.time;
+  const e = new Float64Array(6);
+  ephem.bodyState(bodyIndex('earth', bodies), t, e);
+  const state: [number, number, number, number, number, number] = [
+    e[0] + geo[0], e[1] + geo[1], e[2] + geo[2], e[3] + geo[3], e[4] + geo[4], e[5] + geo[5],
+  ];
+  const cosI = dot(plane.normal, plane.pole);
+  const sinI = norm(cross(plane.normal, plane.pole));
+  return { t, state, geocentric: geo, normal: plane.normal, inclinationDeg: atan2(sinI, cosI) / DEG };
+}
 
 export interface LaunchResult {
   /** Insertion time, s TDB from J2000. */
@@ -175,7 +251,7 @@ function earthData(bodies: readonly BodyData[]): BodyData {
  * `bodies` must be the body list `ephem` was built from (Earth is looked up by id).
  */
 export function launchState(spec: LaunchSpec, ephem: Ephemeris, bodies: readonly BodyData[] = J2000_BODIES): LaunchResult {
-  if (spec.mode !== 'parking-orbit') throw new Error(`unsupported launch mode ${(spec as { mode: string }).mode}`);
+  if (spec.mode !== 'parking-orbit') throw new Error(`unsupported launch mode ${(spec as { mode: string }).mode} (direct injection: directInjectionState with the computed ascent)`);
   const site = launchSite(spec.siteId);
   if (!azimuthAllowed(site, spec.azimuthDeg)) {
     throw new Error(`azimuth ${spec.azimuthDeg} deg outside ${site.id} range-safety corridor ${site.azimuthMinDeg}..${site.azimuthMaxDeg}`);

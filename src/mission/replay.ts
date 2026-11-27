@@ -26,9 +26,9 @@
 import { G0, propagate, STATE_SIZE, type Burn } from '../physics/spacecraft';
 import { EventFinder, type SphereSpec, type TrajectoryEvent } from './events';
 import { exactLn, Hasher } from './exact-math';
-import { ASCENT_BODIES, computeAscent, massAbove, type AscentResult } from './ascent';
-import { launchFromParams, launchGeometry, launchSite, launchState } from './launch';
-import { burnStage, isVehicleLaunch, simulationStartOffset, stagingIssues, validatePlan, vehicleStages, PLAN_FORMAT_STAGED, type MissionPlan, type PlanStart } from './plan';
+import { ASCENT_BODIES, computeAscent, computeDirectAscent, massAbove, type AscentResult, type DirectAscentOk } from './ascent';
+import { directFromParams, directInjectionState, launchFromParams, launchGeometry, launchSite, launchState } from './launch';
+import { ascentRestartIssues, burnStage, isDirectLaunch, isFlownLaunch, isVehicleLaunch, simulationStartOffset, stagingIssues, validatePlan, vehicleStages, PLAN_FORMAT_STAGED, type MissionPlan, type PlanStart } from './plan';
 import { bodyIndexOf, PHYSICS_MODEL, type MissionWorld } from './world';
 
 export type Outcome =
@@ -121,6 +121,8 @@ export interface ReplayResult {
   readonly totalDeltaV: number;
   /** Vehicle launch: the computed ascent. */
   readonly ascent?: Extract<AscentResult, { ok: true }>;
+  /** Direct-injection launch: the computed ascent (burnout, achieved C3, stages). `launch.t` is the burnout. */
+  readonly directAscent?: DirectAscentOk;
 }
 
 /** Dense-output interpolant of one accepted step: writes [x,y,z,vx,vy,vz,mass] at t in [tPrev, t]. */
@@ -168,7 +170,7 @@ class Stop {
   constructor(readonly outcome: Outcome, readonly reason: string, readonly t: number, readonly y: Float64Array) {}
 }
 
-type Core = Omit<ReplayResult, 'ok' | 'digest' | 'deltaV' | 'propellantUsed' | 'launch' | 'stages' | 'totalDeltaV' | 'ascent'>;
+type Core = Omit<ReplayResult, 'ok' | 'digest' | 'deltaV' | 'propellantUsed' | 'launch' | 'stages' | 'totalDeltaV' | 'ascent' | 'directAscent'>;
 
 function fail(outcome: Outcome, reason: string): ReplayResult {
   return finish({ outcome, reason, events: [], burns: [], elapsed: 0, finalT: NaN, finalState: [], steps: 0 });
@@ -178,6 +180,7 @@ interface Extra {
   readonly launch?: LaunchInsertion;
   readonly stages?: readonly StageReport[];
   readonly ascent?: Extract<AscentResult, { ok: true }>;
+  readonly directAscent?: DirectAscentOk;
   /** Format-2 plans hash the stage reports too (format 1: the digest is unchanged). */
   readonly staged?: boolean;
 }
@@ -198,14 +201,22 @@ function finish(r: Core, x: Extra = {}): ReplayResult {
     h.str(e.kind).str(e.body).f64(e.t).f64(e.mass);
     for (const v of e.rel) h.f64(v);
   }
-  const totalDeltaV = x.ascent ? x.ascent.deltaV + deltaV : deltaV;
+  const flown = x.ascent ?? x.directAscent;
+  const totalDeltaV = flown ? flown.deltaV + deltaV : deltaV;
   const stages = x.stages ?? [];
   if (x.staged) {
     h.f64(totalDeltaV).u32(stages.length);
     for (const s of stages) h.f64(s.propellantUsed).f64(s.propellantLeft).f64(s.deltaV).f64(s.separatedAt ?? NaN);
   }
+  const da = x.directAscent;
+  if (da) {
+    // Direct injection (format 3 only): the burnout too.
+    const b = da.burnout;
+    h.str('direct').f64(b.time).f64(b.altitudeM).f64(b.horizontalSpeed).f64(b.radialSpeed).f64(b.downrange).f64(da.achievedC3).u32(da.upperStage);
+  }
   const out: ReplayResult = { ...r, ok: r.outcome === 'completed', deltaV, propellantUsed, digest: h.hex(), stages, totalDeltaV };
   const withLaunch = launch ? { ...out, launch } : out;
+  if (x.directAscent) return { ...withLaunch, directAscent: x.directAscent };
   return x.ascent ? { ...withLaunch, ascent: x.ascent } : withLaunch;
 }
 
@@ -220,7 +231,7 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
   const eph = world.ephemeris;
   const epoch = plan.epoch;
   // Simulation starts at the epoch, or at orbit insertion for a launch (see plan.ts TIME RULES).
-  const t0 = epoch + simulationStartOffset(plan.start);
+  let t0 = epoch + simulationStartOffset(plan.start);
   const t1 = epoch + plan.duration;
 
   // Initial state.
@@ -228,6 +239,7 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
   const st = plan.start;
   let launch: LaunchInsertion | undefined;
   let ascent: Extract<AscentResult, { ok: true }> | undefined;
+  let directAscent: DirectAscentOk | undefined;
   if (st.kind === 'state') {
     const c = bodyIndexOf(world, st.center);
     if (c < 0) return fail('invalid-plan', `start.center: unknown body ${st.center}`);
@@ -238,9 +250,23 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
     let s: ArrayLike<number>;
     try {
       if (opts.resolveLaunch) {
-        if (isVehicleLaunch(st)) return fail('unsupported-start', 'a vehicle launch needs the built-in launch model (world body data), not a custom resolveLaunch');
+        if (isFlownLaunch(st)) return fail('unsupported-start', 'a vehicle launch needs the built-in launch model (world body data), not a custom resolveLaunch');
         s = opts.resolveLaunch(st, world, t0);
         launch = { t: t0, state: Array.from(s).slice(0, 6) };
+      } else if (world.bodyData && isDirectLaunch(st)) {
+        const full = validatePlan(plan);
+        if (full.length > 0) return fail('invalid-plan', full.join('; '));
+        const earth = world.bodyData.find((b) => b.id === 'earth');
+        if (!earth) return fail('unsupported-start', 'a vehicle launch needs Earth in the body data');
+        const spec = directFromParams(st.site, st.params);
+        const a = computeDirectAscent(vehicleStages(plan), { gm: earth.gm, radius: earth.referenceRadius, c3: spec.c3, injectionAltitudeM: spec.injectionAltitudeM }, launchGeometry(launchSite(st.site), spec.launchTime, spec.azimuthDeg), ASCENT_BODIES.earth);
+        if (!a.ok) return fail('invalid-plan', `ascent: ${a.reason}`);
+        if (!(a.burnout.time <= spec.flightStartS)) return fail('invalid-plan', `launch-burnout: the direct ascent burns out ${a.burnout.time} s after liftoff, after the declared flight start start.params[4] = ${spec.flightStartS} s`);
+        directAscent = a;
+        const res = directInjectionState(spec, a.burnout, eph, world.bodyData);
+        s = res.state;
+        t0 = res.t;
+        launch = { t: res.t, state: res.state.slice(), geocentric: res.geocentric.slice(), inclinationDeg: res.inclinationDeg };
       } else if (world.bodyData) {
         const full = validatePlan(plan);
         if (full.length > 0) return fail('invalid-plan', full.join('; '));
@@ -263,15 +289,16 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
   }
   const stages = vehicleStages(plan);
   const nStages = stages.length;
-  const staged = plan.format === PLAN_FORMAT_STAGED;
+  const staged = plan.format >= PLAN_FORMAT_STAGED;
+  const flownAscent = ascent ?? directAscent;
   // Active stage at the start: 0, or where the ascent reached orbit.
-  const firstStage = ascent ? ascent.upperStage : 0;
-  if (ascent) {
-    const issues = stagingIssues(plan, firstStage);
+  const firstStage = flownAscent ? flownAscent.upperStage : 0;
+  if (flownAscent) {
+    const issues = [...stagingIssues(plan, firstStage), ...ascentRestartIssues(plan, firstStage)];
     if (issues.length > 0) return fail('invalid-plan', issues.map((i) => i.message).join('; '));
   }
   // Total mass: every unfired stage (exactly wetMass for one stage), or what the ascent left.
-  y0[6] = ascent ? ascent.massAtInsertion : massAbove(stages, -1);
+  y0[6] = flownAscent ? flownAscent.massAtInsertion : massAbove(stages, -1);
   /** Mass at which the active stage k is empty: everything above plus its dry mass (exactly dryMass for one stage). */
   const cutoff = (k: number) => massAbove(stages, k) + stages[k].dryMass;
 
@@ -325,7 +352,7 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
   let finalY: Float64Array;
 
   const aborted = (): boolean => opts.signal?.aborted === true || (opts.shouldStop !== undefined && opts.shouldStop());
-  let done = (r: Core) => finish(r, { launch, ascent, staged });
+  let done = (r: Core) => finish(r, { launch, ascent, directAscent, staged });
 
   opts.onStart?.(t0, y0);
   const first = finder.start(t0, y0);
@@ -400,7 +427,7 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
   }
   const stageReports: StageReport[] = [];
   for (let k = 0; k < nStages; k++) {
-    const au = ascent && k < ascent.stages.length ? ascent.stages[k] : undefined;
+    const au = flownAscent && k < flownAscent.stages.length ? flownAscent.stages[k] : undefined;
     let used = au ? au.propellantUsed : 0;
     let dv = au ? au.deltaV : 0;
     for (let i = 0; i < burns.length; i++) if (burnStage(plan, plan.burns[i]) === k) { used += reports[i].propellant; dv += reports[i].deltaV; }
@@ -413,7 +440,7 @@ export function replay(plan: MissionPlan, world: MissionWorld, opts: ReplayOptio
     else left = prop - used;
     stageReports.push({ stage: k, propellantUsed: used, propellantLeft: left, deltaV: dv, ascentDeltaV: au ? au.deltaV : 0, separatedAt: dropped ? au.time : separatedAt[k], droppedInAscent: dropped });
   }
-  done = (r: Core) => finish(r, { launch, ascent, staged, stages: stageReports });
+  done = (r: Core) => finish(r, { launch, ascent, directAscent, staged, stages: stageReports });
   return done({
     outcome,
     reason,

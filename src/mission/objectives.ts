@@ -40,7 +40,7 @@
 import type { TrajectoryEvent } from './events';
 import { cos, DEG, PI } from '../physics/dmath';
 import { DEFAULT_ASCENT_TIME_S, DEFAULT_DOWNRANGE_DEG, launchToParams } from './launch';
-import { isVehicleLaunch, makePlan, type MissionPlan, type Spacecraft, type Stage } from './plan';
+import { isDirectLaunch, isFlownLaunch, makePlan, type MissionPlan, type Spacecraft, type Stage } from './plan';
 import type { ReplayOptions, ReplayResult } from './replay';
 import { bodyIndexOf, bodyPoleAt, type MissionWorld } from './world';
 
@@ -144,7 +144,16 @@ export interface VehicleLaunchRule {
   readonly ascentTimeS: number;
   readonly downrangeDeg: number;
   readonly circularization: 'j2-mean' | 'two-body';
+  /**
+   * Direct injection on this vehicle (allowed when StartRules.launchModes
+   * includes 'direct'): the band of injection altitudes (default `altitude`)
+   * and optionally of target C3, m^2/s^2.
+   */
+  readonly direct?: { readonly injectionAltitude?: Band; readonly c3?: Band };
 }
+
+/** How a flown launch reaches its departure: a parking orbit (then a departure burn) or direct injection. */
+export type LaunchMode = 'parking-orbit' | 'direct';
 
 /** The vehicle-launch rule with the launch model's default ascent time, downrange and circularisation. */
 export function vehicleLaunch(lowerStages: readonly Stage[], altitude: Band): VehicleLaunchRule {
@@ -169,6 +178,14 @@ export interface StartRules {
    * field so that code reading the fixed rule's fields keeps compiling.)
    */
   readonly vehicle?: VehicleLaunchRule;
+  /**
+   * Launch modes the plan may use (a launch start: parking orbit, ascent
+   * 'vehicle' or a free delivery; or direct injection, ascent 'direct').
+   * Absent: ['parking-orbit'], every mission before direct injection existed.
+   */
+  readonly launchModes?: readonly LaunchMode[];
+  /** True: every engine of every stage below the spacecraft must be non-restartable (restartable: false), e.g. an all-solid launcher. */
+  readonly nonRestartableVehicle?: boolean;
 }
 
 export interface MissionDefinition {
@@ -557,7 +574,13 @@ export type ConformanceCode =
   /** Ascent time, downrange angle or circularisation differ from the mission's fixed launch. */
   | 'launch-ascent'
   /** The stages below the spacecraft differ from the mission's vehicle (or a mission without one gets stages). */
-  | 'vehicle';
+  | 'vehicle'
+  /** The plan's launch mode (parking orbit or direct injection) is not one the mission allows (rules.launchModes). */
+  | 'launch-mode'
+  /** Direct injection: target C3 outside the mission's band. */
+  | 'launch-c3'
+  /** rules.nonRestartableVehicle: a stage below the spacecraft has a restartable engine. */
+  | 'vehicle-restartable';
 
 export interface ConformanceIssue {
   readonly code: ConformanceCode;
@@ -565,6 +588,10 @@ export interface ConformanceIssue {
   readonly path: string;
   readonly message: string;
 }
+
+/** Same propulsion flags (absent and true are the same: restartable / throttleable). */
+const sameFlags = (a: { restartable?: boolean; throttleable?: boolean }, b: { restartable?: boolean; throttleable?: boolean }): boolean =>
+  (a.restartable === false) === (b.restartable === false) && (a.throttleable === false) === (b.throttleable === false);
 
 /** Bit-for-bit equality of two numbers (distinguishes 0 and -0; NaN equals NaN). */
 const sameBits = (a: number, b: number): boolean => Object.is(a, b);
@@ -588,13 +615,14 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
   const pl = plan.lowerStages ?? [];
   // A plan from before the mission had its vehicle (a free delivery, no stages) gets one reason, the real one,
   // not also every spacecraft or limit that changed with the new version.
-  if (V && plan.start.kind === 'launch' && !isVehicleLaunch(plan.start) && pl.length === 0) {
+  if (V && plan.start.kind === 'launch' && !isFlownLaunch(plan.start) && pl.length === 0) {
     add('start-kind', 'start.ascent', OLD_VERSION_MESSAGE);
     return out;
   }
   const sc = mission.spacecraft;
   if (sc) {
     const p = plan.spacecraft;
+    if (p.engines.length === sc.engines.length) sc.engines.forEach((e, i) => { if (!sameFlags(p.engines[i], e)) add('spacecraft', `spacecraft.engines[${i}]`, `engine ${i} must have the mission spacecraft's restartable / throttleable flags`); });
     if (!sameBits(p.wetMass, sc.wetMass)) add('spacecraft', 'spacecraft.wetMass', `wet mass must be ${sc.wetMass} kg (mission spacecraft), got ${p.wetMass}`);
     if (!sameBits(p.dryMass, sc.dryMass)) add('spacecraft', 'spacecraft.dryMass', `dry mass must be ${sc.dryMass} kg (mission spacecraft), got ${p.dryMass}`);
     if (p.engines.length !== sc.engines.length) add('spacecraft', 'spacecraft.engines', `the mission spacecraft has ${sc.engines.length} engine(s), plan has ${p.engines.length}`);
@@ -604,14 +632,14 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
     });
   }
   if (V) {
-    const stageSame = (a: Stage, b: Stage) => sameBits(a.wetMass, b.wetMass) && sameBits(a.dryMass, b.dryMass) && a.engines.length === b.engines.length && a.engines.every((e, i) => sameBits(e.thrust, b.engines[i].thrust) && sameBits(e.isp, b.engines[i].isp));
+    const stageSame = (a: Stage, b: Stage) => sameBits(a.wetMass, b.wetMass) && sameBits(a.dryMass, b.dryMass) && a.engines.length === b.engines.length && a.engines.every((e, i) => sameBits(e.thrust, b.engines[i].thrust) && sameBits(e.isp, b.engines[i].isp) && sameFlags(e, b.engines[i]));
     if (pl.length !== V.lowerStages.length) add('vehicle', 'lowerStages', `the mission vehicle has ${V.lowerStages.length} stage(s) below the spacecraft, the plan has ${pl.length}`);
     else V.lowerStages.forEach((st, k) => { if (!stageSame(pl[k], st)) add('vehicle', `lowerStages[${k}]`, `stage ${k} must be the mission vehicle's (wet ${st.wetMass} kg, dry ${st.dryMass} kg, ${st.engines.length} engine(s)), bit for bit`); });
-    if (plan.start.kind === 'launch' && !isVehicleLaunch(plan.start)) {
+    if (plan.start.kind === 'launch' && !isFlownLaunch(plan.start)) {
       add('start-kind', 'start.ascent', 'this mission launches on its vehicle (a vehicle launch)');
     }
   } else if (sc && pl.length > 0) add('vehicle', 'lowerStages', 'this mission has no launch vehicle: the plan may not add stages');
-  if (!V && isVehicleLaunch(plan.start) && (mission.rules?.launch || mission.start?.kind === 'launch')) add('start-kind', 'start.ascent', 'this mission delivers the spacecraft to its parking orbit (not a vehicle launch)');
+  if (!V && isFlownLaunch(plan.start) && (mission.rules?.launch || mission.start?.kind === 'launch')) add('start-kind', 'start.ascent', 'this mission delivers the spacecraft to its parking orbit (not a vehicle launch)');
   if (mission.maxDuration !== undefined && !(plan.duration <= mission.maxDuration)) add('duration', 'duration', `duration ${plan.duration} s exceeds the mission limit ${mission.maxDuration} s`);
   const st = plan.start;
   const r = mission.rules;
@@ -632,9 +660,19 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
   }
   if (r) {
     if (r.window && !(plan.epoch >= r.window[0] && plan.epoch <= r.window[1])) add('launch-window', 'epoch', `start time ${plan.epoch} outside the window ${r.window[0]}..${r.window[1]}`);
-    if (r.altitude && st.kind === 'launch' && !(st.params[2] >= r.altitude[0] && st.params[2] <= r.altitude[1])) add('launch-altitude', 'start.params[2]', `parking altitude ${st.params[2]} m outside ${r.altitude[0]}..${r.altitude[1]} m`);
+    const direct = isDirectLaunch(st);
+    if (st.kind === 'launch') {
+      const modes = r.launchModes ?? ['parking-orbit'];
+      const mode: LaunchMode = direct ? 'direct' : 'parking-orbit';
+      if (!modes.includes(mode)) add('launch-mode', 'start.ascent', `this mission does not allow ${mode === 'direct' ? 'direct injection' : 'a parking-orbit launch'} (allowed: ${modes.join(', ')})`);
+    }
+    if (r.nonRestartableVehicle) {
+      pl.forEach((s, k) => s.engines.forEach((e, i) => { if (e.restartable !== false) add('vehicle-restartable', `lowerStages[${k}].engines[${i}].restartable`, `this mission needs a vehicle whose stages cannot restart: stage ${k} engine ${i} is restartable`); }));
+      if (pl.length === 0) add('vehicle-restartable', 'lowerStages', 'this mission needs a launch vehicle whose stages cannot restart');
+    }
+    if (r.altitude && st.kind === 'launch' && !direct && !(st.params[2] >= r.altitude[0] && st.params[2] <= r.altitude[1])) add('launch-altitude', 'start.params[2]', `parking altitude ${st.params[2]} m outside ${r.altitude[0]}..${r.altitude[1]} m`);
     const L = r.launch;
-    if (L && st.kind === 'launch') {
+    if (L && st.kind === 'launch' && !direct) {
       // Absent trailing params take the launch model's defaults (launchFromParams).
       const p = st.params;
       const ascent = p[3] ?? DEFAULT_ASCENT_TIME_S;
@@ -645,7 +683,13 @@ export function checkPlanConformance(mission: MissionDefinition, plan: MissionPl
       if (!sameBits(downrange, L.downrangeDeg)) add('launch-ascent', 'start.params[4]', `this mission fixes the downrange angle at ${L.downrangeDeg}°, got ${downrange}`);
       if (circ !== L.circularization) add('launch-ascent', 'start.params[5]', `this mission fixes the circularisation at ${L.circularization}, got ${circ}`);
     }
-    if (V && st.kind === 'launch') {
+    if (V && direct) {
+      const p = st.params;
+      const hb = V.direct?.injectionAltitude ?? V.altitude;
+      if (!(p[3] >= hb[0] && p[3] <= hb[1])) add('launch-altitude', 'start.params[3]', `injection altitude ${p[3] / 1000} km outside this mission's ${hb[0] / 1000}..${hb[1] / 1000} km`);
+      const cb = V.direct?.c3;
+      if (cb && !(p[2] >= cb[0] && p[2] <= cb[1])) add('launch-c3', 'start.params[2]', `target C3 ${p[2] / 1e6} km^2/s^2 outside this mission's ${cb[0] / 1e6}..${cb[1] / 1e6} km^2/s^2`);
+    } else if (V && st.kind === 'launch') {
       const p = st.params;
       const ascent = p[3] ?? DEFAULT_ASCENT_TIME_S;
       const downrange = p[4] ?? DEFAULT_DOWNRANGE_DEG;

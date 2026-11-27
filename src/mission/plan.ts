@@ -35,6 +35,16 @@
  * `lowerStages`, burns (each with `stage`) in `burns` and separations in
  * `separations`: every format-1 reader keeps working on the fields it knows.
  *
+ * FORMAT 3 (propulsion flags, direct injection): format 2's layout with
+ *   - per engine one more byte after (thrust, isp): u8 flags, bit 0 = not
+ *     restartable, bit 1 = not throttleable (other bits refused); in memory
+ *     a flag field is present only when false (Engine.restartable /
+ *     throttleable), so decode(encode(p)) gives the canonical plan;
+ *   - start tag 3 = direct-injection launch (str site, u8 n, n x f64 params,
+ *     n = DIRECT_PARAMS; in memory ascent: 'direct'). Tags 0-2 as before.
+ * requiredFormat gives 3 only to plans with a false flag or a direct launch,
+ * so no earlier plan changes format or string.
+ *
  * WHICH FORMAT IS WRITTEN. A plan is written in the format it carries
  * (`plan.format`), and makePlan gives the lowest format that can hold the
  * plan (requiredFormat): a one-stage plan with no staged fields is format 1,
@@ -61,8 +71,26 @@ import { PHYSICS_MODEL } from './world';
 export const PLAN_FORMAT = 1;
 /** Staged vehicles, separations, vehicle-launch starts (vehicle.ts, ascent.ts). */
 export const PLAN_FORMAT_STAGED = 2;
+/** Propulsion flags per engine (restartable, throttleable) and the direct-injection launch. */
+export const PLAN_FORMAT_DIRECT = 3;
 /** Formats this build reads and writes. */
-export const PLAN_FORMATS: readonly number[] = [PLAN_FORMAT, PLAN_FORMAT_STAGED];
+export const PLAN_FORMATS: readonly number[] = [PLAN_FORMAT, PLAN_FORMAT_STAGED, PLAN_FORMAT_DIRECT];
+
+/**
+ * Direct-injection launch parameters (start.params of ascent: 'direct'),
+ * exactly five, no defaults:
+ *   [launchTime, azimuthDeg, c3, injectionAltitudeM, flightStartS]
+ * c3 the target C3 (m^2/s^2), injectionAltitudeM where powered flight ends,
+ * flightStartS (s after liftoff) the declared start of the free flight: the
+ * earliest time of any burn or separation, and the bound on the mission
+ * duration; replay refuses a plan whose computed burnout comes later. (The
+ * flight itself is simulated from the computed burnout, which is earlier.)
+ */
+export const DIRECT_PARAMS = 5;
+/** C3 range a direct-injection start accepts, m^2/s^2 (-60 km^2/s^2 is about circular at 250 km). */
+export const DIRECT_C3_RANGE: readonly [number, number] = [-60e6, 400e6];
+/** Injection-altitude range a direct-injection start accepts, m. */
+export const DIRECT_ALTITUDE_RANGE: readonly [number, number] = [150e3, 2_000e3];
 
 export const LIMITS = {
   /** Longest encoded string accepted, characters. */
@@ -94,7 +122,20 @@ export interface Engine {
   readonly thrust: number;
   /** s. */
   readonly isp: number;
+  /**
+   * Format 3. false: cannot be relit once shut down (it fires at most once in
+   * the whole flight, the ascent included). Absent: restartable.
+   */
+  readonly restartable?: boolean;
+  /**
+   * Format 3. false: cannot be throttled or shut down once lit; it burns at
+   * full thrust to depletion (a solid motor). Absent: throttleable.
+   */
+  readonly throttleable?: boolean;
 }
+
+/** A solid motor's flags: lit once, burns to depletion. */
+export const SOLID: { readonly restartable: false; readonly throttleable: false } = { restartable: false, throttleable: false };
 
 export interface Spacecraft {
   /** Initial (fuelled) mass, kg. */
@@ -143,10 +184,13 @@ export type PlanStart =
        *    analytically (ascent.ts); the lower stages burn out and separate,
        *    the stage that reaches orbit keeps what propellant it has left, and
        *    the flight starts at insertion with that mass.
+       *  - 'direct' (format 3): the vehicle flies a direct injection, no
+       *    parking orbit (ascent.ts computeDirectAscent; params:
+       *    DIRECT_PARAMS); the flight starts at the computed burnout.
        * A field rather than a new `kind` so every caller that handles
        * `kind === 'launch'` (site, params, insertion time) keeps working.
        */
-      readonly ascent?: 'vehicle';
+      readonly ascent?: 'vehicle' | 'direct';
     };
 
 /** One stage of a vehicle: same fields as the one-stage Spacecraft. */
@@ -163,6 +207,22 @@ export type LaunchStart = Extract<PlanStart, { kind: 'launch' }>;
 /** True for a launch flown by the plan's vehicle (paid for), false for a free delivery or a state start. */
 export function isVehicleLaunch(start: PlanStart): start is LaunchStart & { ascent: 'vehicle' } {
   return start?.kind === 'launch' && start.ascent === 'vehicle';
+}
+
+/** True for a direct-injection launch (format 3). */
+export function isDirectLaunch(start: PlanStart): start is LaunchStart & { ascent: 'direct' } {
+  return start?.kind === 'launch' && start.ascent === 'direct';
+}
+
+/** True for any launch the plan's own vehicle flies (parking orbit or direct injection). */
+export function isFlownLaunch(start: PlanStart): start is LaunchStart & { ascent: 'vehicle' | 'direct' } {
+  return isVehicleLaunch(start) || isDirectLaunch(start);
+}
+
+/** True if any engine of the plan sets a propulsion flag to false (format 3). */
+export function usesPropulsionFlags(p: Pick<MissionPlan, 'spacecraft' | 'lowerStages'>): boolean {
+  const st: readonly (Stage | undefined)[] = [...(Array.isArray(p.lowerStages) ? p.lowerStages : []), p.spacecraft];
+  return st.some((s) => Array.isArray(s?.engines) && s.engines.some((e: Engine | undefined) => e?.restartable === false || e?.throttleable === false));
 }
 
 export interface MissionPlan {
@@ -199,7 +259,8 @@ export function burnStage(plan: Pick<MissionPlan, 'spacecraft' | 'lowerStages'>,
 }
 
 /** The lowest plan format that can hold this plan. */
-export function requiredFormat(p: Pick<MissionPlan, 'start' | 'burns' | 'lowerStages' | 'separations'>): number {
+export function requiredFormat(p: Pick<MissionPlan, 'start' | 'burns' | 'lowerStages' | 'separations' | 'spacecraft'>): number {
+  if (isDirectLaunch(p.start) || usesPropulsionFlags(p)) return PLAN_FORMAT_DIRECT;
   const staged = p.lowerStages !== undefined || p.separations !== undefined || isVehicleLaunch(p.start) || (Array.isArray(p.burns) && p.burns.some((b) => b?.stage !== undefined));
   return staged ? PLAN_FORMAT_STAGED : PLAN_FORMAT;
 }
@@ -246,6 +307,8 @@ function finite(x: unknown): x is number {
 
 /** Seconds from the epoch at which simulation starts (orbit insertion for a launch). */
 export function simulationStartOffset(start: PlanStart): number {
+  // Direct injection: the declared flight start (params[4]); the simulation itself begins at the computed burnout, no later.
+  if (isDirectLaunch(start)) return start.params[4];
   return start.kind === 'launch' ? (start.params[3] ?? DEFAULT_ASCENT_TIME_S) : 0;
 }
 
@@ -288,7 +351,18 @@ export type PlanIssueCode =
   /** Separations not sorted by time, or (decoder) actions not in time order. */
   | 'action-order'
   /** The vehicle cannot reach the parking orbit (vehicle launch, ascent.ts). */
-  | 'ascent';
+  | 'ascent'
+  // Format 3 (propulsion flags, direct injection):
+  /** An engine's restartable / throttleable is not a boolean. */
+  | 'engine-flags'
+  /** A non-restartable engine fires twice, or fires in flight after being lit in the ascent. */
+  | 'engine-restart'
+  /** A non-throttleable engine's burn is shorter than its stage's burn to depletion. */
+  | 'engine-throttle'
+  /** Direct injection: target C3 outside DIRECT_C3_RANGE. */
+  | 'launch-c3'
+  /** Direct injection: the computed burnout comes after the declared flight start (params[4]). */
+  | 'launch-burnout';
 
 /** One problem with a plan. */
 export interface PlanIssue {
@@ -341,7 +415,12 @@ export function validatePlanIssues(plan: MissionPlan, opts: ValidateOptions = {}
     if (typeof v !== 'string' || v.length === 0 || v.length > L.maxIdLength || !ID_RE.test(v)) add('id', name, `${name} must be an id of 1-${L.maxIdLength} characters [a-z0-9_-], got ${JSON.stringify(v)}`, burnOf(name));
   };
   if (!PLAN_FORMATS.includes(plan.format)) add('format', 'format', `unsupported plan format ${plan.format} (this build reads ${PLAN_FORMATS.join(', ')})`);
-  else if (plan.format < requiredFormat(plan)) add('format', 'format', `plan format ${plan.format} cannot hold stages, separations, burn stages or a vehicle launch (needs format ${PLAN_FORMAT_STAGED})`);
+  else if (plan.format < requiredFormat(plan)) {
+    const need = requiredFormat(plan);
+    add('format', 'format', need === PLAN_FORMAT_DIRECT
+      ? `plan format ${plan.format} cannot hold engine propulsion flags or a direct-injection launch (needs format ${PLAN_FORMAT_DIRECT})`
+      : `plan format ${plan.format} cannot hold stages, separations, burn stages or a vehicle launch (needs format ${PLAN_FORMAT_STAGED})`);
+  }
   if (!Number.isInteger(plan.model) || plan.model < 0 || plan.model > 0xffff) add('model', 'model', `model must be an integer 0-65535`);
   if (typeof plan.data !== 'string' || !/^[0-9a-f]{8}$/.test(plan.data)) add('data', 'data', `data fingerprint must be 8 hex digits`);
   range('epoch', plan.epoch, -L.maxEpoch, L.maxEpoch);
@@ -369,7 +448,12 @@ export function validatePlanIssues(plan: MissionPlan, opts: ValidateOptions = {}
         if (!(plan.duration > ascent)) add('launch-duration', 'duration', `duration must extend past orbit insertion (${ascent} s after liftoff)`);
         if (Array.isArray(plan.burns)) plan.burns.forEach((b, i) => { if (finite(b?.start) && b.start < ascent) add('burn-before-insertion', `burns[${i}].start`, `burns[${i}] starts at ${b.start} s, before orbit insertion at ${ascent} s after liftoff`, i); });
       }
-      if ((opts.launch ?? 'full') === 'full' && allFinite && typeof st.site === 'string') launchIssues(st.site, st.params, add);
+      if (st.ascent !== undefined && st.ascent !== 'vehicle' && st.ascent !== 'direct') add('start-kind', 'start.ascent', 'start.ascent must be absent, "vehicle" or "direct"');
+      if (isDirectLaunch(st)) {
+        // Structural: the parameter count is part of the format (it fixes what params[4] means).
+        if (st.params.length !== DIRECT_PARAMS) add('launch-params', 'start.params', `start.params: a direct-injection launch takes exactly ${DIRECT_PARAMS} parameters [time, azimuth, c3, injectionAltitude, flightStart], got ${st.params.length}`);
+        else if ((opts.launch ?? 'full') === 'full' && allFinite && typeof st.site === 'string') directLaunchIssues(st.site, st.params, add);
+      } else if ((opts.launch ?? 'full') === 'full' && allFinite && typeof st.site === 'string') launchIssues(st.site, st.params, add);
     }
   } else add('start-kind', 'start.kind', 'start.kind must be "state" or "launch"');
 
@@ -382,6 +466,10 @@ export function validatePlanIssues(plan: MissionPlan, opts: ValidateOptions = {}
     else engines.forEach((e, i) => {
       range(`${engPath(i)}.thrust`, e?.thrust, 0, L.maxThrust, true);
       range(`${engPath(i)}.isp`, e?.isp, 0, L.maxIsp, true);
+      for (const f of ['restartable', 'throttleable'] as const) {
+        const v = e?.[f];
+        if (v !== undefined && typeof v !== 'boolean') add('engine-flags', `${engPath(i)}.${f}`, `${engPath(i)}.${f} must be true, false or absent`);
+      }
     });
   };
   stageOk(plan.spacecraft, 'spacecraft', (i) => `engines[${i}]`);
@@ -391,7 +479,7 @@ export function validatePlanIssues(plan: MissionPlan, opts: ValidateOptions = {}
     else lower.forEach((st, k) => stageOk(st, `lowerStages[${k}]`, (i) => `lowerStages[${k}].engines[${i}]`));
   }
   const stages: readonly (Stage | undefined)[] = Array.isArray(lower) && lower.length <= L.maxStages - 1 ? [...lower, plan.spacecraft] : [plan.spacecraft];
-  if (isVehicleLaunch(st) && !(Array.isArray(lower) && lower.length >= 1)) add('stages', 'lowerStages', 'a vehicle launch needs at least one stage below the spacecraft (the spacecraft never flies the ascent)');
+  if (isFlownLaunch(st) && !(Array.isArray(lower) && lower.length >= 1)) add('stages', 'lowerStages', 'a vehicle launch needs at least one stage below the spacecraft (the spacecraft never flies the ascent)');
 
   const burns = plan.burns;
   if (!Array.isArray(burns) || burns.length > L.maxBurns) add('burns', 'burns', `at most ${L.maxBurns} burns`);
@@ -428,10 +516,55 @@ export function validatePlanIssues(plan: MissionPlan, opts: ValidateOptions = {}
   // Which stage is active when: needs the stage that starts the flight. A
   // vehicle launch starts in the stage the ascent ends in, known only once the
   // ascent is computed (validateStaging, run by replay and by 'full').
-  if (errs.length === 0 && !isVehicleLaunch(st)) errs.push(...stagingIssues(plan, 0));
-  else if (errs.length === 0 && (opts.launch ?? 'full') === 'full' && opts.ascentFirstStage !== undefined) errs.push(...stagingIssues(plan, opts.ascentFirstStage));
+  if (errs.length === 0 && !isFlownLaunch(st)) errs.push(...stagingIssues(plan, 0));
+  else if (errs.length === 0 && (opts.launch ?? 'full') === 'full' && opts.ascentFirstStage !== undefined) errs.push(...stagingIssues(plan, opts.ascentFirstStage), ...ascentRestartIssues(plan, opts.ascentFirstStage));
+  if (errs.length === 0) errs.push(...propulsionIssues(plan));
   return errs;
 }
+
+/**
+ * Propulsion flags against the burns (static part): a non-restartable engine
+ * fires in at most one burn; a non-throttleable engine's burn must last at
+ * least its stage's full propellant at that engine's flow (so it burns to
+ * depletion: the integrator ends it when the tanks run dry). Burns never
+ * overlap, so one engine draws on the stage at a time. Plans without flags
+ * have no such issues.
+ */
+export function propulsionIssues(plan: MissionPlan): PlanIssue[] {
+  const out: PlanIssue[] = [];
+  if (!usesPropulsionFlags(plan)) return out;
+  const stages = vehicleStages(plan);
+  const seen = new Set<string>();
+  plan.burns.forEach((b, i) => {
+    const k = burnStage(plan, b);
+    const st = stages[k];
+    const e = st.engines[b.engine];
+    const key = `${k}:${b.engine}`;
+    if (e.restartable === false) {
+      if (seen.has(key)) out.push({ code: 'engine-restart', path: `burns[${i}].engine`, burn: i, message: `burns[${i}]: engine ${b.engine} of stage ${k} cannot restart (it already fired in an earlier burn)` });
+      seen.add(key);
+    }
+    if (e.throttleable === false) {
+      const full = (st.wetMass - st.dryMass) / (e.thrust / (e.isp * G0_PLAN));
+      if (!(b.duration >= full)) out.push({ code: 'engine-throttle', path: `burns[${i}].duration`, burn: i, message: `burns[${i}]: engine ${b.engine} of stage ${k} cannot be shut down (non-throttleable): its burn must last until depletion, at least ${full} s, got ${b.duration}` });
+    }
+  });
+  return out;
+}
+
+/** The stage that ends the ascent was lit during it: a non-restartable engine of it cannot fire again in flight. */
+export function ascentRestartIssues(plan: MissionPlan, upperStage: number): PlanIssue[] {
+  const out: PlanIssue[] = [];
+  const stages = vehicleStages(plan);
+  plan.burns.forEach((b, i) => {
+    const k = burnStage(plan, b);
+    if (k === upperStage && stages[k]?.engines[b.engine]?.restartable === false) out.push({ code: 'engine-restart', path: `burns[${i}].engine`, burn: i, message: `burns[${i}]: stage ${k} was lit during the ascent and engine ${b.engine} cannot restart` });
+  });
+  return out;
+}
+
+/** Standard gravity (as physics/spacecraft.ts G0), for burn-time bounds. */
+const G0_PLAN = 9.80665;
 
 /**
  * Stage sequence of a structurally valid plan whose flight starts with stage
@@ -479,6 +612,20 @@ function launchIssues(siteId: string, params: readonly number[], add: (code: Pla
   if (c !== 0 && c !== 1) add('launch-mode', 'start.params[5]', `start.params[5] (circularization) must be 0 (j2-mean) or 1 (two-body), got ${c}`);
   if (!azimuthAllowed(site, params[1])) add('launch-azimuth', 'start.params[1]', `start.params[1]: azimuth ${params[1]} deg is outside ${site.id}'s range-safety corridor ${site.azimuthMinDeg}..${site.azimuthMaxDeg} deg`);
   if (!(params[2] > 0 && params[2] <= MAX_PARKING_ALTITUDE)) add('launch-altitude', 'start.params[2]', `start.params[2]: parking-orbit altitude must be in (0, ${MAX_PARKING_ALTITUDE}] m, got ${params[2]}`);
+}
+
+/** Direct-injection semantics (params count already checked), mirroring launch.ts directFromParams. */
+function directLaunchIssues(siteId: string, params: readonly number[], add: (code: PlanIssueCode, path: string, message: string) => void): void {
+  const site = LAUNCH_SITES.find((s) => s.id === siteId);
+  if (!site) {
+    add('launch-site', 'start.site', `start.site: unknown launch site ${siteId} (known: ${LAUNCH_SITES.map((s) => s.id).join(', ')})`);
+    return;
+  }
+  if (!azimuthAllowed(site, params[1])) add('launch-azimuth', 'start.params[1]', `start.params[1]: azimuth ${params[1]} deg is outside ${site.id}'s range-safety corridor ${site.azimuthMinDeg}..${site.azimuthMaxDeg} deg`);
+  const [c0, c1] = DIRECT_C3_RANGE;
+  if (!(params[2] >= c0 && params[2] <= c1)) add('launch-c3', 'start.params[2]', `start.params[2]: target C3 must be in [${c0}, ${c1}] m^2/s^2, got ${params[2]}`);
+  const [h0, h1] = DIRECT_ALTITUDE_RANGE;
+  if (!(params[3] >= h0 && params[3] <= h1)) add('launch-altitude', 'start.params[3]', `start.params[3]: injection altitude must be in [${h0}, ${h1}] m, got ${params[3]}`);
 }
 
 /** Highest parking-orbit altitude a launch start accepts, m. */
@@ -587,6 +734,10 @@ export function fromBase64Url(s: string): Uint8Array {
   return out;
 }
 
+/** Format-3 engine flag bits (a set bit means the capability is absent). */
+const ENGINE_NO_RESTART = 1;
+const ENGINE_NO_THROTTLE = 2;
+
 /** Encode a (valid) plan to a URL-safe string. */
 export function encodePlan(plan: MissionPlan): string {
   // Format-level checks only: an unknown launch site still encodes (replay refuses it).
@@ -605,7 +756,7 @@ export function encodePlan(plan: MissionPlan): string {
     w.str(st.center);
     for (let i = 0; i < 6; i++) w.f64(st.state[i]);
   } else {
-    w.u8(isVehicleLaunch(st) ? 2 : 1);
+    w.u8(isDirectLaunch(st) ? 3 : isVehicleLaunch(st) ? 2 : 1);
     w.str(st.site);
     w.u8(st.params.length);
     for (const p of st.params) w.f64(p);
@@ -614,7 +765,11 @@ export function encodePlan(plan: MissionPlan): string {
     w.f64(sc.wetMass);
     w.f64(sc.dryMass);
     w.u8(sc.engines.length);
-    for (const e of sc.engines) { w.f64(e.thrust); w.f64(e.isp); }
+    for (const e of sc.engines) {
+      w.f64(e.thrust);
+      w.f64(e.isp);
+      if (plan.format === PLAN_FORMAT_DIRECT) w.u8((e.restartable === false ? ENGINE_NO_RESTART : 0) | (e.throttleable === false ? ENGINE_NO_THROTTLE : 0));
+    }
   };
   const burn = (b: PlanBurn, withStage: boolean) => {
     w.f64(b.start);
@@ -663,13 +818,13 @@ export function decodePlan(s: string): MissionPlan {
     const state: number[] = [];
     for (let i = 0; i < 6; i++) state.push(r.f64('start.state'));
     start = { kind: 'state', center, state };
-  } else if (tag === 1 || (tag === 2 && format === PLAN_FORMAT_STAGED)) {
+  } else if (tag === 1 || (tag === 2 && format >= PLAN_FORMAT_STAGED) || (tag === 3 && format === PLAN_FORMAT_DIRECT)) {
     const site = r.str('start.site');
     const n = r.u8('start.params count');
     if (n > LIMITS.maxLaunchParams) throw new PlanError(`too many launch parameters (${n})`);
     const params: number[] = [];
     for (let i = 0; i < n; i++) params.push(r.f64('start.params'));
-    start = tag === 2 ? { kind: 'launch', site, params, ascent: 'vehicle' } : { kind: 'launch', site, params };
+    start = tag === 3 ? { kind: 'launch', site, params, ascent: 'direct' } : tag === 2 ? { kind: 'launch', site, params, ascent: 'vehicle' } : { kind: 'launch', site, params };
   } else throw new PlanError(`unknown start kind ${tag}`);
   const readStage = (what: string): Stage => {
     const wetMass = r.f64(`${what}.wetMass`);
@@ -677,7 +832,15 @@ export function decodePlan(s: string): MissionPlan {
     const ne = r.u8(`${what} engine count`);
     if (ne > LIMITS.maxEngines) throw new PlanError(`too many engines (${ne})`);
     const engines: Engine[] = [];
-    for (let i = 0; i < ne; i++) engines.push({ thrust: r.f64('engine thrust'), isp: r.f64('engine isp') });
+    for (let i = 0; i < ne; i++) {
+      const thrust = r.f64('engine thrust');
+      const isp = r.f64('engine isp');
+      if (format !== PLAN_FORMAT_DIRECT) { engines.push({ thrust, isp }); continue; }
+      const fl = r.u8('engine flags');
+      if (fl & ~(ENGINE_NO_RESTART | ENGINE_NO_THROTTLE)) throw new PlanError(`${what}: unknown engine flag bits ${fl}`);
+      // Canonical in memory: a flag appears only when false.
+      engines.push({ thrust, isp, ...(fl & ENGINE_NO_RESTART ? { restartable: false } : {}), ...(fl & ENGINE_NO_THROTTLE ? { throttleable: false } : {}) });
+    }
     return { wetMass, dryMass, engines };
   };
   const readBurn = (i: number, withStage: boolean): PlanBurn => {

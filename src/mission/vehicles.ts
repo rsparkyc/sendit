@@ -13,7 +13,7 @@
  * These calibrate and validate the ascent model (test/ascent-validation.test.ts)
  * and are what part three chooses mission vehicles from.
  */
-import type { Engine, Stage } from './plan';
+import { SOLID, type Engine, type Stage } from './plan';
 
 export interface VehicleSpec {
   readonly id: string;
@@ -80,8 +80,32 @@ export const VEHICLES: readonly VehicleSpec[] = [
   },
 ];
 
+const solid = (propellant: number, dryMass: number, thrust: number, isp: number): Stage => ({ wetMass: propellant + dryMass, dryMass, engines: [{ thrust, isp, ...SOLID }] });
+
+/**
+ * All-solid vehicles (every engine non-restartable and non-throttleable), for
+ * direct injection. Kept OUT of VEHICLES so the pinned ascent cases and the
+ * payload calibration (which loop over VEHICLES) are unchanged.
+ */
+export const SOLID_VEHICLES: readonly VehicleSpec[] = [
+  {
+    id: 'minotaur-v',
+    name: 'Minotaur V (all solid, APPROXIMATE)',
+    class: 'small',
+    stages: [
+      solid(45400, 3600 + 500, 2224e3, 286),
+      solid(24500, 3300, 1223e3, 308),
+      solid(6170, 1120, 289e3, 300),
+      solid(2010, 154 + 300, 68.6e3, 288),
+      solid(1066, 82, 54.8e3, 290),
+    ],
+    notes: 'Five solid stages: SR-118, SR-119, SR-120 (Peacekeeper), Star 48BV, Star 37FM. Thrust and Isp from the Minotaur V article (SR-118 Isp taken as ~286 s vacuum, the article quotes 229 s); propellant and dry masses are APPROXIMATE public figures for the motors (Peacekeeper stages, ATK Star motor catalogue values as remembered, not checked against the catalogue); fairing ~0.5 t with stage 1; ~0.3 t of guidance, avionics and structure (assumed) with stage 4. Total ~89.1 t against the published 89.4 t liftoff. Published capability: 342 kg to TLI (flew LADEE, 2013, from Wallops).',
+    sources: ['https://en.wikipedia.org/wiki/Minotaur_V', 'https://en.wikipedia.org/wiki/LGM-118_Peacekeeper'],
+  },
+];
+
 export function vehicleSpec(id: string): VehicleSpec {
-  const v = VEHICLES.find((x) => x.id === id);
+  const v = VEHICLES.find((x) => x.id === id) ?? SOLID_VEHICLES.find((x) => x.id === id);
   if (!v) throw new Error(`unknown vehicle ${id}`);
   return v;
 }
@@ -93,7 +117,7 @@ export function withSpacecraft(v: VehicleSpec, spacecraft: Stage): Stage[] {
 
 /** A catalogue vehicle's lower stages as fresh plain data (mission rules keep their own copy). */
 export function catalogueStages(id: string): Stage[] {
-  return vehicleSpec(id).stages.map((s) => ({ wetMass: s.wetMass, dryMass: s.dryMass, engines: s.engines.map((e) => ({ thrust: e.thrust, isp: e.isp })) }));
+  return vehicleSpec(id).stages.map((s) => ({ wetMass: s.wetMass, dryMass: s.dryMass, engines: s.engines.map((e) => ({ ...e })) }));
 }
 
 /**
