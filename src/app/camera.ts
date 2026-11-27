@@ -2,7 +2,9 @@
  * Orbit camera around a focus point, in frame coordinates (float64, metres).
  * Zoom is exponential in distance and smoothed, so one wheel gesture feels the
  * same in low orbit and at 30 AU. Switching focus glides from the old point.
- * Frame z is "up" (ecliptic north, or the rotating frame's orbit normal).
+ * Frame z is "up" and dragging turns about it (ecliptic north for the
+ * barycentre and the Sun, the centre body's north pole for a body-centred
+ * inertial or surface frame, the orbit normal for a rotating frame).
  */
 export const MIN_DISTANCE = 1; // m
 export const MAX_DISTANCE = 2e14; // m, ~1300 AU

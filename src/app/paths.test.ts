@@ -21,7 +21,7 @@ describe('paths', () => {
   it('body path in a centred inertial frame is a circle; in the rotating frame a point', () => {
     const p = bodyPath(ctx, { kind: 'inertial', center: 0 }, 1, 0, 2 * Math.PI, 64);
     for (let i = 0; i < p.times.length; i++) {
-      // Ecliptic axes tilt the circle, but the radius is preserved.
+      // Without a display pole the inertial frame keeps ecliptic axes, which tilt the circle; the radius is preserved.
       expect(Math.hypot(p.points[3 * i], p.points[3 * i + 1], p.points[3 * i + 2])).toBeCloseTo(1e8, 1);
     }
     const r = bodyPath(ctx, { kind: 'rotating', center: 0, secondary: 1 }, 1, 0, 2 * Math.PI, 64);
