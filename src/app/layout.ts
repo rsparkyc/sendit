@@ -455,6 +455,9 @@ export class Layout {
       const fl = this.isFloating(id);
       b.classList.toggle('floating', fl);
       b.title = fl ? 'Floating window: click to bring it to front, double-click to dock it back' : '';
+      // Named even when the collapsed rail hides the label (display: none), and say when it is a floating window.
+      const label = TABS.find((t) => t.id === id)!.label;
+      b.setAttribute('aria-label', fl ? `${label} (floating window)` : label);
       const on = !fl && id === this.tab && (this.mode === 'sheet' ? this.sheetState !== 'peek' : this.mode === 'side' ? !this.collapsed.side : !this.collapsed.right);
       b.setAttribute('aria-selected', String(id === this.tab));
       b.classList.toggle('active', on);

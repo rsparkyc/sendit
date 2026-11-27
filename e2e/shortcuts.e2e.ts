@@ -68,29 +68,47 @@ test.describe('J / K time keys', () => {
     await settled(page);
     expect(r).toBeGreaterThan(0);
 
-    // Hold K ~1 s: forward by about rate × 1 s.
-    let t0 = await T(page);
-    await page.keyboard.down('k');
-    await page.waitForTimeout(1000);
-    await page.keyboard.up('k');
-    let d = (await T(page)) - t0;
-    console.log(`hold K 1 s: ${d.toFixed(0)} s at ${r.toFixed(0)} s/s`);
-    expect(d).toBeGreaterThan(r * 0.6);
-    expect(d).toBeLessThan(r * 1.8);
+    // Hold, measured rather than assumed: on a slow runner the key is held longer than the waitForTimeout, so the
+    // page records when it saw keydown and keyup and the distance is compared with rate × that held time. Slack:
+    // a frame or two of latency at each end (the last frame before keyup may not have run), and r's own error.
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__keyAt = {};
+      addEventListener('keydown', (e) => { if (!e.repeat) w.__keyAt[`down-${e.key}`] = performance.now(); }, true);
+      addEventListener('keyup', (e) => { w.__keyAt[`up-${e.key}`] = performance.now(); }, true);
+    });
+    const hold = async (key: string, ms: number) => {
+      const t0 = await T(page);
+      await page.keyboard.down(key);
+      await page.waitForTimeout(ms);
+      await page.keyboard.up(key);
+      const d = (await T(page)) - t0;
+      const held = await page.evaluate((k) => { const a = (window as any).__keyAt; return (a[`up-${k}`] - a[`down-${k}`]) / 1000; }, key);
+      return { d, held };
+    };
+    const SLACK = 0.1; // real seconds: about two frames at 30 fps at each end together, plus timer granularity
+    const near = (d: number, held: number, what: string) => {
+      const lo = r * Math.max(0.1, held - SLACK) * 0.85;
+      const hi = r * Math.max(0.1, held + SLACK) * 1.15;
+      expect(Math.abs(d), `${what}: moved ${d.toFixed(1)} s in ${held.toFixed(3)} s held at ${r.toFixed(1)} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`).toBeGreaterThan(lo);
+      expect(Math.abs(d), `${what}: moved ${d.toFixed(1)} s in ${held.toFixed(3)} s held at ${r.toFixed(1)} s/s; expected ${lo.toFixed(1)} … ${hi.toFixed(1)}`).toBeLessThan(hi);
+    };
+    // Hold K ~1 s: forward by rate × held.
+    let h = await hold('k', 1000);
+    console.log(`hold K: ${h.d.toFixed(0)} s in ${h.held.toFixed(3)} s held at ${r.toFixed(0)} s/s`);
+    expect(h.d).toBeGreaterThan(0);
+    near(h.d, h.held, 'hold K');
     // Hold J: back.
-    t0 = await T(page);
-    await page.keyboard.down('j');
-    await page.waitForTimeout(1000);
-    await page.keyboard.up('j');
-    d = (await T(page)) - t0;
-    expect(d).toBeLessThan(-r * 0.6);
-    expect(d).toBeGreaterThan(-r * 1.8);
-    // Tap: about a tenth of a second's worth.
-    t0 = await T(page);
+    h = await hold('j', 1000);
+    expect(h.d).toBeLessThan(0);
+    near(h.d, h.held, 'hold J');
+    // Tap: at least a tenth of a second's worth (the top-up), more only if the press itself lasted longer.
+    let t0 = await T(page);
     await page.keyboard.press('k');
-    d = (await T(page)) - t0;
+    let d = (await T(page)) - t0;
+    const tapHeld = await page.evaluate(() => { const a = (window as any).__keyAt; return (a['up-k'] - a['down-k']) / 1000; });
     expect(d).toBeGreaterThan(r * 0.09);
-    expect(d).toBeLessThan(r * 0.3);
+    expect(d, `tap: moved ${d.toFixed(1)} s, press lasted ${tapHeld.toFixed(3)} s`).toBeLessThan(r * Math.max(0.1, tapHeld + SLACK) * 1.15 + r * 0.1);
     // Playing when K is pressed: playback pauses and stays paused.
     await page.evaluate(() => (window as any).sendit.store.set({ paused: false }));
     await page.keyboard.press('k');

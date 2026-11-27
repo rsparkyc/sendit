@@ -316,10 +316,44 @@ test.describe('tablet landscape', () => {
     const b1 = await box(page, '.float-win[data-tab="orbit"]');
     expect(b1.x - b0.x).toBeCloseTo(90, -1);
     expect(b1.y - b0.y).toBeCloseTo(60, -1);
-    await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).tap().catch(async () => {
-      await page.getByRole('tab', { name: 'Nodes' }).tap();
-      await page.getByRole('button', { name: 'Pop out Nodes into a floating window' }).tap();
+    // Pop out Nodes: show its tab, bring the button into view, check that the button itself is the top element at its
+    // centre (on other font metrics it can sit under the floating Orbit window or a sticky header), tap, and expect
+    // the window at once; a failure prints what the layout looked like.
+    // Tapping the tab that is already shown collapses the column, so tap Nodes only if it is not the shown tab,
+    // and reopen the column if it is collapsed.
+    const nodesTab = page.getByRole('tab', { name: 'Nodes', exact: true });
+    if ((await nodesTab.getAttribute('aria-selected')) !== 'true') await nodesTab.tap();
+    const showPanels = page.getByRole('button', { name: 'Show panels' });
+    if (await showPanels.isVisible()) await showPanels.tap();
+    const pop = page.getByRole('button', { name: 'Pop out Nodes into a floating window' });
+    await pop.scrollIntoViewIfNeeded();
+    const diag = () => page.evaluate(() => {
+      const L = (window as any).sendit.layout;
+      const b = document.querySelector('.panel.nodes .undock') as HTMLElement | null;
+      const r = b?.getBoundingClientRect();
+      const top = r ? document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) : null;
+      return JSON.stringify({
+        viewport: [innerWidth, innerHeight], mode: L.mode, floatMode: L.floatMode?.(),
+        tabs: [...document.querySelectorAll('.sheet [role="tab"]')].map((t) => `${t.textContent}${t.getAttribute('aria-selected') === 'true' ? '*' : ''}`),
+        floats: [...document.querySelectorAll('.float-win')].map((w) => (w as HTMLElement).dataset.tab),
+        button: r ? { x: r.x, y: r.y, w: r.width, h: r.height, hidden: b!.hidden } : null,
+        topAtButton: top ? `${top.tagName}.${top.className}` : null,
+      });
     });
+    const onTop = await page.evaluate(() => {
+      const b = document.querySelector('.panel.nodes .undock') as HTMLElement | null;
+      if (!b) return false;
+      const r = b.getBoundingClientRect();
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return !!top && b.contains(top);
+    });
+    expect(onTop, `pop-out button reachable: ${await diag()}`).toBe(true);
+    await pop.tap();
+    try {
+      await expect(win(page, 'nodes')).toBeVisible({ timeout: 10_000 });
+    } catch (e) {
+      throw new Error(`no Nodes window after the tap: ${await diag()}\n${e}`);
+    }
     await win(page, 'nodes').getByRole('slider').fill('55');
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${SHOTS}/tablet-landscape.png` });
