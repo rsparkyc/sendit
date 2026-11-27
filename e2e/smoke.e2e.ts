@@ -9,6 +9,7 @@
  *  3. The planner computes a porkchop in its worker and a click selects a cell.
  *
  * Without WebGL only test 1 can run; 2 and 3 are skipped with the reason shown.
+ * REQUIRE_WEBGL=1 (CI's Firefox job) turns a missing WebGL into a failure instead, so a broken Xvfb cannot go green.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -24,7 +25,12 @@ function watch(page: Page): string[] {
   return errors;
 }
 
-const hasWebGL = (page: Page) => page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'));
+const REQUIRE_WEBGL = process.env.REQUIRE_WEBGL === '1';
+const hasWebGL = async (page: Page) => {
+  const ok = await page.evaluate(() => !!document.createElement('canvas').getContext('webgl2'));
+  if (!ok && REQUIRE_WEBGL) throw new Error('REQUIRE_WEBGL=1 but this engine has no WebGL here (headed Firefox under Xvfb should have it)');
+  return ok;
+};
 
 async function settled(page: Page): Promise<void> {
   await page.waitForFunction(() => {

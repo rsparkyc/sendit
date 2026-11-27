@@ -35,6 +35,13 @@ async function frames(page: Page, k = 2): Promise<void> {
   await page.waitForFunction(([n, kk]) => (window as any).sendit.renders() >= n + kk, [n0, k] as const, { timeout: 10_000 });
 }
 
+/** Wait until the camera has stopped moving (focus glides and zoom smoothing are time-based, seconds long) and that view
+ * is on screen. A spot found on screen while the view still drifts is stale by the time of the click. */
+async function settle(page: Page): Promise<void> {
+  await page.waitForFunction(() => (window as any).sendit.camera.settled(), undefined, { timeout: 30_000 });
+  await frames(page);
+}
+
 async function fresh(page: Page, mission = 'geo-from-leo'): Promise<void> {
   errors.length = 0;
   watch(page);
@@ -152,7 +159,7 @@ test.describe('desktop', () => {
     await fresh(page);
     await oneNode(page);
     await page.evaluate(() => { const w = (window as any).sendit; w.camera.elevation = 1.2; w.camera.setDistance(4e7, true); w.store.set({ focus: w.bodies.indexOf('earth') }); });
-    await frames(page, 3);
+    await settle(page);
     // Single click on the trajectory, away from the node: point picked, time cursor there, no node.
     const p = await page.evaluate(() => {
       const w = (window as any).sendit;
@@ -160,7 +167,8 @@ test.describe('desktop', () => {
         const q = w.screenAt(t, true);
         if (!q) continue;
         const pick = w.pickAt(q.x, q.y, false, false);
-        if (pick.winner?.kind === 'trajectory') return { ...q, t };
+        // The map itself must take the click: a label's text over the point would take it instead (labels are clickable).
+        if (pick.winner?.kind === 'trajectory' && document.elementFromPoint(q.x, q.y)?.id === 'view') return { ...q, t };
       }
       return null;
     });
@@ -181,13 +189,13 @@ test.describe('desktop', () => {
     // (The first click of the pair already moves the time cursor there, so the spacecraft itself is under the
     // pointer for the second: by the precedence that is a spacecraft pick; either way the same point.)
     await expect(page.locator('.tap-pop')).toBeHidden(); // N added the node and closed it
-    await frames(page);
+    await settle(page);
     const q = await page.evaluate((t0) => {
       const w = (window as any).sendit;
       for (let t = t0 + 900; t < t0 + 3000; t += 60) {
         const r = w.screenAt(t, true);
         // A spot where only the trajectory is under the pointer (on the planet's disc the planet would win).
-        if (r && w.pickAt(r.x, r.y, false, true).winner?.kind === 'trajectory') return { ...r, t };
+        if (r && w.pickAt(r.x, r.y, false, true).winner?.kind === 'trajectory' && document.elementFromPoint(r.x, r.y)?.id === 'view') return { ...r, t };
       }
       return null;
     }, p!.t);
@@ -220,10 +228,10 @@ test.describe('desktop', () => {
     const earth = await page.evaluate(() => (window as any).sendit.bodies.indexOf('earth'));
     // The Moon, seen from a distance where it is a small disc.
     await page.evaluate((m) => { const w = (window as any).sendit; w.store.set({ focus: m }); w.camera.setDistance(3e7, true); }, moon);
-    await frames(page, 4);
+    await settle(page);
     await page.evaluate((e) => (window as any).sendit.store.set({ focus: e }), earth);
     await page.evaluate(() => { const w = (window as any).sendit; w.camera.setDistance(1.2e9, true); });
-    await frames(page, 4);
+    await settle(page);
     const mp = await page.evaluate((m) => (window as any).sendit.labelAt(String(m)), moon);
     expect(mp, 'the Moon on screen').not.toBeNull();
     await page.mouse.dblclick(mp.x, mp.y);
@@ -235,10 +243,11 @@ test.describe('desktop', () => {
 
     // Back to Earth, looking down so the node marker sits over the planet's disc: ambiguous spot.
     await page.evaluate((e) => { const w = (window as any).sendit; w.store.set({ focus: e, selectedNode: null }); w.camera.elevation = 0.25; w.camera.setDistance(2.4e7, true); }, earth);
+    await settle(page); // the double click on the Moon started a glide; the spot must be found in the final view
     let amb: { x: number; y: number; kinds: string[] } | null = null;
     for (let k = 0; k < 24 && !amb; k++) {
       await page.evaluate((a) => { (window as any).sendit.camera.azimuth = a; }, (k * Math.PI) / 12);
-      await frames(page);
+      await settle(page);
       amb = await page.evaluate(() => {
         const w = (window as any).sendit;
         const n = w.labelAt('node:0');

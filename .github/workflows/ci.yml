@@ -153,6 +153,8 @@ jobs:
       PW_SUITE: ui
       # Headless Firefox on Linux has no WebGL; headed under Xvfb it gets Mesa llvmpipe (docs/mobile-testing.md).
       PW_FIREFOX_HEADED: '1'
+      # Without WebGL smoke.e2e.ts would skip its tests; here that must fail the job instead.
+      REQUIRE_WEBGL: '1'
       PW_PREBUILT: '1'
       PLAYWRIGHT_BLOB_OUTPUT_DIR: ${{ github.workspace }}/e2e/blob-report
       PLAYWRIGHT_BLOB_OUTPUT_NAME: firefox-smoke.zip

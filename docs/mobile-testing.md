@@ -25,7 +25,8 @@ Tests skipped on one engine say so in their own `test.skip(...)` with the reason
 all still fail with `FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS` (checked in the Playwright 1.65.1 Docker image).
 Headed Firefox under Xvfb gets Mesa llvmpipe with no prefs at all. So in CI run
 `PW_FIREFOX_HEADED=1 xvfb-run -a pnpm test:browsers` and Firefox gets the full smoke set; without it only the
-load test (the "could not create a WebGL context" message) runs there. WebKit and Chromium have WebGL headless
+load test (the "could not create a WebGL context" message) runs there. CI also sets `REQUIRE_WEBGL=1`, which makes a missing WebGL fail
+the smoke tests instead of skipping them. WebKit and Chromium have WebGL headless
 on Linux (WebKit: yes; Chromium: SwiftShader).
 
 ## What Playwright's WebKit is not
