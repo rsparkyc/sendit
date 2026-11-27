@@ -90,7 +90,9 @@ fn corrector_propagations() {
     check(parity::prop(&read("corrector.txt"), &mut c.eph, &mut c.fm, "corrector propagations"));
 }
 fn asset() -> Vec<u8> {
-    std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).expect("checkpoint asset")
+    // SENDIT_ASSET: the checkpoint asset when the crate is not in the repository (mutation-check.py).
+    let p = std::env::var_os("SENDIT_ASSET").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin"));
+    std::fs::read(&p).unwrap_or_else(|e| panic!("checkpoint asset {}: {e}", p.display()))
 }
 #[test]
 fn builtin_world_matches_fixture_world() {

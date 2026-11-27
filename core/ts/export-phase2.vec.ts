@@ -69,6 +69,8 @@ describe('phase 2: massive bodies and chunks', () => {
       { name: 'extra-terms-rel', scheme: 'kl8', physics: { zonal: [tess, fixedJn, j4], relativity: full.relativity }, h: -DEFAULT_STEP, t0: 0, steps: 8 },
       { name: 'full', scheme: 'kl8', physics: full, h: DEFAULT_STEP, t0: 0, steps: 12 },
       { name: 'full-resumed', scheme: 'kl8', physics: full, h: DEFAULT_STEP, t0: 0, boundary: 77, steps: 12 },
+      // Long steps, full physics with 1PN: makes the implicit half-kick's rounding visible.
+      { name: 'rel-long-step', scheme: 'kl8', physics: full, h: 64 * DEFAULT_STEP, t0: 0, steps: 40 },
       { name: 'full-resumed-backward', scheme: 'kl8', physics: full, h: -DEFAULT_STEP, t0: 0, boundary: -120, steps: 12 },
     ];
     const eph = new ChebyshevEphemeris(J2000_BODIES);

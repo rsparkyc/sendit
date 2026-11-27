@@ -8,7 +8,7 @@ runs the native parity suite against the generated fixtures and reports which
 sections caught it. Every mutation must be caught by at least one section.
 
 Usage (from the repository root, after `pnpm core:vectors`):
-    python3 core/scripts/mutation-check.py
+    python3 core/scripts/mutation-check.py [substring ...]   (e.g. nbody.rs)
 """
 import os
 import re
@@ -46,6 +46,36 @@ MUTATIONS = [
     ('FMA in the Chebyshev recurrence: tn = x2 * t - tPrev fused (positions)', 'src/cheb.rs',
      'let tn = x2 * tc - t_prev;\n                    t_prev = tc;\n                    tc = tn;\n                    px += tn * coeffs[o];',
      'let tn = x2.mul_add(tc, -t_prev);\n                    t_prev = tc;\n                    tc = tn;\n                    px += tn * coeffs[o];'),
+    # Layer one (phase two): the massive-body integrator and the chunk fitter.
+    ('Kahan v update: compensation term dropped (vc = 0)', 'src/nbody.rs',
+     'self.vc[k] = tmp - self.v[k] - y;\n                    self.v[k] = tmp;\n                }\n            }\n            if st == s',
+     'self.vc[k] = 0.0;\n                    self.v[k] = tmp;\n                }\n            }\n            if st == s'),
+    ('Kahan q update reassociated: qc = tmp - (q + y)', 'src/nbody.rs',
+     'self.qc[k] = tmp - self.q[k] - y;\n                self.q[k] = tmp;\n            }\n            let ts = self.stage_time(st);\n            self.forces(ts);\n        }',
+     'self.qc[k] = tmp - (self.q[k] + y);\n                self.q[k] = tmp;\n            }\n            let ts = self.stage_time(st);\n            self.forces(ts);\n        }'),
+    ('kick coefficient applied as b * (h * a) instead of (b * h) * a', 'src/nbody.rs',
+     'let y = kb * self.acc[k] - self.vc[k];', 'let y = self.scheme.b[st] * (h * self.acc[k]) - self.vc[k];'),
+    ('composition: kick weights applied in reverse stage order', 'src/nbody.rs',
+     'let kb = self.scheme.b[st] * h;', 'let kb = self.scheme.b[s - st] * h;'),
+    ('composition: drift weights applied in reverse stage order', 'src/nbody.rs',
+     'let ka = self.scheme.a[st] * h;', 'let ka = self.scheme.a[s - 1 - st] * h;'),
+    ('composition coefficients: b[i] = w[i-1]/2 + w[i]/2', 'src/nbody.rs',
+     'b[i] = (w[i - 1] + w[i]) / 2.0;', 'b[i] = w[i - 1] / 2.0 + w[i] / 2.0;'),
+    ('implicit half-kick distributed: v + half a + half apn', 'src/nbody.rs',
+     'self.vt[k] = self.v[k] + half * (self.acc[k] + self.apn[k]);', 'self.vt[k] = self.v[k] + half * self.acc[k] + half * self.apn[k];'),
+    ('explicit 1PN half-kick distributed: c a + c apn', 'src/nbody.rs',
+     'let y = c * (self.acc[k] + self.apn[k]) - self.vc[k];', 'let y = c * self.acc[k] + c * self.apn[k] - self.vc[k];'),
+    ('implicit half-kick: one fixed-point iteration fewer', 'src/nbody.rs',
+     'for _ in 0..PN_ITERATIONS {', 'for _ in 1..PN_ITERATIONS {'),
+    ('Householder reflector factor reassociated: 2 * (dot / vtv)', 'src/chunk.rs',
+     'let f = (2.0 * dot) / vtv;\n            a[k * cols + c] -= f * v0;', 'let f = 2.0 * (dot / vtv);\n            a[k * cols + c] -= f * v0;'),
+    ('Householder vtv: v0^2 added last', 'src/chunk.rs',
+     'let mut vtv = v0 * v0;\n        for i in k + 1..rows {\n            vtv += a[i * cols + k] * a[i * cols + k];\n        }',
+     'let mut vtv = 0.0;\n        for i in k + 1..rows {\n            vtv += a[i * cols + k] * a[i * cols + k];\n        }\n        vtv += v0 * v0;'),
+    ('Householder: back substitution as multiply by reciprocal of the diagonal', 'src/chunk.rs',
+     'y[k] = s / diag[k];', 'y[k] = s * (1.0 / diag[k]);'),
+    ('fit: pseudo-inverse dot product in reverse row order', 'src/chunk.rs',
+     'for r in 0..rows {\n                    sum += basis.pinv', 'for r in (0..rows).rev() {\n                    sum += basis.pinv'),
 ]
 
 # Mutations that are bit-identical by construction or almost never observable,
@@ -68,6 +98,26 @@ EXPECTED_INVISIBLE = {
     # above). Any nonzero tesseral term with y != 0 adds a nonzero
     # w-term to ax and absorbs every zero. So no finite input changes a bit.
     'degree-4 field: 1 * (x0 * v00 - y0 * 0) simplified to x0 * v00',
+    # EQUIVALENT MUTANTS (layer one). KAHAN_LI_8's drift weights are A_HALF
+    # followed by its mirror image, so w[i] and w[n-1-i] are the same float64;
+    # b[i] = (w[i-1] + w[i]) / 2 then equals b[n-i] because + is commutative
+    # (LEAPFROG, a = [1], b = [1/2, 1/2], is symmetric too). Applying either
+    # weight list in reverse stage order therefore uses identical numbers.
+    'composition: kick weights applied in reverse stage order',
+    'composition: drift weights applied in reverse stage order',
+    # Division by 2 and multiplication by 2 are exact for every finite value
+    # that neither overflows nor is subnormal (the weights are O(1), dot and
+    # vtv are O(1..1e3) Chebyshev sums), so (x + y) / 2 = x / 2 + y / 2 and
+    # (2 * dot) / vtv = 2 * (dot / vtv) bit for bit.
+    'composition coefficients: b[i] = w[i-1]/2 + w[i]/2',
+    'Householder reflector factor reassociated: 2 * (dot / vtv)',
+    # NOT OBSERVABLE (not equivalent): the implicit half-kick vt is only the
+    # argument of the 1PN acceleration, which is ~1e-8 of the Newtonian one and
+    # depends on vt to first order; a 1-ulp change of vt moves apn by ~1e-8 ulp
+    # (also with 64-day steps, nbody case rel-long-step). The same arithmetic
+    # in the explicit kick (kick(): c * (acc + apn)) IS caught, as is changing
+    # the iteration count.
+    'implicit half-kick distributed: v + half a + half apn',
 }
 
 
@@ -78,9 +128,12 @@ def main() -> int:
     tmp = tempfile.mkdtemp(prefix='sendit-core-mut-')
     work = os.path.join(tmp, 'core')
     shutil.copytree(CORE, work, ignore=shutil.ignore_patterns('target', 'fixtures'))
-    env = dict(os.environ, SENDIT_FIXTURES=FIXTURES, CARGO_TARGET_DIR=os.path.join(CORE, 'target', 'mutation'))
+    env = dict(os.environ, SENDIT_FIXTURES=FIXTURES, SENDIT_ASSET=os.path.join(CORE, '..', 'src', 'physics', 'data', 'checkpoints-1950-2100.bin'), CARGO_TARGET_DIR=os.path.join(CORE, 'target', 'mutation'))
+    only = sys.argv[1:]  # optional substrings of a mutation's name or file: run only those
     failed = 0
     for name, path, old, new in MUTATIONS:
+        if only and not any(o in name or o in path for o in only):
+            continue
         src = os.path.join(work, path)
         orig = open(src).read()
         if old not in orig:
@@ -88,7 +141,13 @@ def main() -> int:
             failed += 1
             continue
         open(src, 'w').write(orig.replace(old, new, 1))
-        out = subprocess.run(['cargo', 'test', '-j', '4', '--release', '--test', 'parity', '--', '--test-threads=1'], cwd=work, env=env, capture_output=True, text=True).stdout
+        res = subprocess.run(['cargo', 'test', '-j', '4', '--release', '--test', 'parity', '--', '--test-threads=1'], cwd=work, env=env, capture_output=True, text=True)
+        out = res.stdout
+        if res.returncode != 0 and not re.search(r'values compared, [1-9]', out):
+            print(f'!! {name}: cargo test failed without a parity mismatch:')
+            print('\n'.join((res.stdout + res.stderr).splitlines()[-25:]))
+            failed += 1
+            continue
         open(src, 'w').write(orig)
         caught = sorted(set(m.group(0) for m in re.finditer(r'^[^\n]*values compared, [1-9]\d* mismatches', out, re.M)))
         if name in EXPECTED_INVISIBLE:
