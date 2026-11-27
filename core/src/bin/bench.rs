@@ -1,0 +1,146 @@
+//! Native benchmark of the workloads of test/ephemeris-bench.test.ts, on the
+//! chunks and cases exported by `pnpm core:vectors`. Run:
+//!   cargo run --release --bin bench
+//! Reports median, IQR and range over repeated runs after warm-up.
+
+use sendit_core::fixture::{lines, World};
+use sendit_core::parity;
+use sendit_core::spacecraft::{self as sc, Burn, BurnFrame, PropagateOptions};
+use std::hint::black_box;
+use std::path::PathBuf;
+use std::time::Instant;
+
+fn dir() -> PathBuf {
+    std::env::var_os("SENDIT_FIXTURES").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/generated"))
+}
+
+struct Stats(Vec<f64>);
+impl Stats {
+    fn fmt(mut self, unit: &str, d: usize) -> String {
+        self.0.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let s = &self.0;
+        let q = |p: f64| s[((p * (s.len() - 1) as f64 + 0.5).floor() as usize).min(s.len() - 1)];
+        format!("median {:.d$} {unit} (IQR {:.d$}..{:.d$}, range {:.d$}..{:.d$})", q(0.5), q(0.25), q(0.75), s[0], s[s.len() - 1])
+    }
+}
+fn per_call(times: &[f64], reps: usize, warm: usize, mut f: impl FnMut(f64)) -> Stats {
+    let mut out = Vec::new();
+    for r in 0..warm + reps {
+        let t0 = Instant::now();
+        for &t in times {
+            f(t);
+        }
+        if r >= warm {
+            out.push(t0.elapsed().as_nanos() as f64 / times.len() as f64);
+        }
+    }
+    Stats(out)
+}
+fn wall(reps: usize, warm: usize, mut f: impl FnMut()) -> Stats {
+    let mut out = Vec::new();
+    for r in 0..warm + reps {
+        let t0 = Instant::now();
+        f();
+        if r >= warm {
+            out.push(t0.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+    Stats(out)
+}
+
+struct Case {
+    name: String,
+    y0: Vec<f64>,
+    t0: f64,
+    t1: f64,
+    rtol: f64,
+    dry: f64,
+    burns: Vec<Burn>,
+}
+fn cases(file: &str) -> Vec<Case> {
+    let text = std::fs::read_to_string(dir().join(file)).unwrap();
+    let mut out = Vec::new();
+    for mut l in lines(&text) {
+        if l.word() != "case" {
+            continue;
+        }
+        let name = l.word().to_string();
+        let _kind = l.word();
+        let y0 = l.fs(7);
+        let (t0, t1, rtol, dry) = (l.f(), l.f(), l.f(), l.f());
+        let nb = l.n();
+        let burns = (0..nb)
+            .map(|_| {
+                let v = l.fs(9);
+                Burn { t_start: v[0], duration: v[1], thrust: v[2], isp: v[3], direction: [v[4], v[5], v[6]], frame: if v[7] == 1.0 { BurnFrame::Orbital { body: v[8] as usize } } else { BurnFrame::Inertial } }
+            })
+            .collect();
+        out.push(Case { name, y0, t0, t1, rtol, dry, burns });
+    }
+    out
+}
+
+fn main() {
+    let world = World::parse(&std::fs::read_to_string(dir().join("world.txt")).unwrap());
+    let (mut eph, mut fm) = parity::load_world(&world, |k| std::fs::read(dir().join(format!("chunk_{k}.bin"))).unwrap());
+    let n = world.layout.count;
+    let c = world.layout.chunk_span;
+    let mut s: u32 = 12345;
+    let mut rnd = || {
+        s = s.wrapping_mul(1103515245).wrapping_add(12345);
+        s as f64 / 4294967296.0
+    };
+    let random: Vec<f64> = (0..20000).map(|_| (-1.0 + 3.0 * rnd()) * c).collect();
+    let seq: Vec<f64> = (0..20000).map(|i| 0.3 * c + (i / 13) as f64 * 600.0 + ((i % 13) as f64 / 12.0) * 600.0).collect();
+    let mut pos = vec![0.0; 3 * n];
+    let mut vel = vec![0.0; 3 * n];
+    let mut one = [0.0; 6];
+    println!("native ({})", std::env::consts::ARCH);
+    for simd in [false, true] {
+        eph.simd = simd;
+        let tag = if simd { "f64x2" } else { "scalar" };
+        println!("positions, random ({tag}):     {}", per_call(&random, 25, 5, |t| eph.positions(black_box(t), &mut pos)).fmt("ns", 0));
+        println!("positions, sequential ({tag}): {}", per_call(&seq, 25, 5, |t| eph.positions(black_box(t), &mut pos)).fmt("ns", 0));
+    }
+    eph.simd = false;
+    println!("evaluate pos+vel:            {}", per_call(&random, 25, 5, |t| eph.evaluate(black_box(t), &mut pos, Some(&mut vel))).fmt("ns", 0));
+    let sub = [world.body("io"), world.body("earth"), world.body("jupiter")];
+    let mut sp = [0.0; 9];
+    println!("evaluateBodies(3):           {}", per_call(&random, 25, 5, |t| eph.evaluate_bodies(black_box(t), &sub, &mut sp, None)).fmt("ns", 0));
+    let sun = world.body("sun");
+    let io = world.body("io");
+    println!("bodyState(sun):              {}", per_call(&random, 25, 5, |t| eph.body_state(sun, black_box(t), &mut one)).fmt("ns", 0));
+    println!("bodyState(io):               {}", per_call(&random, 25, 5, |t| eph.body_state(io, black_box(t), &mut one)).fmt("ns", 0));
+
+    let props = cases("prop.txt");
+    for (name, reps) in [("leo30", 15), ("helio1yr", 40)] {
+        let cs = props.iter().find(|x| x.name == name).unwrap();
+        // As the TypeScript bench: propagate(eph, y0, 0, t1) with default options.
+        let opts = PropagateOptions::default();
+        let mut steps = 0;
+        let none = wall(reps, 2, || {
+            steps = sc::propagate(&mut eph, &mut fm, &cs.y0, cs.t0, cs.t1, &[], &opts, None).unwrap().accepted;
+        });
+        let with_cb = wall(reps, 2, || {
+            let mut acc = 0.0;
+            let mut cb = |v: &mut sc::StepView<'_, '_, sendit_core::cheb::ChebEphemeris>| {
+                let t = v.t();
+                let tp = v.t_prev();
+                let mut tmp = [0.0; 7];
+                v.interpolate(tp + (t - tp) * 0.37, &mut tmp).unwrap();
+                acc += tmp[0];
+                true
+            };
+            sc::propagate(&mut eph, &mut fm, &cs.y0, cs.t0, cs.t1, &[], &opts, Some(&mut cb)).unwrap();
+            black_box(acc);
+        });
+        println!("{name}: {steps} steps\n  propagate                          {}\n  with per-step dense sample (Rust)  {}", none.fmt("ms", 1), with_cb.fmt("ms", 1));
+    }
+    let corr = cases("corrector.txt");
+    let w = wall(5, 1, || {
+        for cs in &corr {
+            sc::propagate(&mut eph, &mut fm, &cs.y0, cs.t0, cs.t1, &cs.burns, &PropagateOptions { rtol: cs.rtol, dry_mass: cs.dry }, None).unwrap();
+        }
+    });
+    println!("corrector workload: {} propagations per run, {}", corr.len(), w.fmt("ms", 0));
+}

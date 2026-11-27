@@ -1,0 +1,5 @@
+# Pinned so native and WebAssembly builds of the parity suite use one compiler.
+[toolchain]
+channel = "1.98.0"
+targets = ["wasm32-unknown-unknown", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
+profile = "minimal"

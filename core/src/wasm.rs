@@ -1,0 +1,241 @@
+//! Plain WebAssembly exports (no wasm-bindgen): the parity suite and the
+//! benchmark entry points, driven from JavaScript by core/scripts/run-wasm.mjs.
+//! Memory protocol: JavaScript calls `alloc`, copies bytes in, passes
+//! (pointer, length); results are read from exported buffers.
+//!
+//! The one import, `env.on_step(t, y_ptr) -> i32`, exists only to measure the
+//! cost of a per-step JavaScript callback (see core/README.md).
+
+use crate::cheb::ChebEphemeris;
+use crate::fixture::World;
+use crate::parity;
+use crate::spacecraft::{self as sc, Burn, BurnFrame, ForceModel, PropagateOptions};
+use std::cell::RefCell;
+
+#[link(wasm_import_module = "env")]
+unsafe extern "C" {
+    fn on_step(t: f64, y: *const f64) -> i32;
+}
+
+struct State {
+    world: World,
+    eph: ChebEphemeris,
+    fm: ForceModel,
+    pos: Vec<f64>,
+    samples: Vec<f64>,
+    result: [f64; 10],
+}
+
+thread_local! {
+    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+    static REPORT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+    unsafe { std::slice::from_raw_parts(ptr, len) }
+}
+fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
+    std::str::from_utf8(bytes(ptr, len)).expect("utf-8")
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn alloc(len: usize) -> *mut u8 {
+    let mut v = Vec::<u8>::with_capacity(len.max(1));
+    let p = v.as_mut_ptr();
+    std::mem::forget(v);
+    p
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn dealloc(ptr: *mut u8, len: usize) {
+    unsafe { drop(Vec::from_raw_parts(ptr, 0, len.max(1))) }
+}
+
+/// Parse world.txt and build the ephemeris (no chunks yet) and force model.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_world(ptr: *const u8, len: usize) {
+    let world = World::parse(text(ptr, len));
+    let eph = ChebEphemeris::new(world.layout.clone(), world.gm.clone(), world.t0);
+    let fm = ForceModel::new(&world.gm, &world.fields, world.relativity);
+    let n = world.layout.count;
+    STATE.with(|s| *s.borrow_mut() = Some(State { world, eph, fm, pos: vec![0.0; 3 * n], samples: Vec::new(), result: [0.0; 10] }));
+}
+
+/// Chunk k's coefficients as little-endian float64 bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn add_chunk(k: i32, ptr: *const u8, len: usize) {
+    STATE.with(|s| s.borrow_mut().as_mut().unwrap().eph.add_chunk(k as i64, crate::fixture::f64s_le(bytes(ptr, len))));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_simd(on: i32) {
+    STATE.with(|s| s.borrow_mut().as_mut().unwrap().eph.simd = on != 0);
+}
+
+/// Run one parity section over the fixture text; returns the number of mismatches
+/// (u32::MAX if nothing was compared). The summary is in report_ptr/report_len.
+/// Sections: 0 dmath, 1 dop853, 2 gravity, 3 orientation, 4 ephem, 5 golden eval,
+/// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative.
+#[unsafe(no_mangle)]
+pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
+    let t = text(ptr, len);
+    let r = match section {
+        0 => parity::dmath(t),
+        1 => parity::dop853(t),
+        2 => parity::gravity(t),
+        9 => parity::deriv_rel(t),
+        _ => STATE.with(|s| {
+            let mut g = s.borrow_mut();
+            let st = g.as_mut().expect("set_world first");
+            match section {
+                3 => parity::orientation(t, &st.world),
+                4 => parity::ephem(t, &mut st.eph),
+                5 => parity::golden_eval(&mut st.eph, &st.world),
+                6 => parity::deriv(t, &mut st.eph, &mut st.fm),
+                7 => parity::prop(t, &mut st.eph, &mut st.fm, "propagation"),
+                _ => parity::prop(t, &mut st.eph, &mut st.fm, "corrector propagations"),
+            }
+        }),
+    };
+    REPORT.with(|rep| *rep.borrow_mut() = r.summary());
+    if r.checked == 0 { u32::MAX } else { r.mismatches as u32 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn report_ptr() -> *const u8 {
+    REPORT.with(|r| r.borrow().as_ptr())
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn report_len() -> usize {
+    REPORT.with(|r| r.borrow().len())
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark entry points
+
+/// Buffer of 3N positions written by `positions`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pos_ptr() -> *const f64 {
+    STATE.with(|s| s.borrow().as_ref().unwrap().pos.as_ptr())
+}
+
+/// One positions() call per JavaScript call (measures the boundary).
+#[unsafe(no_mangle)]
+pub extern "C" fn positions(t: f64) {
+    STATE.with(|s| {
+        let mut g = s.borrow_mut();
+        let st = g.as_mut().unwrap();
+        let State { eph, pos, .. } = st;
+        eph.positions(t, pos);
+    });
+}
+
+/// positions() at n times from memory, all inside WebAssembly; returns a checksum.
+#[unsafe(no_mangle)]
+pub extern "C" fn positions_many(times: *const f64, n: usize) -> f64 {
+    let ts = unsafe { std::slice::from_raw_parts(times, n) };
+    STATE.with(|s| {
+        let mut g = s.borrow_mut();
+        let st = g.as_mut().unwrap();
+        let State { eph, pos, .. } = st;
+        let mut acc = 0.0;
+        for &t in ts {
+            eph.positions(t, pos);
+            acc += pos[0];
+        }
+        acc
+    })
+}
+
+/// evaluate(t, pos, vel) at n times inside WebAssembly.
+#[unsafe(no_mangle)]
+pub extern "C" fn evaluate_many(times: *const f64, n: usize) -> f64 {
+    let ts = unsafe { std::slice::from_raw_parts(times, n) };
+    STATE.with(|s| {
+        let mut g = s.borrow_mut();
+        let st = g.as_mut().unwrap();
+        let nb = st.eph.layout.count;
+        let mut vel = vec![0.0; 3 * nb];
+        let State { eph, pos, .. } = st;
+        let mut acc = 0.0;
+        for &t in ts {
+            eph.evaluate(t, pos, Some(&mut vel));
+            acc += pos[0] + vel[0];
+        }
+        acc
+    })
+}
+
+/// Burn records: 9 float64 each (tStart, duration, thrust, isp, dx, dy, dz, orbital 0/1, body).
+fn read_burns(p: *const f64, n: usize) -> Vec<Burn> {
+    let b = unsafe { std::slice::from_raw_parts(p, 9 * n) };
+    (0..n)
+        .map(|i| {
+            let r = &b[9 * i..9 * i + 9];
+            Burn { t_start: r[0], duration: r[1], thrust: r[2], isp: r[3], direction: [r[4], r[5], r[6]], frame: if r[7] == 1.0 { BurnFrame::Orbital { body: r[8] as usize } } else { BurnFrame::Inertial } }
+        })
+        .collect()
+}
+
+/// propagate() from JavaScript. mode 0: no callback; 1: call env.on_step for every
+/// accepted step (the per-step boundary crossing); 2: record (t, y, dense sample)
+/// per step into a WebAssembly buffer read once at the end (samples_ptr/len).
+/// Result (t, y[7], accepted, rejected) in result_ptr; returns 0, or 1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn propagate(y0: *const f64, t0: f64, t1: f64, rtol: f64, dry: f64, burns: *const f64, nb: usize, mode: u32) -> u32 {
+    let y0 = unsafe { std::slice::from_raw_parts(y0, 7) }.to_vec();
+    let burns = read_burns(burns, nb);
+    STATE.with(|s| {
+        let mut g = s.borrow_mut();
+        let st = g.as_mut().unwrap();
+        let State { eph, fm, samples, result, .. } = st;
+        samples.clear();
+        let opts = PropagateOptions { rtol, dry_mass: dry };
+        let res = match mode {
+            0 => sc::propagate(eph, fm, &y0, t0, t1, &burns, &opts, None),
+            1 => {
+                let mut cb = |v: &mut sc::StepView<'_, '_, ChebEphemeris>| unsafe { on_step(v.t(), v.y().as_ptr()) != 0 };
+                sc::propagate(eph, fm, &y0, t0, t1, &burns, &opts, Some(&mut cb))
+            }
+            _ => {
+                let mut cb = |v: &mut sc::StepView<'_, '_, ChebEphemeris>| {
+                    let t = v.t();
+                    let tp = v.t_prev();
+                    samples.push(t);
+                    samples.extend_from_slice(v.y());
+                    let mut tmp = [0.0; 7];
+                    v.interpolate(tp + (t - tp) * 0.37, &mut tmp).unwrap();
+                    samples.extend_from_slice(&tmp);
+                    true
+                };
+                sc::propagate(eph, fm, &y0, t0, t1, &burns, &opts, Some(&mut cb))
+            }
+        };
+        match res {
+            Ok(r) => {
+                result[0] = r.t;
+                result[1..8].copy_from_slice(&r.y);
+                result[8] = r.accepted as f64;
+                result[9] = r.rejected as f64;
+                0
+            }
+            Err(e) => {
+                REPORT.with(|rep| *rep.borrow_mut() = format!("{e:?}"));
+                1
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn result_ptr() -> *const f64 {
+    STATE.with(|s| s.borrow().as_ref().unwrap().result.as_ptr())
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn samples_ptr() -> *const f64 {
+    STATE.with(|s| s.borrow().as_ref().unwrap().samples.as_ptr())
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn samples_len() -> usize {
+    STATE.with(|s| s.borrow().as_ref().unwrap().samples.len())
+}

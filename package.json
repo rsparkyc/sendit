@@ -15,7 +15,8 @@
     "gen:campaign-sites": "python3 scripts/gen-campaign-sites.py",
     "gen:dop853":"python3 scripts/gen-dop853.py > src/physics/dop853-coefficients.ts",
     "test:browsers": "playwright test --config e2e/playwright.config.ts",
-    "bench:ephemeris": "BENCH=1 vitest run test/ephemeris-bench.test.ts --silent=false"
+    "bench:ephemeris": "BENCH=1 vitest run test/ephemeris-bench.test.ts --silent=false",
+    "core:vectors": "vitest run --config core/ts/vitest.config.ts --silent=false"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",
