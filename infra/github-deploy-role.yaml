@@ -145,6 +145,12 @@ Resources:
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${LeaderboardStackName}-submit'
                   - !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${LeaderboardStackName}-read'
+              # CloudFormation resolves the execution roles' Arn attribute on every function update, even a
+              # code-only one (seen on the first automatic deploy: iam:GetRole was refused and the update rolled back).
+              - Sid: ReadTheFunctionsOwnRoles
+                Effect: Allow
+                Action: iam:GetRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${LeaderboardStackName}-*'
               # Only if CloudFormation re-sends the functions' existing execution roles with a configuration update.
               - Sid: PassOnlyTheFunctionsOwnRoles
                 Effect: Allow
