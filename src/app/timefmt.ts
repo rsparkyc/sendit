@@ -64,6 +64,18 @@ export function otherTime(tMission: number, m: TimeMode = mode, ep = epoch): str
   return m === 'met' ? absolute(tMission, 'utc', true, ep) : `${formatMet(tMission, 0)} MET`;
 }
 
+/**
+ * A planner date (absolute time, TDB s from J2000): the transfer planner works
+ * in calendar dates, so it stays absolute in every mode (UTC, or TDB in TDB
+ * mode; minute precision), with the mission elapsed time alongside when a
+ * plan epoch is set: "2027-01-10 12:34 UTC · T+3d 04:05:06".
+ */
+export function plannerDate(tAbs: number, withMet = true, m: TimeMode = mode, ep = epoch): string {
+  if (!Number.isFinite(tAbs)) return '—';
+  const abs = absolute(tAbs - ep, m === 'tdb' ? 'tdb' : 'utc', false, ep);
+  return withMet && ep !== 0 ? `${abs} · ${formatMet(tAbs - ep, 0)}` : abs;
+}
+
 /** Both, for a title: "T+00:34:00 · 2027-01-10 12:34:00 UTC". */
 export function bothTimes(tMission: number, ep = epoch): string {
   return `${formatMet(tMission, 0)} · ${absolute(tMission, 'utc', true, ep)}`;

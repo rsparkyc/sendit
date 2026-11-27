@@ -33,10 +33,11 @@ import { objectiveBodies, statusOf } from './status';
 import { formatMet, el } from './dom';
 import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { Labels, type LabelItem } from './labels';
+import type { Placed } from './label-layout';
 import { geocentricLatitudeDeg, LAUNCH_SITES, makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, errorCount, type EventKind, type MissionPlan } from './mission-layer';
 import { initialPlan, launchOf, missionById, missionForLoadedPlan, MISSIONS } from './missions';
 import { nodesOf, separationsOf, stageAt } from './nodes';
-import { OrbitPanel } from './orbit-ui';
+import { orbitAbout, OrbitPanel, type OrbitSource } from './orbit-ui';
 import { ECLIPTIC_POLE } from './orbit-elements';
 import { separationTag, stageRows } from './vehicle';
 import { VehiclePanel, ascentMetrics } from './vehicle-ui';
@@ -210,6 +211,12 @@ const labels = new Labels(overlay, (key, x, y) => {
 }, canvas);
 /** What a single click on a label (or the map near one) does. */
 function labelPick(key: string): void {
+  const lay = lastLayout.find((p) => p.key === key);
+  if (lay && lay.clusterSize > 0 && labels.expanded !== key) {
+    // A cluster of co-located markers: the first tap fans them out; tap one of them to pick it.
+    labels.expanded = key;
+    return;
+  }
   const at = labelPoint(key);
   if (key.startsWith('pn:')) {
     const c = crossings[Number(key.slice(3))];
@@ -253,6 +260,8 @@ function jumpTo(t: number): void {
   store.set({ loadingTarget: t });
 }
 
+/** The Orbit panel's state source; the status line's orbit reads it too (one orbit computation: orbit-ui.ts orbitAbout). */
+let orbitSrc: OrbitSource | null = null;
 const hud = new Hud(
   layout.topbar,
   hudRoot,
@@ -278,7 +287,7 @@ const hud = new Hud(
       { label: 'J2000', t: 0 },
     ],
     spacecraftName: 'Spacecraft',
-    status: (s) => statusOf(s, bodyName),
+    status: (s) => statusOf(s, bodyName, (id) => (orbitSrc ? orbitAbout(orbitSrc, s.t, id, 'equator') : null)),
   },
 );
 
@@ -397,7 +406,7 @@ const orbitMass = (t: number): number => {
   while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (sm[mid * REPLAY_SAMPLE_STRIDE] <= t) lo = mid; else hi = mid; }
   return sm[lo * REPLAY_SAMPLE_STRIDE + 7];
 };
-const orbitPanel: OrbitPanel = new OrbitPanel(store, {
+const orbitPanel: OrbitPanel = new OrbitPanel(store, orbitSrc = {
   craft: (t, out) => { if (!trajectory || !stateAt(trajectory, t, out)) return false; out[6] = orbitMass(t); return true; },
   bodies: (t, pos, vel) => eph.evaluate(t, pos, vel),
   dominant: (tm) => dominantBody(tm),
@@ -571,6 +580,7 @@ new MapInput(canvas, {
   // near a marker it goes to the marker, by the same precedence as a double click (pick.ts). Bodies have no single-click action.
   tap(x, y, type) {
     const c = pickTarget(candidatesAt(x, y, type !== 'mouse', false));
+    if (!c || c.kind === 'trajectory') labels.expanded = null; // a tap away from an expanded cluster folds it
     if (!c) {
       hideTapPop();
       return;
@@ -601,7 +611,10 @@ function candidatesAt(x: number, y: number, touch: boolean, withBodies: boolean,
       continue;
     }
     if (it.occluded) continue;
-    const d = Math.hypot(it.x - px, it.y - py);
+    // Absorbed into a cluster: the cluster's leader stands for it; fanned out: at its ring position.
+    const lay = lastLayout.find((p) => p.key === it.key);
+    if (lay?.clusteredInto) continue;
+    const d = Math.hypot((lay?.x ?? it.x) - px, (lay?.y ?? it.y) - py);
     if (d <= R) out.push({ kind, key: it.key, screenDist: d, depth: 0 });
   }
   if (withBodies) {
@@ -689,6 +702,8 @@ function selectPoint(tm: number, x: number, y: number): void {
 const lastFramePos = new Float64Array(3 * n);
 /** Label items of the last rendered frame (canvas px), for hit tests; launch sites in frame coordinates. */
 let lastItems: LabelItem[] = [];
+/** This frame's label layout (clusters: a tap on a cluster expands it). */
+let lastLayout: Placed[] = [];
 const siteFrame = new Map<string, Float64Array>();
 
 /** Nearest drawn, visible (not behind a body) trajectory sample to a client point (within `radius` px), as mission time. */
@@ -1079,9 +1094,17 @@ function computeCrossings(): void {
     return q;
   });
   eventsPanel.setCrossings(crossings, r.plan.epoch, crossingLabel);
-  const nx = crossings.findIndex((c) => c.t >= store.get().t);
-  viewOptions.setNodeSummary(crossings.length ? `${crossings.length} crossings of ${crossingLabel}${nx >= 0 ? `; next ${crossings[nx].ascending ? 'AN' : 'DN'} at ${fmtTime(crossings[nx].t - r.plan.epoch, 0)}, ${crossings[nx].inclinationDeg.toFixed(2)}°` : ''}.` : `No crossings of ${crossingLabel} while near ${BODIES[center].name}.`);
+  nodeSummaryCenter = BODIES[center].name;
+  nodeSummary();
 }
+let nodeSummaryCenter = '';
+/** The node-crossing summary in View: its "next" crossing follows the time cursor. */
+function nodeSummary(): void {
+  const s = store.get();
+  const nx = crossings.findIndex((c) => c.t >= s.t);
+  viewOptions.setNodeSummary(crossings.length ? `${crossings.length} crossings of ${crossingLabel}${nx >= 0 ? `; next ${crossings[nx].ascending ? 'AN' : 'DN'} at ${fmtTime(crossings[nx].t - s.plan.epoch, 0)}, ${crossings[nx].inclinationDeg.toFixed(2)}°` : ''}.` : `No crossings of ${crossingLabel}${nodeSummaryCenter ? ` while near ${nodeSummaryCenter}` : ''}.`);
+}
+store.subscribe((s, p) => { if (s.t !== p.t && crossings.length) nodeSummary(); });
 store.subscribe((s, p) => {
   if (s.frame !== p.frame) crossingsDirty = true;
 });
@@ -1426,10 +1449,12 @@ function tick(now: number): void {
 
     // Labels and markers.
     const items: LabelItem[] = [];
+    const discs: { x: number; y: number; r: number }[] = [];
     for (let i = 0; i < n; i++) {
       const on = scene.project(framePos, 3 * i, camera.position, proj);
       const d = Math.hypot(framePos[3 * i] - camera.position[0], framePos[3 * i + 1] - camera.position[1], framePos[3 * i + 2] - camera.position[2]);
       const px = scene.pixelRadius(BODIES[i].radius, d);
+      if (on && px > 4) discs.push({ x: proj.x, y: proj.y, r: px });
       items.push({ key: String(i), text: BODIES[i].name, color: meta[i].color, priority: (i === s.focus ? 1000 : 0) + Math.log10(BODIES[i].gm), x: proj.x, y: proj.y, marker: px < 3, offset: px < 3 ? 0 : px, onScreen: on });
     }
     if (scVisible) {
@@ -1439,7 +1464,7 @@ function tick(now: number): void {
     // Markers are drawn in the frame at their own time; in a moving frame they sit on the drawn path, as the path does.
     for (const m of markers) {
       const on = scene.project(m.pos, 0, camera.position, proj);
-      items.push({ key: m.key, text: m.text, color: m.color, priority: m.priority, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: m.cls, title: m.title, occluded: on && behindBody(m.pos, 0) });
+      items.push({ key: m.key, text: m.text, color: m.color, priority: m.priority, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: m.cls, title: m.title, occluded: on && behindBody(m.pos, 0), t: m.t });
     }
     // Ascending / descending nodes: the ones around the cursor (all of them when few).
     if (crossingsDirty) computeCrossings();
@@ -1459,7 +1484,7 @@ function tick(now: number): void {
         const on = scene.project(p, 0, camera.position, proj);
         const next = k === nextA || k === nextD;
         const text = `${c.ascending ? 'AN' : 'DN'} ${c.inclinationDeg.toFixed(2)}°${next ? ` · in ${fmtIn(c.t - t)}` : ''}`;
-        items.push({ key: `pn:${k}`, text, color: '#c9a2ff', priority: next ? 600 : 300, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker pnode ${c.ascending ? 'asc' : 'desc'}`, title: `${c.ascending ? 'Ascending' : 'Descending'} node: crosses ${crossingLabel} at ${c.inclinationDeg.toFixed(2)}° relative inclination. Tap to move the time cursor here.`, occluded: on && behindBody(p, 0) });
+        items.push({ key: `pn:${k}`, text, color: '#c9a2ff', priority: next ? 600 : 300, x: proj.x, y: proj.y, marker: true, offset: 0, onScreen: on, className: `marker pnode ${c.ascending ? 'asc' : 'desc'}`, title: `${c.ascending ? 'Ascending' : 'Descending'} node: crosses ${crossingLabel} at ${c.inclinationDeg.toFixed(2)}° relative inclination. Tap to move the time cursor here.`, occluded: on && behindBody(p, 0), t: c.t });
       }
     }
     // Launch sites on Earth: in Earth's surface frame, or when Earth is large on screen.
@@ -1498,10 +1523,10 @@ function tick(now: number): void {
       const onA = scene.project(be.start.pos, 0, camera.position, projA);
       const onB = scene.project(be.end.pos, 0, camera.position, projB);
       if (!onA || !onB || Math.hypot(projA.x - projB.x, projA.y - projB.y) < 28) continue;
-      items.push({ key: be.start.key, text: be.start.text, color: be.start.color, priority: be.start.priority, x: projA.x, y: projA.y, marker: true, offset: 0, onScreen: true, className: be.start.cls, title: `Burn ${be.node.slice(5)} ignition: the engine starts here.`, occluded: beOcc(be.start.pos) });
-      items.push({ key: be.end.key, text: be.end.text, color: be.end.color, priority: be.end.priority, x: projB.x, y: projB.y, marker: true, offset: 0, onScreen: true, className: be.end.cls, title: `Burn ${be.node.slice(5)} cutoff: the engine stops here.`, occluded: beOcc(be.end.pos) });
+      items.push({ key: be.start.key, text: be.start.text, color: be.start.color, priority: be.start.priority, x: projA.x, y: projA.y, marker: true, offset: 0, onScreen: true, className: be.start.cls, title: `Burn ${be.node.slice(5)} ignition: the engine starts here.`, occluded: beOcc(be.start.pos), t: be.start.t });
+      items.push({ key: be.end.key, text: be.end.text, color: be.end.color, priority: be.end.priority, x: projB.x, y: projB.y, marker: true, offset: 0, onScreen: true, className: be.end.cls, title: `Burn ${be.node.slice(5)} cutoff: the engine stops here.`, occluded: beOcc(be.end.pos), t: be.end.t });
     }
-    labels.update(items);
+    lastLayout = labels.update(items, { cursor: t, fadeScale: Math.max(1800, s.plan.duration * 0.08), discs, touch: document.documentElement.classList.contains('touch') });
     lastFramePos.set(framePos);
     lastItems = items;
     // A picked trajectory point: the popover follows the spacecraft (which is at that point); it closes when time moves on.
@@ -1527,7 +1552,7 @@ function tick(now: number): void {
         const vr = Math.hypot(scState[3] - vel[3 * di], scState[4] - vel[3 * di + 1], scState[5] - vel[3 * di + 2]);
         ro.push(readout('Spacecraft', scState, 0, scState, 3, frame, `${phaseAt(t)} · ${BODIES[di].name} ${fromSurface(alt, BODIES[di].id)}, ${vr.toFixed(0)} m/s`));
       } else {
-        ro.push({ title: 'Spacecraft', relativeTo: '—', distance: NaN, speed: NaN, extra: `Not flying at this time (${formatCalendar(tdbToCalendar(r.plan.epoch), false)} to ${Number.isFinite(r.result.finalT) ? formatCalendar(tdbToCalendar(r.result.finalT), false) : '—'} TDB).` });
+        ro.push({ title: 'Spacecraft', relativeTo: '—', distance: NaN, speed: NaN, extra: `Not flying at this time (${fmtTime(0, 0)} to ${Number.isFinite(r.result.finalT) ? fmtTime(r.result.finalT - r.plan.epoch, 0) : '—'}).` });
       }
     }
     const avgChunk = metrics.chunkMs.length ? metrics.chunkMs.reduce((a, b) => a + b, 0) / metrics.chunkMs.length : 0;
@@ -1601,6 +1626,17 @@ Object.assign(window, {
       return behindBody(path.points, 3 * best);
     },
     listedEvents: () => listed,
+    /** What a tap on a map label or marker does (labelPick), for tests. */
+    pickLabel: (key: string) => labelPick(key),
+    /** Screen disc (client px) of a body this frame, or null. */
+    bodyDisc(id: string): { x: number; y: number; r: number } | null {
+      const i = BODIES.findIndex((b) => b.id === id);
+      const pr = { x: 0, y: 0 };
+      if (i < 0 || !scene.project(lastFramePos, 3 * i, camera.position, pr)) return null;
+      const d = Math.hypot(lastFramePos[3 * i] - camera.position[0], lastFramePos[3 * i + 1] - camera.position[1], lastFramePos[3 * i + 2] - camera.position[2]);
+      const rc = canvas.getBoundingClientRect();
+      return { x: pr.x + rc.left, y: pr.y + rc.top, r: scene.pixelRadius(BODIES[i].radius, d) };
+    },
     bodies: BODIES.map((b) => b.id),
     frameKey: () => frameKey(store.get().frame, (i) => BODIES[i].id),
     /** Screen position of the drawn trajectory at mission time t (for tests clicking on it). */

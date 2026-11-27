@@ -8,7 +8,8 @@
  *    "altitude" / "Altitude above", "radius" / "Radius from …’s centre",
  *    "from the centre", "from barycentre", or AU / the Sun's centre;
  *  - in the plane-change parking orbit every altitude shown agrees (status
- *    Pe/Ap equal the last apsis rows; the readout and hover readout lie
+ *    Pe/Ap, the osculating orbit at the cursor, lie within a few km of the
+ *    replay's apsis rows; the readout and hover readout lie
  *    between the lowest periapsis and the highest apoapsis);
  *  - switching the setting to radius changes every one of them together
  *    (each by Earth's reference radius, 6,378.1366 km, to the displayed precision).
@@ -261,6 +262,7 @@ test.describe('distance convention audit', () => {
     await setTime(page, 3000);
     await page.setViewportSize(SIZES.desktop);
     const read = async (word: 'alt' | 'radius') => {
+      await setTime(page, 3000); // the status line follows the cursor, and the pinned readout below moves it
       for (let k = 0; k < 10 && (await page.locator('.apsis-group[aria-expanded="false"]').count()) > 0; k++) await page.locator('.apsis-group[aria-expanded="false"]').first().click();
       const n = (s: string) => Number(s.replace(/,/g, ''));
       const status = (await page.locator('.tb-status').textContent()) ?? '';
@@ -281,9 +283,12 @@ test.describe('distance convention audit', () => {
     console.log(`plane change, alt: ${JSON.stringify(a)}`);
     await page.screenshot({ path: `${SHOTS}/readout-alt.png` });
     await page.locator('.readouts').screenshot({ path: `${SHOTS}/readout-panel-alt.png` });
-    expect(a.st).toEqual([a.pe[a.pe.length - 1], a.ap[a.ap.length - 1]]);
     const lo = Math.min(...a.pe) - 1;
     const hi = Math.max(...a.ap) + 1;
+    // The status line shows the osculating orbit at the cursor (the Orbit panel's numbers, orbit-time.e2e.ts):
+    // within the oblateness wobble (tens of km in LEO) of the replay's real apsides.
+    expect(a.st).toHaveLength(2);
+    for (const v of a.st) { expect(v).toBeGreaterThanOrEqual(lo - 40); expect(v).toBeLessThanOrEqual(hi + 40); }
     expect(a.ro).toBeGreaterThanOrEqual(lo);
     expect(a.ro).toBeLessThanOrEqual(hi);
     expect(Math.abs(a.ro - a.extra)).toBeLessThanOrEqual(1); // readout row and the line under it: same instant, same body

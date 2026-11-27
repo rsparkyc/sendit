@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CAMPAIGN } from '../src/mission/campaign';
-import { briefingText, checkPlanConformance, evaluate, initialMissionPlan, missionForSite, missionReplayOptions, PAR_SCORE, vehicleLaunch, type CompleteMission } from '../src/mission/objectives';
+import { briefingText, checkPlanConformance, deltaVKey, evaluate, initialMissionPlan, missionForSite, missionReplayOptions, PAR_SCORE, timeKey, vehicleLaunch, type CompleteMission } from '../src/mission/objectives';
 import { decodePlan, encodePlan, isVehicleLaunch, makePlan, validatePlan } from '../src/mission/plan';
 import { replay } from '../src/mission/replay';
 import { SAMPLE_MISSIONS } from '../src/mission/samples';
@@ -128,7 +128,7 @@ describe('campaign definitions', () => {
 
 describe('campaign solutions (par)', () => {
   for (const m of CAMPAIGN) {
-    it.skipIf(SLOW_IDS.has(m.id) && !SLOW)(`${m.id}: solvable within the limits, with margin`, { timeout: 300_000 }, () => {
+    it.skipIf(SLOW_IDS.has(m.id) && !SLOW)(`${m.id}: solvable within the limits, with margin; the reference scores exactly 10,000`, { timeout: 300_000 }, () => {
       const plan = decodePlan(encodePlan(solution(m)));
       expect(plan.format).toBe(2);
       const r = replay(plan, world, missionReplayOptions(m));
@@ -137,11 +137,14 @@ describe('campaign solutions (par)', () => {
       const detail = `${m.id}: ${r.outcome} ${r.reason}; ` + ev.objectives.map((o) => `${o.ok ? 'ok' : 'NO'} ${o.objective.kind}: ${o.detail}`).join('; ');
       expect(ev.success, detail).toBe(true);
       expect(ev.ruleViolations).toEqual([]);
-      // Par is what the scoring references were set from.
-      expect(Math.abs(ev.deltaV - m.scoring.deltaVRef)).toBeLessThan(0.1);
-      expect(Math.abs(ev.missionTime - m.scoring.timeRef)).toBeLessThan(1);
-      expect(Math.abs(ev.score - PAR_SCORE)).toBeLessThanOrEqual(30);
+      // Par is this flight, stored in the leaderboard's quantised units (delta-v up to 0.1 m/s, time up to
+      // the second), so flying the reference scores exactly PAR_SCORE.
       expect(ev.keys).toBeDefined();
+      expect(m.scoring.deltaVRef).toBe(ev.keys!.deltaV / 10);
+      expect(m.scoring.timeRef).toBe(ev.keys!.time);
+      expect(ev.keys!.deltaV).toBe(deltaVKey(ev.deltaV));
+      expect(ev.keys!.time).toBe(timeKey(ev.missionTime));
+      expect(ev.score).toBe(PAR_SCORE);
       // The default site's limits leave a margin over the solution: 8% of the flight's delta-v on top of the ascent and flight
       // (the samples keep their original ratios), 15-25% time.
       expect(ev.site).toBe(site);

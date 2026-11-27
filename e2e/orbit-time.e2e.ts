@@ -54,6 +54,30 @@ for (const [size, opts] of [['desktop', { viewport: { width: 1440, height: 900 }
   test.describe(size, () => {
     test.use(opts as any);
 
+    test('status line and Orbit panel show the same orbit (one computation) at several times in a flight', async ({ page }) => {
+      test.setTimeout(300_000);
+      await fresh(page, 'geo-from-leo');
+      await solveGeo(page);
+      await openTab(page, 'Orbit');
+      const p = await page.evaluate(() => { const s = (window as any).sendit.store.get(); return { burns: s.plan.burns, duration: s.plan.duration }; });
+      const times = [p.burns[0].start - 300, p.burns[0].start + p.burns[0].duration + 900, p.burns[1].start - 600, p.duration - 3600];
+      const n = (x: string) => Number(x.replace(/,/g, ''));
+      for (const tm of times) {
+        await setT(page, tm);
+        await page.waitForFunction(() => (window as any).sendit.orbit() !== null);
+        const status = (await page.locator('.tb-status').textContent()) ?? '';
+        const m = /Earth orbit now: Pe ([\d,]+) km alt · Ap ([\d,]+) km alt · i ([\d.]+)°/.exec(status);
+        expect(m, `status at T+${tm}: ${status}`).not.toBeNull();
+        const grid = (await page.locator('.orbit-grid').innerText()).replace(/\s+/g, ' ');
+        const pe = /Periapsis ([\d,]+) km alt/.exec(grid), ap = /Apoapsis ([\d,]+) km alt/.exec(grid), inc = /Inclination ([\d.]+)°/.exec(grid);
+        expect(pe && ap && inc, grid).toBeTruthy();
+        // Same numbers to the displayed precision (status: 2 decimals of inclination, the panel 3).
+        expect(n(m![1])).toBe(n(pe![1]));
+        expect(n(m![2])).toBe(n(ap![1]));
+        expect(m![3]).toBe(Number(inc![1]).toFixed(2));
+      }
+    });
+
     test('geostationary: transfer-orbit apoapsis near GEO after the burn, parking orbit before it; MET / UTC toggle everywhere', async ({ page }) => {
       test.setTimeout(300_000);
       const errors = watch(page);

@@ -67,7 +67,19 @@ export const LEGEND: readonly [string, string][] = [
   ['◆ IMPACT (red)', 'Event: the flight ends here'],
   ['▲ AN / ▼ DN (violet)', 'Ascending / descending node: where the orbit crosses the reference plane (cheapest place to change plane)'],
   ['■ Launch site (green)', 'Launch site on the surface; the selected one is ringed'],
-  ['Faded marker', 'Behind a planet as seen from the camera'],
+  ['Faded marker, no name', 'Behind a planet as seen from the camera (not tappable); only the selected item and a failure keep their name'],
+  ['Pale marker', 'Far in time from the time cursor; names near the cursor and the selected item win the space'],
+  ['Name with a thin line', 'No room beside the marker (or it is over a planet): the name sits off to the side, the line points to the marker'],
+  ['Burn 1 +2 (ringed dot)', 'Several markers at one spot: tap to fan them out, then tap the one you want'],
+];
+
+/** The panels, briefly (help dialog; README "Flight-plan editor" says the same). */
+export const PANELS: readonly [string, string][] = [
+  ['Vehicle', 'The stack, stage by stage: masses, engines, thrust-to-weight, delta-v with everything above it. A mission\'s vehicle is read-only; in Sandbox it is an editor (presets, add / remove / reorder stages)'],
+  ['Start → launch feedback', 'What the ascent costs (total Δv includes it), which stage reaches orbit and what the upper stage has left; two charts of that against parking altitude and azimuth: tap or drag one to set the value'],
+  ['Separations', 'Flight actions like burns: “Separation at cursor”, or “separate after” a burn. Burns after a separation are fired by the next stage'],
+  ['Orbit', 'The orbit at the time cursor about the dominant (or a pinned) body: osculating elements, i.e. the two-body orbit matching this instant, which drift in an N-body flight; the replay\'s real next apsis alongside. The status bar shows the same orbit'],
+  ['Time display', 'Mission elapsed time (T+), UTC or TDB, in View or by tapping the time under the timeline / in the status bar; every point in time follows it. The transfer planner keeps calendar dates, with T+ alongside'],
 ];
 
 export const GESTURES: readonly [string, string][] = [
@@ -75,7 +87,8 @@ export const GESTURES: readonly [string, string][] = [
   ['Pinch / wheel', 'Zoom'],
   ['Two-finger drag', 'Tilt and turn'],
   ['Click / tap the trajectory', 'Pick that point: the time cursor moves there and its time, altitude and speed show; then “Add node here” (or N / Enter). A click never adds a node by itself, and a click that ends a drag does nothing'],
-  ['Click / tap a marker', 'Says what it is; a node marker selects it, an AN / DN marker moves the time cursor there'],
+  ['Click / tap a marker', 'Says what it is; a node marker selects it, an AN / DN marker moves the time cursor there. Markers stay tappable when their names are hidden; a cluster (“+2”) fans out on the first tap'],
+  ['Tap the time (status bar or timeline)', 'Cycle the time display: MET → UTC → TDB'],
   ['Double-click / double-tap', 'Focus what is under the pointer. If several things are there, the first of: the spacecraft; a maneuver node or burn marker; an event or AN / DN marker; a launch site; a body (the one nearest the camera, so a moon in front of its planet); a point on the trajectory (the time cursor moves there and the spacecraft is focused)'],
   ['Drag a value’s ◂ ⠿ ▸ strip', 'Tune it by medium steps; ‹‹‹ ‹‹ ‹ and › ›› ››› either side step large / medium / small; 0 zeroes it, ± flips its sign'],
 ];
@@ -85,9 +98,11 @@ export class Hud {
   readonly viewPanel: HTMLElement;
   readonly infoPanel: HTMLElement;
   readonly keys: HTMLDialogElement;
-  private readonly date = el('div', { className: 'date' });
-  private readonly utc = el('div', { className: 'utc' });
-  private readonly tbDate = el('span', { className: 'tb-date' });
+  // The Time panel's calendar lines and the status bar's second line are the "other mode" reference (data-time-other):
+  // they show the instant in the other forms whatever the time-display setting is.
+  private readonly date = el('div', { className: 'date', dataset: { timeOther: '1' } });
+  private readonly utc = el('div', { className: 'utc', dataset: { timeOther: '1' } });
+  private readonly tbDate = el('span', { className: 'tb-date', dataset: { timeOther: '1' } });
   private readonly tbMet = el('button', { className: 'tb-met', type: 'button' });
   private readonly chip = el('span', { className: 'chip' });
   private readonly key = el('span', { className: 'tb-key' });
@@ -173,7 +188,7 @@ export class Hud {
     close.onclick = () => this.keys.close();
     const table = (title: string, rows: readonly [string, string][]) =>
       el('section', {}, el('h3', { textContent: title }), el('dl', {}, ...rows.flatMap(([k, v]) => [el('dt', {}, el('kbd', { textContent: k })), el('dd', { textContent: v })])));
-    this.keys.append(el('h2', { textContent: 'Shortcuts and gestures' }), el('div', { className: 'keys-grid' }, table('Keyboard', SHORTCUTS), table('Touch and mouse', GESTURES), table('Map markers', LEGEND)), close);
+    this.keys.append(el('h2', { textContent: 'Shortcuts and gestures' }), el('div', { className: 'keys-grid' }, table('Keyboard', SHORTCUTS), table('Touch and mouse', GESTURES), table('Map markers', LEGEND), table('Panels', PANELS)), close);
     this.keys.addEventListener('click', (e) => {
       if (e.target === this.keys) this.keys.close();
     });
@@ -237,12 +252,13 @@ export class Hud {
       this.date.textContent = `${cal} TDB`;
       const u = tdbToUtc(s.t);
       this.utc.textContent = !u ? 'UTC not shown before 1972' : `${formatCalendar(u)} UTC${utcIsPredicted(s.t) ? ' (predicted: no new leap seconds)' : ''}`;
-      this.tbDate.textContent = `${cal.slice(0, 16)} TDB`;
+      // The secondary line: the same instant in the other form (timefmt otherTime), the documented exception.
+      this.tbDate.textContent = otherTime(s.t - s.plan.epoch);
       this.tbMet.textContent = fmtTime(s.t - s.plan.epoch, 0);
       this.tbMet.title = `${otherTime(s.t - s.plan.epoch)} · tap to show times as ${TIME_MODE_LABEL[nextTimeMode(timeMode())]}`;
       this.tbMet.setAttribute('aria-label', `Time ${fmtTime(s.t - s.plan.epoch, 0)}; tap to show times as ${TIME_MODE_LABEL[nextTimeMode(timeMode())]}`);
     }
-    if (!p || s.replay !== p.replay || s.plan !== p.plan || s.replayStatus !== p.replayStatus || s.missionId !== p.missionId) {
+    if (!p || s.t !== p.t || s.replay !== p.replay || s.plan !== p.plan || s.replayStatus !== p.replayStatus || s.missionId !== p.missionId) {
       const st = this.actions.status(s);
       this.chip.className = `chip tone-${st.tone}`;
       this.chip.textContent = `${st.icon} ${st.text}`;
@@ -252,7 +268,7 @@ export class Hud {
       if (s.loadingTarget === null) this.loading.style.display = 'none';
       else {
         this.loading.style.display = '';
-        this.loading.textContent = `Integrating ephemeris to ${formatCalendar(tdbToCalendar(s.loadingTarget), false)} TDB… ${s.loadingChunks} chunk${s.loadingChunks === 1 ? '' : 's'} to go`;
+        this.loading.textContent = `Integrating ephemeris to ${fmtTime(s.loadingTarget - s.plan.epoch, 0)}… ${s.loadingChunks} chunk${s.loadingChunks === 1 ? '' : 's'} to go`;
       }
     }
   }

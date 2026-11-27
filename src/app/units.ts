@@ -38,7 +38,8 @@ export function bodyRadius(id: string): number {
 }
 
 const AU = 149_597_870_700;
-const km = (m: number) => `${Math.round(m / 1000).toLocaleString('en-US')} km`;
+// `+ 0` turns a rounded -0 into 0 (no "-0 km" at a surface impact).
+const km = (m: number) => `${(Math.round(m / 1000) + 0).toLocaleString('en-US')} km`;
 
 /**
  * A labelled distance row for a readout: the distance (m) from the centre of
@@ -70,7 +71,7 @@ export function fromSurface(alt: number, body: string): string {
 export function bandFromCentre(lo: number, hi: number, body: string): string {
   if (body === 'sun') return `${fromCentre(lo, body)} to ${fromCentre(hi, body)}`;
   const sub = mode === 'radius' ? 0 : bodyRadius(body);
-  const f = (d: number) => (Number.isFinite(d) ? Math.round((d - sub) / 1000).toLocaleString('en-US') : '∞');
+  const f = (d: number) => (Number.isFinite(d) ? (Math.round((d - sub) / 1000) + 0).toLocaleString('en-US') : '∞');
   return `${f(lo)}–${f(hi)} km ${mode === 'radius' ? 'radius' : 'alt'}`;
 }
 

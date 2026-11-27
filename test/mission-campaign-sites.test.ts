@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { CAMPAIGN } from '../src/mission/campaign';
 import { CAMPAIGN_SITES } from '../src/mission/campaign-sites';
 import { azimuthForInclination, LAUNCH_SITES, launchSite, launchToParams } from '../src/mission/launch';
-import { allowedSites, checkPlanConformance, evaluate, missionForSite, missionReplayOptions, type CompleteMission } from '../src/mission/objectives';
+import { allowedSites, checkPlanConformance, deltaVKey, evaluate, timeKey, missionForSite, missionReplayOptions, type CompleteMission } from '../src/mission/objectives';
 import { decodePlan, encodePlan, makePlan } from '../src/mission/plan';
 import { replay } from '../src/mission/replay';
 import { defaultSite, flightMargin, solutionPlan, SOLUTIONS } from './helpers/campaign-solutions';
@@ -93,9 +93,9 @@ describe('campaign solutions from every offered site', () => {
         const detail = `${m.id}@${o.site}: ${r.outcome} ${r.reason}; ` + ev.objectives.map((x) => `${x.ok ? 'ok' : 'NO'} ${x.objective.kind}: ${x.detail}`).join('; ');
         expect(ev.success, detail).toBe(true);
         expect(ev.site).toBe(o.site);
-        // The table's reference values are this solution's.
-        expect(Math.abs(ev.deltaV - o.deltaV)).toBeLessThan(0.1);
-        expect(Math.abs(ev.missionTime - o.time)).toBeLessThan(1);
+        // The table's reference values are this solution's, in the leaderboard's quantised units (as par is).
+        expect(o.deltaV).toBe(deltaVKey(ev.deltaV) / 10);
+        expect(o.time).toBe(timeKey(ev.missionTime));
         expect(Math.abs(ev.ascentDeltaV - o.ascentDeltaV!)).toBeLessThan(0.1);
         // That site's limits leave the same margins as the default site's (delta-v: on the flight's part).
         const dvMargin = flightMargin(o.maxDeltaV, ev.deltaV, ev.ascentDeltaV);

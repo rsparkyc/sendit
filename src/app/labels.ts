@@ -1,8 +1,9 @@
 /**
  * Screen-space markers and labels as DOM elements over the canvas. Bodies too
- * small to see get a dot; every visible object gets a label unless a
- * higher-priority label already occupies that spot.
+ * small to see get a dot. Which labels show, where, and which markers
+ * collapse into a cluster is decided by label-layout.ts (pure).
  */
+import { layoutLabels, type Disc, type Placed } from './label-layout';
 
 export interface LabelItem {
   key: string;
@@ -23,9 +24,12 @@ export interface LabelItem {
   title?: string;
   /** Behind a body as seen from the camera: drawn dimmed and not tappable. */
   occluded?: boolean;
+  /** Absolute time of the marked point (fading and time relevance). */
+  t?: number;
 }
 
 interface Entry {
+  line?: HTMLSpanElement;
   el: HTMLDivElement;
   dot: HTMLSpanElement;
   text: HTMLSpanElement;
@@ -108,14 +112,23 @@ export class Labels {
     const text = document.createElement('span');
     text.className = 'text';
     el.append(dot, text);
-    el.addEventListener('click', (ev) => this.onPick(item.key, ev.clientX, ev.clientY));
+    el.addEventListener('click', (ev) => {
+      if (el.dataset.cluster) {
+        this.expanded = item.key;
+        return;
+      }
+      this.onPick(item.key, ev.clientX, ev.clientY);
+    });
     this.root.append(el);
     e = { el, dot, text };
     this.entries.set(item.key, e);
     return e;
   }
 
-  update(items: LabelItem[]): void {
+  /** Leader of the expanded cluster (a tap on a cluster expands it; a tap elsewhere or a new selection collapses it). */
+  expanded: string | null = null;
+
+  update(items: LabelItem[], ctx: { cursor: number; fadeScale: number; discs: readonly Disc[]; touch: boolean } = { cursor: 0, fadeScale: 0, discs: [], touch: false }): Placed[] {
     // Remove entries no longer present (event and node markers come and go).
     const keys = new Set(items.map((i) => i.key));
     for (const [k, e] of this.entries) {
@@ -124,41 +137,24 @@ export class Labels {
         this.entries.delete(k);
       }
     }
-    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
-    const sorted = [...items].sort((a, b) => b.priority - a.priority);
     const w = this.root.clientWidth;
     const h = this.root.clientHeight;
-    for (const item of sorted) {
+    const shown = items.filter((i) => i.onScreen);
+    if (this.expanded && !shown.some((i) => i.key === this.expanded)) this.expanded = null;
+    const layout = layoutLabels(shown.map((i) => ({
+      key: i.key, text: i.text, priority: i.priority, x: i.x, y: i.y, marker: i.marker, offset: i.offset, t: i.t,
+      selected: /\bselected\b/.test(i.className ?? ''), keep: /\bfailure\b/.test(i.className ?? ''), occluded: i.occluded, body: /^\d+$/.test(i.key),
+    })), { width: w, height: h, cursor: ctx.cursor, fadeScale: ctx.fadeScale, discs: ctx.discs, clusterRadius: ctx.touch ? 22 : 7, expanded: this.expanded });
+    const byKey = new Map(layout.map((p) => [p.key, p]));
+    for (const item of items) {
       const e = this.entry(item);
-      const inView = item.onScreen && item.x > -50 && item.y > -20 && item.x < w + 50 && item.y < h + 20;
-      if (!inView) {
-        e.el.style.display = 'none';
-        continue;
-      }
-      // Try right, left, below, above the point; give up (dot only) if all collide.
-      const tw = 7.2 * item.text.length + 4;
-      const gap = item.offset + 6;
-      const candidates = [
-        { dx: gap, dy: -8 },
-        { dx: -gap - tw, dy: -8 },
-        { dx: -tw / 2, dy: gap },
-        { dx: -tw / 2, dy: -gap - 16 },
-      ];
-      let chosen: { dx: number; dy: number } | null = null;
-      for (const c of candidates) {
-        const box = { x0: item.x + c.dx, y0: item.y + c.dy, x1: item.x + c.dx + tw, y1: item.y + c.dy + 16 };
-        if (!placed.some((p) => box.x0 < p.x1 && box.x1 > p.x0 && box.y0 < p.y1 && box.y1 > p.y0)) {
-          chosen = c;
-          placed.push(box);
-          break;
-        }
-      }
-      if (!chosen && !item.marker) {
+      const p = byKey.get(item.key);
+      if (!p || p.hidden || (!p.label && !item.marker)) {
         e.el.style.display = 'none';
         continue;
       }
       e.el.style.display = '';
-      const cls = `label${item.className ? ` ${item.className}` : ''}${item.occluded ? ' occluded' : ''}`;
+      const cls = `label${item.className ? ` ${item.className}` : ''}${item.occluded ? ' occluded' : ''}${p.clusterSize > 0 ? ' cluster' : ''}`;
       if (item.title !== undefined && e.text.title !== item.title) {
         e.text.title = item.title;
         e.text.setAttribute('aria-label', `${item.text}. ${item.title}`);
@@ -167,16 +163,36 @@ export class Labels {
         e.el.dataset.cls = cls;
         e.el.className = cls;
       }
-      e.el.style.transform = `translate(${item.x.toFixed(1)}px, ${item.y.toFixed(1)}px)`;
+      e.el.dataset.cluster = p.clusterSize > 0 ? String(p.clusterSize) : '';
+      e.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`;
+      e.el.style.opacity = p.opacity < 1 && !item.occluded ? p.opacity.toFixed(2) : '';
       e.dot.style.display = item.marker ? '' : 'none';
       e.dot.style.background = item.color;
-      if (e.text.textContent !== item.text) e.text.textContent = item.text;
-      e.text.style.display = chosen ? '' : 'none';
-      if (chosen) {
-        e.text.style.left = `${chosen.dx}px`;
-        e.text.style.top = `${chosen.dy}px`;
+      if (e.text.textContent !== p.text) e.text.textContent = p.text;
+      e.text.style.display = p.label ? '' : 'none';
+      if (p.label) {
+        e.text.style.left = `${p.label.dx}px`;
+        e.text.style.top = `${p.label.dy}px`;
       }
-      e.el.classList.toggle('dim', !chosen);
+      this.leader(e, p.leader);
+      e.el.classList.toggle('dim', !p.label);
     }
+    return layout;
+  }
+
+  private leader(e: Entry, l: Placed['leader']): void {
+    if (!l) {
+      if (e.line) e.line.style.display = 'none';
+      return;
+    }
+    if (!e.line) {
+      e.line = document.createElement('span');
+      e.line.className = 'leader';
+      e.el.prepend(e.line);
+    }
+    const len = Math.hypot(l.x1 - l.x0, l.y1 - l.y0);
+    e.line.style.display = len > 2 ? '' : 'none';
+    e.line.style.width = `${len.toFixed(1)}px`;
+    e.line.style.transform = `translate(${l.x0.toFixed(1)}px, ${l.y0.toFixed(1)}px) rotate(${Math.atan2(l.y1 - l.y0, l.x1 - l.x0).toFixed(4)}rad)`;
   }
 }

@@ -19,7 +19,7 @@ import { el, esc, fillBodySelect, formatMet } from './dom';
 import { errorCount, planErrors } from './mission-layer';
 import { splitAcrossSeparation } from './nodes';
 import { stageRows } from './vehicle';
-import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
+import { fmtTime, otherTime, parseTime, plannerDate, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import type { Editor } from './editor';
 import { geocentricLatitudeDeg, launchSite, type MissionPlan } from './mission-layer';
 import { launchOf, missionById } from './missions';
@@ -34,7 +34,8 @@ import { calendarToTdb, DAY, formatCalendar, tdbToCalendar } from './time';
 import { defaultInclination, launchOpportunities, PASS_SIDES, type LaunchOpportunity } from './transfer';
 
 const DEG = 180 / Math.PI;
-const fmtDate = (t: number) => formatCalendar(tdbToCalendar(t), false).slice(0, 16);
+/** Planner dates stay absolute, with MET alongside (timefmt.ts plannerDate). */
+const fmtDate = (t: number) => plannerDate(t);
 type Range4 = [number, number, number, number];
 /** Smallest zoom: ranges of this many days on both axes. */
 const ZOOM_FLOOR_DAYS = 4;

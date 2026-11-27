@@ -358,3 +358,68 @@ test('check.html still reports PASS', async ({ page }) => {
   await page.goto(`${BASE}/check.html`);
   await expect(page.locator('body')).toContainText('PASS', { timeout: 120_000 });
 });
+
+test('split across a separation: a departure the upper stage cannot complete, split so the kick stage finishes it', async ({ page }) => {
+  test.setTimeout(300_000);
+  await fresh(page);
+  await page.selectOption('select.mission-select', 'jupiter-saturn');
+  await settled(page);
+  await page.getByRole('button', { name: 'Transfer planner…' }).click();
+  const pl = page.locator('.planner');
+  await pl.locator('select[title="Arrival body"]').selectOption('jupiter');
+  await pl.locator('input[title="Earliest departure"]').fill('2034-05-15');
+  await pl.locator('input[title="Latest departure"]').fill('2034-08-15');
+  await pl.locator('input[title="Earliest arrival"]').fill('2035-09-01');
+  await pl.locator('input[title="Latest arrival"]').fill('2037-03-01');
+  await pl.getByRole('button', { name: 'Compute porkchop' }).click();
+  await expect(pl.locator('.pl-status')).toContainText('transfers in', { timeout: 60_000 });
+  await pl.getByRole('button', { name: 'Select minimum' }).click();
+  // Liftoff: the proposed opportunity (the last allowed one before departure) is chosen by default.
+  await pl.getByRole('button', { name: 'Insert departure burn' }).click();
+  await expect(pl.locator('.pl-use .pl-result')).toContainText('Inserted burn', { timeout: 60_000 });
+  await settled(page);
+  // The plain message: the active stage cannot complete it; the split is offered.
+  const msg = await pl.locator('.pl-use .pl-result').innerText();
+  console.log(`departure: ${msg.replace(/\s*\n\s*/g, ' | ')}`);
+  expect(msg).toMatch(/cannot complete this departure: it has about \d+ of the \d+ m\/s\. Split it across a separation/);
+  const intent = await page.evaluate(() => { const w = (window as any).sendit; const n = w.nodesOf(); const last = n[n.length - 1]; return { dv: Math.hypot(...last.node.dv), stage: last.stage, count: n.length, seps: (w.store.get().plan.separations ?? []).length }; });
+  await page.screenshot({ path: `${SHOTS}/7-split-offered.png` });
+  await pl.locator('.split-btn').click();
+  await expect(pl.locator('.pl-use .pl-result')).toContainText('Split: the stage burns what it has');
+  await settled(page);
+  const after = await page.evaluate(() => {
+    const w = (window as any).sendit;
+    const s = w.store.get();
+    const n = w.nodesOf();
+    return {
+      nodes: n.map((x: any) => ({ stage: x.stage, dv: Math.hypot(...x.node.dv), start: x.burn.start, duration: x.burn.duration, short: x.short })),
+      seps: (s.plan.separations ?? []).map((x: any) => x.time),
+      flown: s.replay.result.burns.map((b: any) => ({ burnTime: b.burnTime, deltaV: b.deltaV })),
+      planned: s.plan.burns.map((b: any) => ({ start: b.start, duration: b.duration })),
+      outcome: s.replay.result.outcome,
+      leavesEarth: s.replay.result.events.some((e: any) => e.kind === 'soi-exit' && e.body === 'earth') || s.replay.result.events.some((e: any) => e.body === 'jupiter'),
+      errors: document.querySelectorAll('.node-row .err, .plan-errors li').length,
+    };
+  });
+  console.log(`after split: ${JSON.stringify(after)}`);
+  await page.screenshot({ path: `${SHOTS}/7-split-applied.png` });
+  expect(after.nodes).toHaveLength(intent.count + 1);
+  expect(after.seps).toHaveLength(intent.seps + 1);
+  const [a, b] = after.nodes.slice(-2);
+  // The upper stage burns out, the separation follows its cutoff, the next stage finishes in the same direction.
+  expect(a.stage).toBe(intent.stage);
+  expect(b.stage).toBe(intent.stage + 1);
+  expect(a.short).toBe(false);
+  expect(b.short).toBe(false);
+  const sep = after.seps[after.seps.length - 1];
+  expect(sep).toBeGreaterThan(a.start + a.duration);
+  expect(b.start).toBeGreaterThan(sep);
+  // The replay flies both burns (the first one to its planned length) and the total is the unsplit intent.
+  const fa = after.flown[after.flown.length - 2], fb = after.flown[after.flown.length - 1];
+  expect(fa.burnTime).toBeGreaterThan(a.duration * 0.99);
+  expect(fb.burnTime).toBeGreaterThan(b.duration * 0.99);
+  expect(Math.abs(a.dv + b.dv - intent.dv) / intent.dv).toBeLessThan(1e-6);
+  expect(Math.abs(fa.deltaV + fb.deltaV - intent.dv) / intent.dv).toBeLessThan(0.02);
+  expect(after.errors).toBe(0);
+  expect(errors).toEqual([]);
+});

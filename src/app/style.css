@@ -45,6 +45,10 @@ html.touch body { font-size: 15px; }
 html.touch .label .text { padding: 8px 6px; margin: -8px -6px; line-height: 16px; }
 .label .text:hover { color: var(--accent); }
 .label.dim .dot { opacity: 0.6; }
+/* Map label management (label-layout.ts): leader lines and clusters. Dots stay tappable through the map's own picking (28 px radius on touch). */
+.label .leader { position: absolute; left: 0; top: 0; height: 1px; background: rgba(200, 215, 240, 0.55); transform-origin: 0 50%; pointer-events: none; }
+.label.cluster .dot { box-shadow: 0 0 0 2px #000, 0 0 0 4px rgba(255, 255, 255, 0.85); }
+.label.cluster .text { font-weight: 700; }
 
 #hud { position: fixed; inset: 0; pointer-events: none; }
 #hud > * { pointer-events: auto; }
@@ -575,3 +579,10 @@ html.touch .scrub-met { min-height: 44px; }
 /* Seven tabs on a narrow side column: scroll rather than shrink below a 44 px target. */
 .tab { min-width: 44px; }
 .tabs { overflow-x: auto; scrollbar-width: none; }
+
+/* Review fixes (narrow dock and phone): the azimuth field and the liftoff date keep a readable width
+   between their step buttons; the status bar's orbit readout wraps instead of being cut off on a phone. */
+.fctl input.az-input { min-width: 6.5em; flex: 1 1 6.5em; }
+.fctl input.date-input { min-width: 13.5em; flex: 1 1 13.5em; font-size: 12px; }
+#hud[data-mode="sheet"] .tb-key { white-space: normal; overflow: visible; }
+.fctl:has(> input.az-input), .fctl:has(> input.date-input) { flex-wrap: wrap; }

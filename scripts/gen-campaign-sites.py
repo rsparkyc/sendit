@@ -56,6 +56,11 @@ for f in glob.glob(os.path.join(S, 'solve', '*.log')):
         lower = [x for x in st if x[3]]
         LEFT.setdefault((mm.group(2), mm.group(1), mm.group(3)), (float(lower[-1][2]), int(lower[-1][1])))
 ceil10 = lambda x: int(math.ceil(x / 10 - 1e-9) * 10)
+# References are stored in the leaderboard's quantised units (objectives.ts deltaVKey / timeKey:
+# delta-v rounded UP to 0.1 m/s, time UP to the whole second), so flying a reference scores exactly
+# PAR_SCORE (10 000). Rounding to nearest left par 0.1 m/s below what its own flight is scored at.
+dv_key = lambda x: math.ceil(x * 10) / 10
+t_key = lambda x: int(math.ceil(x))
 fixture = {}
 rows = {}
 for m in ORDER:
@@ -85,7 +90,7 @@ for m in ORDER:
         else:
             maxt = int(math.ceil(t * 1.15 / DAY)) * DAY
         maxt = min(maxt, MAXDUR[m])
-        rows[m].append({'site': site, 'offered': True, 'deltaV': round(v['dv'], 1), 'ascentDeltaV': round(v['ascent'], 1), 'time': round(t), 'maxDeltaV': maxdv, 'maxTime': maxt,
+        rows[m].append({'site': site, 'offered': True, 'deltaV': dv_key(v['dv']), 'ascentDeltaV': round(v['ascent'], 1), 'time': t_key(t), 'maxDeltaV': maxdv, 'maxTime': maxt,
                         '_flight': v['flight'], '_upper_left': LEFT.get((m, site, f"{v['dv']:.1f}"))})
 
 json.dump(fixture, open(os.path.join(REPO, 'test/fixtures/campaign-solutions.json'), 'w'), indent=1)

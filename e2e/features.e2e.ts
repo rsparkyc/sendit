@@ -206,6 +206,16 @@ test.describe('desktop', () => {
     // The groups may be collapsed: open them so the last periapsis row is listed.
     for (let k = 0; k < 10 && (await page.locator('.apsis-group[aria-expanded="false"]').count()) > 0; k++) await page.locator('.apsis-group[aria-expanded="false"]').first().click();
     const num = (t: string, word: string) => new RegExp(`([\\d,]+) km ${word}`).exec(t)?.[1];
+    // The status line shows the osculating orbit at the time cursor: put the cursor on the last periapsis, where it
+    // and the replay's periapsis row are the same point.
+    await page.evaluate(() => {
+      const w = (window as any).sendit;
+      const s = w.store.get();
+      const pe = [...s.replay.result.events].reverse().find((e: any) => e.kind === 'periapsis' && e.body === 'earth');
+      w.store.set({ t: pe.t, paused: true, loadingTarget: pe.t });
+    });
+    await settled(page);
+    await page.waitForTimeout(300);
     const st = await status();
     const pe = await lastPe();
     console.log(`status: ${st} | last periapsis row: ${pe}`);

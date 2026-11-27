@@ -5,7 +5,8 @@
 import { errorCount, planErrors, type Objective } from './mission-layer';
 import { missionById } from './missions';
 import { bodyOrientation } from './orientation';
-import { bodyIndex } from './physics';
+import { BODIES, bodyIndex } from './physics';
+import { osculating, planeBasis, type OrbitState } from './orbit-elements';
 import { fromCentre, fromSurface } from './units';
 import type { AppState } from './store';
 
@@ -49,13 +50,11 @@ export function objectiveBodies(objs: readonly Objective[]): string[] {
 }
 
 const ROT = new Float64Array(9);
-/** Inclination (deg) of the orbit through a relative state, to the body's equator; NaN without a rotation model. */
+/** Inclination (deg) of the osculating orbit through a relative state (orbit-elements.ts), to the body's equator; NaN without a rotation model. */
 function inclinationAt(body: string, t: number, rel: readonly number[]): number {
   const i = bodyIndex(body);
   if (i < 0 || !Number.isFinite(bodyOrientation(i, t, ROT))) return NaN;
-  const hx = rel[1] * rel[5] - rel[2] * rel[4], hy = rel[2] * rel[3] - rel[0] * rel[5], hz = rel[0] * rel[4] - rel[1] * rel[3];
-  const c = (hx * ROT[2] + hy * ROT[5] + hz * ROT[8]) / Math.hypot(hx, hy, hz);
-  return (Math.acos(Math.max(-1, Math.min(1, c))) * 180) / Math.PI;
+  return osculating(BODIES[i].gm, rel, planeBasis([ROT[2], ROT[5], ROT[8]])).incDeg;
 }
 
 /**
@@ -73,7 +72,10 @@ export function tooShort(r: { objective: Objective; ok: boolean; detail: string 
 
 const km = (m: number) => `${Math.round(m / 1000).toLocaleString('en-US')} km`;
 
-export function statusOf(s: AppState, bodyName: (id: string) => string): Status {
+/** Osculating orbit about a body at the time cursor (orbit-ui.ts orbitAbout, angles to the body's equator), or null. */
+export type OrbitNow = (body: string) => { o: Pick<OrbitState, 'rp' | 'ra' | 'incDeg' | 'bound'> } | null;
+
+export function statusOf(s: AppState, bodyName: (id: string) => string, orbitNow?: OrbitNow): Status {
   const r = s.replay;
   const m = missionById(s.missionId);
   const errs = planErrors(s.plan);
@@ -82,8 +84,13 @@ export function statusOf(s: AppState, bodyName: (id: string) => string): Status 
   if (r) {
     const tob = m?.def ? targetObjective(m.def.objectives) : null;
     const body = tob?.body ?? null;
-    if (tob?.kind === 'orbit' && body) {
-      // An orbit goal: the orbit reached at the end (last apsides about the body) and its inclination.
+    const now = tob?.kind === 'orbit' && body && orbitNow ? orbitNow(body) : null;
+    if (now) {
+      // An orbit goal: the orbit at the time cursor, from orbit-elements.ts, exactly as the Orbit panel shows it.
+      const { o } = now;
+      key = `${bodyName(body!)} orbit now: Pe ${fromCentre(o.rp, body!)} · Ap ${o.bound ? fromCentre(o.ra, body!) : 'none (escape)'} · i ${o.incDeg.toFixed(2)}°`;
+    } else if (tob?.kind === 'orbit' && body) {
+      // No state at the cursor: the orbit reached at the end (last apsides about the body), from the same osculating maths.
       const ext = r.result.events.filter((e) => e.body === body && (e.kind === 'periapsis' || e.kind === 'apoapsis'));
       const pe = [...ext].reverse().find((e) => e.kind === 'periapsis');
       const ap = [...ext].reverse().find((e) => e.kind === 'apoapsis');

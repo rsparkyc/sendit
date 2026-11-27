@@ -215,6 +215,10 @@ SLOW=1 ONLY=geo-from-leo pnpm vitest run test/mission-campaign-sites-solve.test.
 pnpm gen:campaign-sites            # or: python3 scripts/gen-campaign-sites.py <logs dir>
 ```
 
+The generator stores each reference's total delta-v and time in the leaderboard's quantised
+units (delta-v rounded up to 0.1 m/s, time up to the whole second, exactly as `keys` quantises
+them), so flying a reference scores exactly 10,000; `test/mission-campaign*.test.ts` check it.
+
 Run one mission per process. Most take minutes; the lunar free return's per-site solver takes
 about fifteen minutes. An optional `campaign-solve-logs/not-offered.json` (`{ mission: { site:
 reason } }`) marks sites that are not offered. The logs directory is not committed. Changing the
@@ -287,12 +291,49 @@ The main page is the game's core loop: an editable mission plan, replayed live.
   the equatorial radius its gravity field is referred to, e.g. 6,378.1366 km for Earth; the mean
   radius for bodies without a field). The mean radius is used only for drawing.
 - **Timeline** (`timeline.ts`): zoomable about the cursor (wheel, pinch, buttons, fit presets), adaptive
-  MET axis, clustered ticks, overview strip when zoomed; it controls only what the scrubber shows.
+  axis in the time display's form, clustered ticks, overview strip when zoomed, separations as teal
+  scissors marks (drag to move, tap to edit); it controls only what the scrubber shows.
+- **Separations as flight actions** (`nodes.ts`): a separation drops the active stage at a time you
+  choose ("Separation at cursor", or "separate after" a burn), with whatever propellant it holds; burns
+  after it are fired by the next stage, and each burn row carries its stage chip (S1, S2…, SC). A stage
+  that runs dry separates by itself, and that separation is listed like any other. The transfer planner
+  offers to split a departure the active stage cannot complete ("Split across a separation": the stage
+  burns what it has, separates a second after cutoff, the next stage flies the rest in the same
+  direction).
+- **Vehicle panel and Sandbox vehicle editor** (`vehicle-ui.ts`, `vehicle.ts`): the stack bottom to top
+  with masses, engines, thrust-to-weight at ignition and each stage's delta-v with everything above it;
+  before a replay what the ascent leaves each stage and what the nodes ask of it, after it what each used
+  and has left. Read-only in a mission; in Sandbox a full editor (presets, a spacecraft alone delivered
+  free to orbit, add / remove / reorder stages, masses and engines), every change undoable.
+- **Launch feedback** (in the Start panel): the ascent's required delta-v and its breakdown, which stage
+  reaches orbit and what the upper stage has left at insertion (or why the vehicle cannot reach the
+  orbit), and two charts of upper-stage delta-v left against parking altitude and against azimuth (with
+  each azimuth's inclination and the site's range-safety corridor), computed in `ascent-worker.ts`. Tap
+  or drag a chart to set the value. The score's delta-v is the total: ascent plus everything flown after.
+- **Orbit panel** (`orbit-ui.ts`, maths in `orbit-elements.ts`): the state and orbit at the time cursor
+  about the dominant body or a pinned one, in the shared node plane. The elements are *osculating*: the
+  two-body orbit matching the position and velocity at that instant, which drift in an N-body flight;
+  where the replay knows the real next apsis it is shown alongside. The status bar's orbit (Pe, Ap, i)
+  and the free-orbit start preview come from the same code (`orbitAbout`, `osculating`).
+- **Time display** (`timefmt.ts`, persisted with the view settings): every point in time is shown as
+  mission elapsed time (T+ from liftoff or the plan start), UTC (marked * where leap seconds are
+  predicted) or TDB, chosen in View or by tapping the time under the timeline or in the status bar
+  (MET → UTC → TDB). Durations are never converted. Exceptions: the status bar's second line, the Time
+  panel and the node editor's "Absolute / Mission elapsed" row show the other form on purpose, and the
+  transfer planner keeps calendar dates (UTC, or TDB in TDB mode) with T+ alongside.
+  `e2e/times.e2e.ts` audits the rendered text in every mode.
+- **Map labels** (`label-layout.ts`, pure; `labels.ts` applies it): priority by kind, raised for the
+  selected item and for items near the time cursor in time; labels never overlap each other or sit on a
+  globe (a marker over a planet gets its name outside the disc with a leader line); markers within a few
+  pixels (more on touch) collapse into one cluster ("Burn 1 +2") that fans out on a tap; items far in
+  time from the cursor fade; markers behind a body are drawn faded, without a name (the selected item and failures keep
+  theirs), and are not tappable. A marker whose name is hidden is still tappable (the map picks within 28 px on touch).
 - Viewer pieces: `frames.ts`, `paths.ts`, `scene.ts`, `labels.ts`, `hud.ts`, `camera.ts`, `time.ts`.
 
-Keys: Space pauses, `,` and `.` change warp. With a node selected: W/S prograde, D/A
+Keys (the in-app "Shortcuts and gestures" dialog, `?`, lists the same, with the map legend and the
+panels): Space pauses, `,` and `.` change warp. With a node selected: W/S prograde, D/A
 normal, E/Q radial (Alt, none, Shift: the small, medium, large step, 0.1, 1, 10 m/s and 1 s, 1 min, 10 min for time), `[` `]` move it in time, Delete
-removes it, N adds a node at the time cursor. Ctrl/Cmd Z undoes any plan edit and Shift Ctrl/Cmd Z (or Ctrl Y) redoes it
+removes it, Esc clears the selection, N (or Enter) adds a node at the picked trajectory point or else at the time cursor. Ctrl/Cmd Z undoes any plan edit and Shift Ctrl/Cmd Z (or Ctrl Y) redoes it
 (`history.ts`: a drag or a burst of step clicks on one value is one step); the nodes panel has Undo / Redo buttons.
 
 Adding a node is select-then-confirm, the same on desktop and touch: a click or tap on the trajectory picks that point
@@ -301,7 +342,9 @@ itself, a click that ends a camera drag does nothing, and far-side points hidden
 A double click or double tap focuses what is under the pointer; when several things are there `pick.ts` decides, in
 this order: the spacecraft, maneuver nodes and burn markers, event and AN / DN markers, launch sites, bodies (nearest
 the camera first), a trajectory point (the time cursor moves there and the spacecraft is focused). Single clicks use
-the same order, without bodies.
+the same order, without bodies. Touch: one-finger drag orbits the camera, pinch zooms, two-finger drag
+tilts and turns; every control has a tap target of about 44 px and nothing needs hover or a keyboard.
+Tapping a cluster of markers fans it out; tapping the time cycles the time display.
 The URL hash may also set the initial view, e.g. `#frame=rot:earth:moon&focus=earth&dist=1.3e9`.
 
 ## Develop

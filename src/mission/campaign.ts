@@ -73,8 +73,10 @@
  *    keep their flat limits), x 1.15 for interplanetary missions (rounded up
  *    to the day), never above maxDuration;
  *  - par (scoring refs) = the best offered site's reference (lowest total
- *    delta-v; parSite), total delta-v and time, weights 1:1, so a run
- *    matching the best known launch scores PAR_SCORE (10 000); each mission
+ *    delta-v; parSite), total delta-v and time, weights 1:1, stored in the
+ *    leaderboard's quantised units (delta-v rounded up to 0.1 m/s, time up
+ *    to the second, as deltaVKey / timeKey), so flying the reference scores
+ *    exactly PAR_SCORE (10 000); each mission
  *    opens at that site. plane-change: the Cape, the site it is about.
  *
  * HEADROOM PAR LEAVES. The references drop the upper stage ten minutes after

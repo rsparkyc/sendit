@@ -41,6 +41,31 @@ const dur = (s: number) => {
   return d > 0 ? `${d}d ${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m` : `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`;
 };
 
+/**
+ * The osculating orbit of the spacecraft about body `id` at absolute time t,
+ * angles in the given plane ('equator': the body's equator, as the status
+ * line uses; 'setting': the shared node-plane setting, as the Orbit panel
+ * uses). The one place the app turns the flown state into an orbit: the
+ * Orbit panel and the status line both read it.
+ */
+export function orbitAbout(src: OrbitSource, t: number, id: string, plane: 'equator' | 'setting' = 'setting'): { body: string; o: OrbitState; rel: number[]; mass: number; plane: string } | null {
+  const c = bodyIndex(id);
+  const pos = new Float64Array(3 * BODIES.length), vel = new Float64Array(3 * BODIES.length), sc = new Float64Array(7);
+  if (c < 0 || !src.craft(t, sc) || !src.bodies(t, pos, vel)) return null;
+  const B = BODIES[c];
+  const rel = [0, 1, 2].map((k) => sc[k] - pos[3 * c + k]).concat([0, 1, 2].map((k) => sc[3 + k] - vel[3 * c + k]));
+  let n: number[] | null = null;
+  let label = 'ICRF equator';
+  if (plane === 'equator') {
+    const rot = new Float64Array(9);
+    if (Number.isFinite(src.orientation(c, t, rot))) { n = [rot[2], rot[5], rot[8]]; label = `${B.name}'s equator`; }
+  } else {
+    const pl = src.planeNormal(c, t, pos, vel);
+    if (pl) { n = pl.n; label = pl.label; }
+  }
+  return { body: id, o: osculating(B.gm, rel, planeBasis(n ?? [0, 0, 1])), rel, mass: sc[6], plane: label };
+}
+
 export class OrbitPanel {
   readonly root: HTMLElement;
   private readonly titleEl = el('div', { className: 'orbit-title' });
@@ -84,13 +109,10 @@ export class OrbitPanel {
     }
     const id = this.pinned || this.src.dominant(t - s.plan.epoch);
     const c = bodyIndex(id);
-    if (c < 0) return;
+    const cur = c < 0 ? null : orbitAbout(this.src, t, id, 'setting');
+    if (!cur) return;
     const B = BODIES[c];
-    const rel = [0, 1, 2].map((k) => this.sc[k] - this.pos[3 * c + k]).concat([0, 1, 2].map((k) => this.sc[3 + k] - this.vel[3 * c + k]));
-    const pl = this.src.planeNormal(c, t, this.pos, this.vel);
-    const basis = planeBasis(pl?.n ?? [0, 0, 1]);
-    const o = osculating(B.gm, rel, basis);
-    const plane = pl?.label ?? 'ICRF equator';
+    const { o, rel, plane } = cur;
     this.last = { body: id, o, alt: o.r - B.refRadius, plane };
     setText(this.titleEl, `Orbit about ${B.name}${this.pinned ? ' (pinned)' : ''}`);
     // Now.
@@ -103,7 +125,8 @@ export class OrbitPanel {
     rows.push(['Vertical speed · flight-path angle', `${ms(o.vr)} · ${o.fpaDeg.toFixed(2)}°`]);
     if (Number.isFinite(this.src.orientation(c, t, this.rot))) {
       const ll = latLon(rel, this.rot);
-      rows.push(['Latitude · longitude (surface)', `${ll.latDeg.toFixed(3)}° · ${ll.lonDeg.toFixed(3)}°`]);
+      const z = (x: number) => x.toFixed(3).replace(/^-(0\.0+)$/, '$1'); // no "-0.000°"
+      rows.push(['Latitude · longitude (surface)', `${z(ll.latDeg)}° · ${z(ll.lonDeg)}°`]);
     }
     const st = this.src.stage(t - s.plan.epoch);
     if (st) rows.push(['Active stage · mass', `${st.tag} ${st.name} · ${Math.round(this.sc[6]).toLocaleString('en-US')} kg`]);

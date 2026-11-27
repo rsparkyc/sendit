@@ -38,7 +38,8 @@ export function siteSummary(def: MissionDefinition, site: string): string | null
   if (!o) return null;
   if (!o.offered) return `Not offered: ${o.reason}`;
   const d = (x: number) => (x >= DAY ? `${(x / DAY).toFixed(1)} d` : `${(x / 3600).toFixed(1)} h`);
-  return `Reference ${fmtDv(o.deltaV)}, ${d(o.time)} · limits ${fmtDv(o.maxDeltaV)}, ${d(o.maxTime)}`;
+  // Limits are whole m/s (rounded up to 10 m/s): no false decimal.
+  return `Reference ${fmtDv(o.deltaV)}, ${d(o.time)} · limits ${Math.round(o.maxDeltaV).toLocaleString('en-US')} m/s, ${d(o.maxTime)}`;
 }
 import { conformance, craftPerformance, launchOf, missionById, MISSIONS, SPACECRAFT_PRESETS } from './missions';
 import { budget, dvMagnitude, elementsFromState, nodesOf, separationOffer, separationRefusal, separationsOf, stageAt, stateFromElements, type OrbitElements } from './nodes';
@@ -286,7 +287,7 @@ export class StartPanel {
     this.az = numInput('Inertial launch azimuth, degrees clockwise from north', '0.1', (v) => {
       const l = launch();
       if (l) ctx.editor.setLaunch({ ...l, azimuthDeg: ((v % 360) + 360) % 360 });
-    });
+    }, 'az-input');
     this.alt = numInput('Parking orbit altitude above Earth’s reference (equatorial) radius, km', '1', (v) => {
       const l = launch();
       // The field follows the distance convention: radius from Earth's centre in radius mode.
@@ -846,7 +847,7 @@ export class NodesPanel {
         `<div class="kv"><span>Requested Δv</span><b>${fmtDv(dvMagnitude(x.node.dv))}</b></div>` +
         `<div class="kv"><span>Replay Δv (expended)</span><b class="${rep && Math.abs(rep.deltaV - dvMagnitude(x.node.dv)) > 0.05 * Math.max(1, dvMagnitude(x.node.dv)) ? 'warn' : ''}">${rep ? fmtDv(rep.deltaV) : s.replay?.plan === plan && s.replay.preview === null ? 'not flown' : '…'}</b></div>` +
         `<div class="kv"><span>Burn</span><b>${x.burn.duration.toFixed(2)} s${rep ? ` (flown ${rep.burnTime.toFixed(2)} s)` : ''}</b></div>` +
-        `<div class="kv"><span>${timeMode() === 'met' ? 'Absolute' : 'Mission elapsed'}</span><b class="node-time-other">${esc(otherTime(x.node.t))}</b></div>` +
+        `<div class="kv" data-time-other="1"><span>${timeMode() === 'met' ? 'Absolute' : 'Mission elapsed'}</span><b class="node-time-other">${esc(otherTime(x.node.t))}</b></div>` +
         `<div class="kv"><span>Ignition → cutoff</span><b>${esc(fmtTime(x.burn.start, 1))} → ${esc(fmtTime(x.burn.start + x.burn.duration, 1))}</b></div>` +
         `<div class="kv"><span>Mass</span><b>${fmtKg(x.m0)} → ${fmtKg(x.m1)}</b></div>` +
         `<div class="kv"><span>Propellant</span><b>${fmtKg(x.m0 - x.m1)}${rep ? ` (flown ${fmtKg(rep.propellant)})` : ''} · ${Number.isFinite(mdot) ? mdot.toFixed(2) : '—'} kg/s</b></div>`;
@@ -1139,8 +1140,8 @@ export class ResultsPanel {
       `<div class="kv"><span>Spacecraft Δv remaining (E1)</span><b>${fmtDv(remaining)}</b></div>` +
       `<div class="kv"><span>Spacecraft propellant</span><b>${fmtKg(sc.wetMass - sc.dryMass - scLeft)} used · ${fmtKg(scLeft)} left</b></div>` +
       stageLines +
-      `<div class="kv"><span>Mission elapsed</span><b>${esc(formatMet(res.elapsed, 0))}</b></div>` +
-      `<div class="kv"><span>Ended</span><b>${Number.isFinite(res.finalT) ? esc(formatCalendar(tdbToCalendar(res.finalT), false)) + ' TDB' : '—'}</b></div>`;
+      `<div class="kv"><span>Flight duration</span><b>${esc(formatMet(res.elapsed, 0).replace(/^T[+−]/, ''))}</b></div>` +
+      `<div class="kv"><span>Ended</span><b>${Number.isFinite(res.finalT) ? esc(fmtTime(res.finalT - r.plan.epoch, 0)) : '—'}</b></div>`;
     const nodes = nodesOf(r.plan);
     this.burns.innerHTML = res.burns.length
       ? `<tr><th>#</th><th>planned</th><th>flown</th><th>time</th><th>prop.</th></tr>` +
