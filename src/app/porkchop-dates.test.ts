@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BODIES } from './physics';
 import { initialPlan, missionById } from './missions';
-import { missionDeadline, suggestDates, transferBodies } from './porkchop-dates';
+import { earliestDeparture, missionDeadline, suggestDates, transferBodies } from './porkchop-dates';
 import { calendarToTdb, DAY } from './time';
 
 const at = (y: number, m: number, d: number) => calendarToTdb({ year: y, month: m, day: d, hour: 0, minute: 0, second: 0 });
@@ -55,5 +55,20 @@ describe('porkchop default dates', () => {
     const m = missionById('lunar-orbit')!;
     expect(transferBodies(BODIES, m.def, initialPlan(m, 'x'))).toEqual({ departure: 'earth', arrival: null });
     expect(missionDeadline(null, 0)).toBe(Infinity);
+  });
+
+  it('earliest departure: the view time only when it is on a later date than liftoff', () => {
+    const lift = at(2028, 3, 20) + 13 * 3600;
+    // Same date (minutes or hours later): liftoff.
+    expect(earliestDeparture(lift, lift + 600, Infinity)).toEqual({ t: lift, fromView: false });
+    expect(earliestDeparture(lift, lift + 10 * 3600, Infinity)).toEqual({ t: lift, fromView: false });
+    // Before liftoff: liftoff.
+    expect(earliestDeparture(lift, lift - 5 * DAY, Infinity)).toEqual({ t: lift, fromView: false });
+    // A later date, even less than a day later: the view time.
+    const late = at(2028, 3, 20) + 23.5 * 3600;
+    expect(earliestDeparture(late, late + 3600, Infinity)).toEqual({ t: late + 3600, fromView: true });
+    expect(earliestDeparture(lift, lift + 30 * DAY, Infinity)).toEqual({ t: lift + 30 * DAY, fromView: true });
+    // Past the mission's deadline: liftoff.
+    expect(earliestDeparture(lift, lift + 30 * DAY, lift + 20 * DAY)).toEqual({ t: lift, fromView: false });
   });
 });

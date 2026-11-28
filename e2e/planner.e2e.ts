@@ -374,6 +374,8 @@ test('porkchop dates follow the mission and its liftoff', async ({ page }) => {
   expect(await v('Earliest departure')).toBe('2028-11-20');
   expect(await v('Latest departure') > '2028-12-31').toBe(true);
   expect(await v('Latest arrival') <= '2029-12-25').toBe(true);
+  // The view clock is minutes past liftoff, on the same date: the dates count from liftoff.
+  await expect(pl.locator('.pl-status')).toContainText('Dates suggested from liftoff');
   await expect(pl.locator('.pl-status')).toContainText('window departs around');
   expect(errors).toEqual([]);
 });
