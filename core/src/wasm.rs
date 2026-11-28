@@ -268,3 +268,63 @@ pub extern "C" fn samples_ptr() -> *const f64 {
 pub extern "C" fn samples_len() -> usize {
     STATE.with(|s| s.borrow().as_ref().unwrap().samples.len())
 }
+
+// ---------------------------------------------------------------------------
+// The leaderboard verifier (phase-four shape): one call per submission.
+
+fn mission_data() -> &'static crate::mission::mdata::MissionData {
+    static D: std::sync::OnceLock<crate::mission::mdata::MissionData> = std::sync::OnceLock::new();
+    D.get_or_init(|| crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON))
+}
+
+thread_local! {
+    static VERIFIER: RefCell<Option<crate::mission::verify::Verifier<'static>>> = const { RefCell::new(None) };
+}
+
+/// A fresh verifier (checkpoint asset from add_file; no chunks built yet).
+#[unsafe(no_mangle)]
+pub extern "C" fn verifier_new() {
+    let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+    let v = crate::mission::verify::Verifier::new(mission_data(), Some(&asset)).expect("verifier");
+    VERIFIER.with(|x| *x.borrow_mut() = Some(v));
+}
+
+/// Verify a submission: the input is "plan\nmission id\nversion\nsite" (site "-": the plan's own).
+/// Returns 0 accepted, 1 rejected; the verdict as text in report_ptr/report_len.
+#[unsafe(no_mangle)]
+pub extern "C" fn verifier_verify(ptr: *const u8, len: usize) -> u32 {
+    let t = text(ptr, len);
+    let f: Vec<&str> = t.split('\n').collect();
+    let site = if f[3] == "-" { None } else { Some(f[3]) };
+    let v = VERIFIER.with(|x| x.borrow_mut().as_mut().expect("verifier_new first").verify(f[0], f[1], f[2], site));
+    let code = if matches!(v, crate::mission::verify::Verdict::Accepted { .. }) { 0 } else { 1 };
+    REPORT.with(|rep| *rep.borrow_mut() = format!("{v:?}"));
+    code
+}
+
+/// Replay a plan for a campaign mission with the verifier's world (chunks stay warm); returns the step count.
+#[unsafe(no_mangle)]
+pub extern "C" fn verifier_replay(ptr: *const u8, len: usize) -> u32 {
+    let t = text(ptr, len);
+    let f: Vec<&str> = t.split('\n').collect();
+    let d = mission_data();
+    let m = d.mission(f[1]).expect("mission");
+    let p = crate::mission::plan::decode_plan(f[0], d).expect("plan");
+    let o = crate::mission::objectives::mission_replay_options(m);
+    VERIFIER.with(|x| {
+        let mut g = x.borrow_mut();
+        let v = g.as_mut().expect("verifier_new first");
+        let r = crate::mission::replay::replay(&p, &mut v.world, &o, None, None);
+        REPORT.with(|rep| *rep.borrow_mut() = r.digest.clone());
+        r.steps as u32
+    })
+}
+
+/// Build chunk k cold: a fresh ephemeris from the checkpoint asset (asset decode included).
+#[unsafe(no_mangle)]
+pub extern "C" fn chunk_cold(k: i32) -> u32 {
+    let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+    let (mut eph, _) = crate::data::ephemeris(&crate::data::world(), Some(&asset), None).expect("ephemeris");
+    eph.ensure_chunk(k as i64);
+    eph.has_chunk(k as i64) as u32
+}

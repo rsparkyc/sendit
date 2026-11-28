@@ -38,8 +38,10 @@ harmonic pair forces with their reactions, the stage-time construction
 checkpoint asset's bytes (`src/physics/data/checkpoints-1950-2100.bin`) and the
 chunk coefficients of chunks -3..2, compared bit for bit. (Phase one's status; the integrator, the chunk builder, the plan codec,
 launch, ascent, events and replay have since been ported, see the layer
-sections below, and the pinned mission replays are reproduced. Still not
-ported: objectives, conformance, scoring and the campaign rules.)
+sections below, and the pinned mission replays are reproduced; objectives,
+conformance, scoring, the campaign rules and the leaderboard verdict too. The
+whole replay-and-score path is now in Rust; nothing is wired into the app,
+the server or CI yet.)
 
 ## Running
 
@@ -223,6 +225,63 @@ writes the TypeScript numbers to fixtures/generated/bench-ts.txt;
 `cargo run --release --bin bench mission` prints the Rust ones.) The whole
 replay section takes 9.4 s native and 12.0 s as wasm in Node.
 
+### Layer three: objectives, conformance, scoring, the leaderboard verdict (`src/mission/objectives.rs`, `src/mission/verify.rs`)
+
+Ported: objectives.ts (evaluate and every objective kind with its evidence
+values and messages, checkPlanConformance, allowedSites, missionForSite,
+initialMissionPlan, score = floor(10000 / cost) with par from the best
+site's reference, deltaVKey (ceil to 0.1 m/s), timeKey (ceil to 1 s),
+compareKeys per board), campaign.ts and campaign-sites.ts (parSite, sitePar,
+offeredSites, loosestLimits), and `Verifier::verify(plan, mission id,
+version, site)`, which follows server/leaderboard (engine.ts plus
+service.ts's submit order: mission lookup, version, decode, rules, replay
+with its step budget, evaluate) and returns Accepted with keys and digest
+or Rejected with the code and message.
+
+Vectors (core/ts/export-objectives.vec.ts): key and compare vectors at and
+one ulp either side of each quantisation boundary (plus delta-v exactly at
+its own reference for 0.1..300 m/s); every replay of the replay corpus
+evaluated against its campaign mission and against probe missions built
+from its own events (bands exactly at an event value and one ulp in or out);
+non-conforming plans (vehicle, site, parking altitude, launch parameters,
+engine flags, spacecraft, duration, older version, state starts, direct
+injection) against the campaign missions and rule variants; and the
+leaderboard verdict for every reference and initial plan and for rejected
+submissions (unknown mission, old version, undecodable, data mismatch, rule
+violations, over budget). **9,259 key vectors, 243 replays, 1,930
+evaluations, 5,591 conformance checks, 257 verdicts: 319,996 values,
+0 mismatches natively, scalar and SIMD wasm.** The final proof over every
+campaign mission x offered site reference (77 plans; samples.ts's three
+missions are campaign missions and are among them) is this section plus
+the replay section: same digest, events, objective results, conformance and
+keys, and the same verdict as the TypeScript leaderboard path, including
+rejections.
+
+Mutation check (`python3 scripts/mutation-check.py objectives.rs verify.rs`):
+27 of 32 caught. Not caught, with reasons in the script: exact halving for
+the semi-major axis (equivalent); the next orbit run starting at the failing
+extremum (equivalent: it is re-tested and fails again); revolutions reached
+strictly after, and the period factor reassociated (an ulp of target time
+matters only if an extremum time coincides to ~1e-16); the score's cost term
+regrouped (exact with weight 1, and floor moves only within ~1e-12 of an
+integer).
+
+Leaderboard-path timings over the 77 accepted references (Apple M-series,
+12 cores; `cargo run --release --bin bench verify`,
+`node scripts/run-wasm.mjs bench-verify`, `BENCH=1 vitest run --config
+core/ts/vitest.config.ts core/ts/bench-verify.vec.ts`):
+
+| | TypeScript (V8) | Rust native | Rust wasm (Node) |
+|---|---|---|---|
+| load (1 min) | 1.97-2.21 | 1.09-1.18 | 1.61-2.28 |
+| one chunk cold (asset decode + chunk 77) | 267 ms | 155 ms | 216 ms |
+| all 77 reference replays, chunks warm | 3,183 ms | 1,354 ms | 1,806 ms |
+| all 77 verifications, each from a fresh engine (cold chunks) | 90.1 s | 49.0 s | 68.9 s |
+
+A cold verification is dominated by chunk building (geo-from-leo: 7 ms of
+replay inside 160 ms native, 280 ms TypeScript). The wasm module is
+963 KiB raw, 315 KB gzip -9, 244 KB brotli -q 11.
+
 ## TypeScript behaviours reproduced deliberately
 
 - nbody.ts `fieldOf`: a zonal term whose `tesseral` list is present but
@@ -343,10 +402,9 @@ switch-over).
 - Fixture size: about 60 MB generated, fine on demand, too big to check in.
 
 **Estimate of remaining work.**
-- nbody plus chunk builder with proof: 3-5 days.
-- Mission layer (ascent, events, replay, objectives, scoring) with pinned
-  replays: 1-2 weeks.
+- nbody plus chunk builder with proof: done.
+- Mission layer (ascent, events, replay, objectives, scoring, verdict): done.
 - Worker API and front-end integration: about 1 week.
 - Lambda runtime and ARM CI: 2-3 days.
 - Browser parity CI: 1-2 days.
-- Total: roughly 4-6 weeks of focused work.
+- Remaining total: roughly 2 weeks of focused work.

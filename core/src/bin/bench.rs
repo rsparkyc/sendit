@@ -153,7 +153,69 @@ fn bench_mission() {
     black_box(plan::decode_plan(black_box("x"), &d).is_ok());
 }
 
+/// The accepted reference submissions of objectives.txt (verdict line "accepted", explicit site): (plan, mission id, version, site).
+pub fn reference_submissions() -> Vec<(String, String, String, String)> {
+    let text = std::fs::read_to_string(dir().join("objectives.txt")).unwrap();
+    let unhex = |s: &str| sendit_core::parity3::unhex(s);
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .windows(2)
+        .filter(|w| w[0].starts_with("verify ") && w[1].starts_with("accepted"))
+        .map(|w| w[0])
+        .map(|l| l.split(' ').collect::<Vec<_>>())
+        .filter(|t| t[4] != "-")
+        .map(|t| (unhex(t[1]), unhex(t[2]), unhex(t[3]), t[4].to_string()))
+        .collect()
+}
+
+/// Leaderboard path: one chunk built cold, every campaign reference replay
+/// (chunks warm), and the verification end to end from a fresh verifier
+/// (asset decode and cold chunk building included). One line per reference.
+fn bench_verify() {
+    use sendit_core::mission::{mdata::MissionData, objectives::mission_replay_options, plan, replay, verify::{Verdict, Verifier}};
+    let d = MissionData::parse(sendit_core::data::MISSION_JSON);
+    let asset = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).unwrap();
+    let w = sendit_core::data::world();
+    let k = {
+        let (eph, _) = sendit_core::data::ephemeris(&w, Some(&asset), None).unwrap();
+        eph.chunk_index(d.campaign[0].epoch.unwrap())
+    };
+    let st = wall(5, 1, || {
+        let (mut eph, _) = sendit_core::data::ephemeris(&w, Some(&asset), None).unwrap();
+        eph.ensure_chunk(k);
+        black_box(eph.has_chunk(k));
+    });
+    println!("one chunk cold (asset decode + build chunk {k}): {}", st.fmt("ms", 1));
+    let subs = reference_submissions();
+    let mut v = Verifier::new(&d, Some(&asset)).unwrap();
+    let (mut tr, mut tv) = (0.0, 0.0);
+    for (s, id, ver, site) in &subs {
+        let m = d.mission(id).unwrap();
+        let p = plan::decode_plan(s, &d).unwrap();
+        let o = mission_replay_options(m);
+        let first = replay::replay(&p, &mut v.world, &o, None, None);
+        let rs = wall(3, 0, || {
+            black_box(replay::replay(&p, &mut v.world, &o, None, None).digest);
+        });
+        let t0 = Instant::now();
+        let mut cold = Verifier::new(&d, Some(&asset)).unwrap();
+        let verdict = cold.verify(s, id, ver, Some(site));
+        let cold_ms = t0.elapsed().as_secs_f64() * 1e3;
+        assert!(matches!(verdict, Verdict::Accepted { .. }), "{id}/{site}: {verdict:?}");
+        let mut rs = rs.0;
+        rs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        tr += rs[1];
+        tv += cold_ms;
+        println!("{id}/{site}: {} steps, replay warm {:.1} ms, verify cold {:.1} ms", first.steps, rs[1], cold_ms);
+    }
+    println!("total over {} references: replay warm {:.0} ms, verify cold {:.0} ms", subs.len(), tr, tv);
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("verify") {
+        bench_verify();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("chunk") {
         bench_chunk();
         return;
