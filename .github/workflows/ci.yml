@@ -7,13 +7,16 @@ name: CI
 #   ui        the UI suites (incl. smoke and mobile) on Chromium in 5 shards and on WebKit in 6 shards
 #   firefox   smoke.e2e.ts on headed Firefox under Xvfb (headless Linux Firefox has no WebGL)
 #   report    merges every browser job's results into one HTML report (uploaded when something failed)
+#   changes   lists the changed files; a documentation-only change (*.md, docs/) skips every job below
 #   gate      "CI passed": the single required check for merging into main (every job above succeeded)
 #   deploy    pushes to main only, after all of the above passed, and only while the repository
 #             variable DEPLOY_ENABLED is 'true' (.github/workflows/deploy.yml)
 # The SLOW=1 validation suites run in .github/workflows/slow.yml (weekly and on demand).
 
 on:
+  # Branch pushes are covered by their PR's run; pushes to main run the full gate and the deploy.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -28,8 +31,36 @@ env:
   NODE_VERSION: 22
 
 jobs:
+  # Decides whether the change can affect the build or tests. A change that touches only documentation
+  # (Markdown, docs/) skips every other job; the gate still reports, so the required check never hangs.
+  changes:
+    name: Changed files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Anything besides documentation?
+        id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          code=true
+          if [ -n "$BASE" ] && ! echo "$BASE" | grep -qE '^0+$' && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only "$BASE" HEAD)"
+            echo "$files"
+            if [ -n "$files" ] && ! echo "$files" | grep -vqE '(\.md$|^docs/)'; then code=false; fi
+          fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
   unit:
     name: Typecheck and unit tests
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -52,6 +83,8 @@ jobs:
 
   build:
     name: Build
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -292,7 +325,7 @@ jobs:
   report:
     name: Browser test report
     needs: [engines, ui, firefox]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.ui.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -336,16 +369,20 @@ jobs:
   # verification job succeeded, so the required check doesn't change when jobs or shards are added.
   gate:
     name: CI passed
-    needs: [unit, build, engines, ui, firefox]
+    needs: [changes, unit, build, engines, ui, firefox]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Every verification job succeeded
+      - name: Every verification job succeeded (or the change is documentation only)
         env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          echo "results: $RESULTS"
+          echo "changes: $CHANGES, code: $CODE, results: $RESULTS"
+          [ "$CHANGES" = success ] || exit 1
+          [ "$CODE" = true ] || exit 0
           for r in $RESULTS; do [ "$r" = success ] || exit 1; done
 
   deploy:
