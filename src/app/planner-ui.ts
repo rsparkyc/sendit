@@ -31,7 +31,7 @@ import { argMin, cellAt, colourRange, contour, contourLevels, field, monthTicks,
 import type { FromPlanner, StageReport } from './protocol';
 import type { AppState, Store } from './store';
 import { calendarToTdb, DAY, formatCalendar, tdbToCalendar } from './time';
-import { missionDeadline, suggestDates, transferBodies } from './porkchop-dates';
+import { earliestDeparture, missionDeadline, suggestDates, transferBodies } from './porkchop-dates';
 import { defaultInclination, launchOpportunities, PASS_SIDES, type LaunchOpportunity } from './transfer';
 
 const DEG = 180 / Math.PI;
@@ -672,7 +672,7 @@ export class PlannerOverlay {
   /**
    * Fill the date ranges from the mission profile and the current time
    * (porkchop-dates.ts): departures from liftoff, or from the view time when
-   * that is later and still inside the mission, around the next window, with
+   * that is on a later date and still inside the mission, around the next window, with
    * arrivals by the mission's time limit. `fromMission` also sets the bodies.
    */
   private suggestDates(fromMission: boolean): void {
@@ -684,8 +684,7 @@ export class PlannerOverlay {
       if (tb.arrival) this.arrSel.value = tb.arrival;
     }
     const deadline = missionDeadline(def, s.plan.epoch);
-    const fromNow = s.t > s.plan.epoch && s.t < deadline;
-    const earliest = fromNow ? s.t : s.plan.epoch;
+    const { t: earliest, fromView: fromNow } = earliestDeparture(s.plan.epoch, s.t, deadline);
     const sug = suggestDates(BODIES, this.depSel.value, this.arrSel.value, earliest, deadline);
     if (!sug) {
       this.status.textContent = 'No suggested dates: the porkchop is Sun-centred, so choose two different planets (or their moons).';

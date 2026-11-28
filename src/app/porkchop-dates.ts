@@ -12,7 +12,7 @@
 import type { CompleteMission, MissionPlan, Objective } from './mission-layer';
 import { dot, keplerPropagate, norm, sub, type Vec3 } from '../planning/kepler';
 import { solveLambert } from '../planning/lambert';
-import { DAY } from './time';
+import { DAY, tdbToCalendar } from './time';
 
 export interface DateBody {
   readonly id: string;
@@ -72,6 +72,21 @@ export function missionDeadline(def: CompleteMission | null, epoch: number): num
   let lim = def.maxDuration;
   for (const o of def.objectives) if (o.kind === 'max-time') lim = Math.min(lim, o.max);
   return epoch + lim;
+}
+
+/**
+ * Earliest departure to suggest: liftoff, or the view time when it falls on a
+ * later calendar date than liftoff and is still inside the mission. The date
+ * inputs hold whole days, so a view time on liftoff's date would give the same
+ * dates; counting it as "the current time" would only mislabel them.
+ */
+export function earliestDeparture(epoch: number, viewT: number, deadline: number): { t: number; fromView: boolean } {
+  const date = (t: number) => {
+    const c = tdbToCalendar(t);
+    return c.year * 10000 + c.month * 100 + c.day;
+  };
+  const fromView = viewT < deadline && date(viewT) > date(epoch);
+  return { t: fromView ? viewT : epoch, fromView };
 }
 
 /**
