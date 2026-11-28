@@ -8,7 +8,7 @@ import * as M2 from '../fixtures/model2-replay';
 import * as STAGED from '../fixtures/staged-replay';
 
 const FS = 'node:fs';
-const { existsSync, readFileSync } = (await import(/* @vite-ignore */ FS)) as { existsSync: (u: URL) => boolean; readFileSync: (u: URL) => Uint8Array };
+const { existsSync, readFileSync } = (await import(/* @vite-ignore */ FS)) as { existsSync: (u: URL) => boolean; readFileSync: (u: URL) => Uint8Array<ArrayBuffer> };
 
 it('the Rust core is off unless the flag turns it on', () => {
   expect(coreMode()).toBe('off');
