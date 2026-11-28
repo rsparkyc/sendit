@@ -7,6 +7,7 @@ name: CI
 #   ui        the UI suites (incl. smoke and mobile) on Chromium in 5 shards and on WebKit in 6 shards
 #   firefox   smoke.e2e.ts on headed Firefox under Xvfb (headless Linux Firefox has no WebGL)
 #   report    merges every browser job's results into one HTML report (uploaded when something failed)
+#   gate      "CI passed": the single required check for merging into main (every job above succeeded)
 #   deploy    pushes to main only, after all of the above passed, and only while the repository
 #             variable DEPLOY_ENABLED is 'true' (.github/workflows/deploy.yml)
 # The SLOW=1 validation suites run in .github/workflows/slow.yml (weekly and on demand).
@@ -330,6 +331,22 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 14
+
+  # The one required status check for merging into main (branch protection): it passes only when every
+  # verification job succeeded, so the required check doesn't change when jobs or shards are added.
+  gate:
+    name: CI passed
+    needs: [unit, build, engines, ui, firefox]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Every verification job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done
 
   deploy:
     name: Deploy
