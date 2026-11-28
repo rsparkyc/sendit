@@ -203,7 +203,12 @@ pub fn objectives(text: &str, d: &MissionData, asset: &[u8]) -> Report {
                         r.cmps(&[k.score, k.delta_v, k.time], &want, |i| format!("{ctx} keys[{i}]"));
                     }
                     (None, false) => {}
-                    _ => r.fail(format!("{ctx}: keys presence {:?}", e.keys)),
+                    (_, has) => {
+                        if has {
+                            l.fs(3);
+                        }
+                        r.fail(format!("{ctx}: keys presence {:?}", e.keys));
+                    }
                 }
                 str_cmp(&mut r, e.site.as_deref().unwrap_or("-"), l.word(), || format!("{ctx} site"));
                 let no: usize = l.word().parse().unwrap();
@@ -252,7 +257,14 @@ pub fn objectives(text: &str, d: &MissionData, asset: &[u8]) -> Report {
                             }
                         }
                     }
-                    _ => r.fail(format!("{ctx}: rule violation presence")),
+                    (_, w) => {
+                        r.fail(format!("{ctx}: rule violation presence"));
+                        if w != "-" {
+                            for _ in 0..w.parse::<usize>().unwrap() {
+                                it.next();
+                            }
+                        }
+                    }
                 }
             }
             "conf" => {
@@ -318,7 +330,12 @@ pub fn objectives(text: &str, d: &MissionData, asset: &[u8]) -> Report {
                                 summaries_cmp(&mut r, &mut it, objs, k, &ctx);
                             }
                             (None, false) => {}
-                            _ => r.fail(format!("{ctx}: flight detail presence")),
+                            _ => {
+                                r.fail(format!("{ctx}: flight detail presence"));
+                                while it.peek().is_some_and(|x| x.peek() == Some("vobj")) {
+                                    it.next();
+                                }
+                            }
                         }
                     }
                     (w, g) => {

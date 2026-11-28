@@ -98,6 +98,11 @@ it('export objective vectors', () => {
       }
     }
   }
+  // Delta-v alone at its own reference (time weight 0): PAR_SCORE exactly iff the key / 10 is the reference bit for bit.
+  for (let k = 1; k <= 3000; k++) {
+    const w = { deltaVRef: k / 10, deltaVWeight: 1, timeRef: 1, timeWeight: 0 };
+    for (const d of [k / 10, (k - 1) / 10 + 0.05]) W.add('key', 'ok', d, 0, w.deltaVRef, w.deltaVWeight, w.timeRef, w.timeWeight, score(true, d, 0, w), deltaVKey(d), timeKey(0));
+  }
   const boards: Board[] = ['combined', 'delta-v', 'time'];
   const kv = [0, 1, 2, -1, 10000, 9999, NaN];
   let seed = 12345;

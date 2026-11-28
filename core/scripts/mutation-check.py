@@ -209,8 +209,8 @@ MUTATIONS = [
      'a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())', 'a == b || (a.is_nan() && b.is_nan())'),
     ('conformance: parking band open at the bottom', 'src/mission/objectives.rs',
      'if !(pn(2) >= v.altitude[0] && pn(2) <= v.altitude[1]) {', 'if !(pn(2) > v.altitude[0] && pn(2) <= v.altitude[1]) {'),
-    ('conformance: absent ascent time not defaulted', 'src/mission/objectives.rs',
-     '            let ascent = p(3).unwrap_or(default_ascent);\n            let downrange = p(4).unwrap_or(default_downrange);\n            let circ = circ_name(p(5).unwrap_or(0.0) == 1.0);\n            if !(pn(2) >= v.altitude[0]', '            let ascent = pn(3);\n            let downrange = p(4).unwrap_or(default_downrange);\n            let circ = circ_name(p(5).unwrap_or(0.0) == 1.0);\n            if !(pn(2) >= v.altitude[0]'),
+    ('conformance: absent ascent time not defaulted (vehicle rule)', 'src/mission/objectives.rs',
+     '} else if let (Some(v), true) = (v_rule, is_launch) {\n            let ascent = p(3).unwrap_or(default_ascent);', '} else if let (Some(v), true) = (v_rule, is_launch) {\n            let ascent = pn(3);'),
     ('conformance: old-version plans also get every other reason', 'src/mission/objectives.rs',
      '        add("start-kind", "start.ascent".into(), OLD_VERSION_MESSAGE.into());\n        return out;', '        add("start-kind", "start.ascent".into(), OLD_VERSION_MESSAGE.into());'),
     ('campaign-sites: loosest limit as min', 'src/mission/objectives.rs',
@@ -297,6 +297,19 @@ EXPECTED_INVISIBLE = {
     # first extremum j that is out of band, so restarting at j instead of
     # j + 1 only re-tests ext[j], which fails again and is skipped.
     'orbit: next run starts at the failing extremum (s = j)',
+    # EQUIVALENT: halving is exact (no subnormal or overflowing distances), so
+    # 0.5 * (rp + ra) = 0.5 rp + 0.5 ra bit for bit.
+    'orbit: semi-major axis as rp/2 + ra/2',
+    # NOT OBSERVABLE (not equivalent): the target time `need` changes by an ulp
+    # or so, and the result changes only if an extremum's time falls exactly
+    # on (>= vs >) or between the two values of need; extremum times are
+    # bisected roots, so this needs a coincidence of ~1e-16 relative.
+    'orbit: revolutions reached strictly after',
+    'orbit: period factor reassociated: rev * (2 pi)',
+    # NOT OBSERVABLE in practice: a 1-ulp change of the cost moves
+    # floor(10000 / cost) only when 10000 / cost is within ~1e-12 of an
+    # integer; with weights 1:1 the regrouping is exact (1 * x = x).
+    'score: cost term reassociated: w * (dv / ref)',
 }
 
 # Sections a mutated file can affect (others are skipped to save time).
@@ -325,6 +338,7 @@ def main() -> int:
         open(src, 'w').write(orig.replace(old, new, 1))
         res = subprocess.run(['cargo', 'test', '-j', '4', '--release', '--test', 'parity', '--', '--test-threads=1', *TESTS_FOR.get(path, [])], cwd=work, env=env, capture_output=True, text=True)
         out = res.stdout
+        open(src, 'w').write(orig)  # restore before the next mutation, whatever happened
         if res.returncode != 0 and not re.search(r'values compared, [1-9]', out):
             print(f'!! {name}: cargo test failed without a parity mismatch:')
             print('\n'.join((res.stdout + res.stderr).splitlines()[-25:]))
