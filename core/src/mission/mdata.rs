@@ -30,6 +30,8 @@ pub struct AscentBody {
 #[derive(Clone, Debug)]
 pub struct BodyInfo {
     pub id: String,
+    /// Index of the parent body (src/app/body-meta.ts deriveMeta), -1 for the Sun.
+    pub parent: i32,
     pub gm: f64,
     pub radius: f64,
     pub reference_radius: f64,
@@ -243,6 +245,7 @@ impl MissionData {
                 .iter()
                 .map(|b| BodyInfo {
                     id: b.str_of("id").into(),
+                    parent: b.num("parent") as i32,
                     gm: b.num("gm"),
                     radius: b.num("radius"),
                     reference_radius: b.num("referenceRadius"),
