@@ -87,9 +87,11 @@ export async function solveGeo(page: Page, durationDays?: number): Promise<numbe
  * the drawn marker and span, checked with elementFromPoint. Returns the separation time before the drag.
  */
 export async function dragSeparationLater(page: Page): Promise<number> {
-  await page.locator('.tick.sep').scrollIntoViewIfNeeded();
   const pts = await page.evaluate(() => {
+    // Scroll and measure in one task: the timeline rebuilds its ticks on store changes (e.g. playback time), so a
+    // Playwright handle to the marker can be detached between calls (WebKit). Any later rebuild redraws it in place.
     const tk = document.querySelector('.tick.sep') as HTMLElement;
+    tk.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const burn = document.querySelectorAll('.span.burn')[1] as HTMLElement | undefined;
     const a = tk.getBoundingClientRect();
     const x0 = a.left + a.width / 2, y = a.top + a.height / 2;
@@ -122,9 +124,11 @@ export async function dragSeparationIntoBurn(page: Page): Promise<{ start: numbe
     const t0 = Math.min(t, b.start), t1 = Math.max(t, b.start + b.duration), m = (t1 - t0) * 0.05;
     sd.timeline.setWindow([p.epoch + t0 - m, p.epoch + t1 + m]);
   });
-  await page.locator('.tick.sep').scrollIntoViewIfNeeded();
   const pts = await page.evaluate(() => {
+    // Scroll and measure in one task: the timeline rebuilds its ticks on store changes (e.g. playback time), so a
+    // Playwright handle to the marker can be detached between calls (WebKit). Any later rebuild redraws it in place.
     const tk = document.querySelector('.tick.sep') as HTMLElement;
+    tk.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const span = document.querySelectorAll('.span.burn')[1] as HTMLElement;
     const a = tk.getBoundingClientRect(), s = span.getBoundingClientRect();
     const p = (window as any).sendit.store.get().plan;
