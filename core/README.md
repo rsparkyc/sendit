@@ -401,10 +401,133 @@ switch-over).
   keep each value's operation sequence.
 - Fixture size: about 60 MB generated, fine on demand, too big to check in.
 
-**Estimate of remaining work.**
-- nbody plus chunk builder with proof: done.
-- Mission layer (ascent, events, replay, objectives, scoring, verdict): done.
-- Worker API and front-end integration: about 1 week.
-- Lambda runtime and ARM CI: 2-3 days.
-- Browser parity CI: 1-2 days.
-- Remaining total: roughly 2 weeks of focused work.
+## Phase three and four: design (browser worker, Lambda)
+
+Status at this checkpoint: the core runs in the browser behind a feature flag
+that defaults OFF (`src/app/core-flag.ts`). With the flag off the game never
+fetches the module and runs exactly as before (e2e/core-shadow.e2e.ts checks
+that no `.wasm` is requested).
+
+### What exists now
+
+- `src/mission/engine.rs`: `replayWithSamples` + `replayOptions` ported
+  (sampling times `tPrev + ((t - tPrev) * i) / perStep`, de-duplication by
+  strictly increasing t, trimming at `finalT` and the appended final state);
+  the sandbox case computes its own spheres (`src/mission/sandbox.rs`).
+- `src/wasm.rs` engine exports: `engine_new` (built-in world, checkpoint
+  asset via `add_file`), `engine_add_chunk` / `engine_has_chunk`,
+  `engine_replay("mission\nperStep\nencodedPlan")` (summary in the report
+  buffer as hex bits, samples in `engine_samples_ptr/len`).
+- `src/app/core-engine.ts`: `CoreEngine` (no DOM; worker, page or Node),
+  `compileCore` (streaming compile when served as `application/wasm`),
+  `compareReplays` (outcome, digest, steps, final t and state, every sample's
+  bits).
+- `src/app/replay-worker.ts`, **shadow mode** (`?core=shadow`, or
+  localStorage `sendit.core=shadow`): after posting each full TypeScript
+  result, the worker hands the core the chunks the TypeScript built, flies the
+  same plan with the same `perStep`, and posts `core-parity`. The client counts
+  it (`window.sendit.coreStats`) and `console.warn`s a mismatch. The game
+  always shows the TypeScript result in this mode.
+- `check.html` section 4 (`src/check/core-worker.ts`): per browser, the core
+  (building its own chunks from the asset, as wasm) against the TypeScript in
+  the same engine and the V8 pins. e2e/determinism.e2e.ts runs it in CI's
+  three engine jobs; CI's build job now installs the pinned toolchain and runs
+  `core/scripts/build-web.sh` (module into `public/core/`, gitignored).
+- `src/bin/verify.rs`: the leaderboard verdict as a process (stdin
+  submission, stdout verdict), the core of a native Lambda handler.
+
+### Proven at this checkpoint
+
+- Sandbox spheres: the 27 pinned radii of `src/app/replay-options.test.ts`,
+  native, scalar wasm and SIMD wasm (parity section 17), plus the whole
+  existing suite unchanged (0 mismatches).
+- Node (V8 wasm), `src/app/core-engine.test.ts`: model-2 and staged fixtures
+  and the 4 campaign initial plans of 7 days or less, at perStep 2 and 12:
+  identical to `replayWithSamples`, fixtures equal to the V8 digests (skipped
+  where the module is not built, i.e. CI's unit job).
+- Chromium 159 (Playwright, local): check.html core section, 8 replays
+  (model-2, staged, 6 campaign initial plans up to 12 d), 55,664 samples
+  (x 8 values), 0 mismatches, digests equal to TypeScript-in-Chromium and to
+  the V8 pins. The app in shadow mode: replays compared, 0 mismatches.
+- Firefox and WebKit: not run locally; CI's Determinism jobs run the same test.
+
+### Switching the app over (next steps, in order)
+
+1. **Full result from the core.** The worker protocol posts a `ReplayResult`
+   (events, burn and stage reports, launch insertion, ascent) and an
+   `Evaluation`. Serialise both from Rust (a flat JSON writer; numbers as hex
+   bits or JS shortest round-trip via `jsfmt.rs`, which already formats
+   messages the JavaScript way) and decode into the same TypeScript types, so
+   `FromReplay` does not change. Add `core-parity` comparison of those too.
+2. **Flag value `core`**: the worker posts the core's result instead of the
+   TypeScript's (TypeScript not run). Keep `shadow` as the CI mode for one
+   release. Preview-then-refine works unchanged (it is a shorter plan).
+3. **Chunks**: in `core` mode the worker builds chunks in the core and posts
+   copies to the main thread (`Ephemeris.install`) for drawing, as now; add an
+   `engine_chunk_ptr(k)` export. Eviction: add `engine_evict` mirroring
+   `ReplayEphemeris.evict` (today the core keeps every chunk it was given).
+4. **Cancellation**: termination of the worker, as today; nothing changes.
+5. **`physics.ts` chunk pool and the planner worker**: last. The chunk pool
+   (`worker.ts`) can build in the core with no API change (coefficients are
+   identical). The planner (porkchop, corrector) uses `propagate` directly; it
+   needs a batch API (`propagate(plan) -> samples`), already sketched above.
+6. **The main-thread `Ephemeris`** evaluates chunks for drawing per frame; it
+   stays TypeScript (cheap, and a postMessage per frame would cost more).
+
+### Loading and caching
+
+- The module is 0.98 MB raw (about 315 KB gzip, 244 KB brotli). Serve it
+  content-hashed with `Cache-Control: immutable` once it is on by default
+  (today: `public/core/sendit_core.wasm`, unhashed, fetched only when the flag
+  is on). Vite can hash it via `?url` import once the build always has it.
+- Compile with `WebAssembly.compileStreaming` (needs `application/wasm`; the
+  code falls back to `compile(arrayBuffer)`). Compile once per page and post
+  the `WebAssembly.Module` to each worker (modules are structured-cloneable),
+  instead of each worker fetching (the replay client keeps two workers).
+- Measured in Chromium (check page, local, load ~2): asset + module fetch,
+  compile, instantiate and `engine_new` 42 ms.
+
+### Fallback
+
+- Module fetch or compile fails, `engine_new` fails, or the engine throws:
+  the worker posts `core-error`, the flag degrades to TypeScript for the rest
+  of the session (in `core` mode: re-run that plan in TypeScript). The
+  TypeScript physics stays in the bundle until retired.
+- A `core-parity` mismatch in shadow mode is a bug report, never a gameplay
+  change.
+
+### Lambda recommendation
+
+Run the verdict natively: `aarch64-unknown-linux-gnu` (or `-musl`, static),
+`provided.al2023`, arm64, a small runtime-API loop around `src/bin/verify.rs`'s
+body, the checkpoint asset bundled next to the binary (1.1 MB), one warm
+`Verifier` kept across invocations (chunks stay built). Reasons: native is
+1.4x faster than wasm-in-Node on the cold verification (49.0 s vs 68.9 s
+over the 77 references) and needs no Node runtime; the startup is negligible
+next to chunk building. Keep the TypeScript Lambda as the fallback until ARM
+parity runs in CI (an arm64 runner running `core/scripts/test.sh`).
+A wasm-in-Node Lambda is the lower-risk intermediate (same Node runtime, one
+module swap) if the custom runtime is not wanted yet.
+
+Measured locally (Apple M-series, 12 cores, load average 1.4-1.9, release):
+
+| | value |
+|---|---|
+| native `verify --noop` (process start, data parse, asset decode, verifier) | 1.6-6.0 ms init, 0.00-0.21 s wall (first run: page cache) |
+| native cold verification, plane-change from Cape (one chunk built, 105 steps) | 156-160 ms verify, 0.16 s process wall |
+| native binary size | 936 KB |
+| wasm in Node 22: read + compile + instantiate + `engine_new` with asset | 10.2-10.4 ms (compile 1.0-1.1 ms: V8 compiles lazily); 0.03 s process wall |
+
+Unmeasured: Lambda's own cold start (runtime init, the 1.1 MB asset from the
+deployment package), Graviton speed, the Node Lambda's current cold start for
+comparison, and wasm in Firefox and WebKit (CI runs parity there, not timing).
+
+**Estimate of remaining work** (agent time, focused).
+- Full ReplayResult + Evaluation from the core, compared in shadow mode: 1 day.
+- `core` mode in the replay worker (core result, core-built chunks posted,
+  eviction, fallback): 1 day.
+- Planner and chunk-pool workers on the core: 1-2 days.
+- Lambda runtime loop, packaging, ARM CI parity job: 1-2 days.
+- Turning the flag on by default after a release in shadow mode, then
+  retiring `src/physics`: 1 day plus soak time.
+- Remaining total: roughly 5-7 days.
