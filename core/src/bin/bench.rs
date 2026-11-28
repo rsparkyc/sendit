@@ -80,7 +80,150 @@ fn cases(file: &str) -> Vec<Case> {
     out
 }
 
+/// `bench chunk`: build one chunk from its checkpoint in the asset, and the
+/// lazy builder from the epoch (also makes the n-body integrator and the chunk
+/// fitter part of this binary, which scripts/check-no-fma.sh scans).
+fn bench_chunk() {
+    use sendit_core::chunk::{bases_for, build_chunk, decode_checkpoint_asset, initial_checkpoint, ChunkBuilder};
+    let w = sendit_core::data::world();
+    let asset = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).unwrap();
+    let a = decode_checkpoint_asset(&asset).unwrap();
+    let bases = bases_for(&w.layout);
+    let cp = a.checkpoints.iter().find(|c| c.boundary == 0).unwrap().clone();
+    let st = wall(5, 1, || {
+        black_box(build_chunk(&w.layout, &w.gm, &w.nbody, &bases, w.t0, 0, &cp));
+    });
+    println!("build chunk 0 from the asset checkpoint: {}", st.fmt("ms", 1));
+    let st = wall(3, 0, || {
+        let mut b = ChunkBuilder::new(w.layout.clone(), w.gm.clone(), w.nbody.clone(), w.t0, initial_checkpoint(&w.initial));
+        let mut built = std::collections::HashMap::new();
+        b.extend_to(0, &mut built);
+        black_box(built.len());
+    });
+    println!("lazy builder, chunk 0 from the epoch: {}", st.fmt("ms", 1));
+}
+
+/// Mission layer (also makes its code reachable for scripts/check-no-fma.sh).
+fn bench_mission() {
+    use sendit_core::mission::{ascent, launch, mdata::MissionData, plan};
+    let d = MissionData::parse(sendit_core::data::MISSION_JSON);
+    let em = launch::EarthModel::new(&d);
+    let site = d.sites[0].clone();
+    let az = site.azimuth_min_deg;
+    let st = wall(25, 5, || {
+        for i in 0..1000 {
+            let t = black_box(i as f64 * 8.64e4);
+            let spec = launch::ParkingOrbitLaunch { site_id: site.id.clone(), launch_time: t, azimuth_deg: az, altitude_m: 2e5, ascent_time_s: None, downrange_deg: None, circularization: None };
+            let r = launch::launch_state(&d, &em, &spec, &mut |_, e| *e = [0.0; 6]).unwrap();
+            let b = launch::BurnoutState { time: 500.0, altitude_m: 2e5, horizontal_speed: 7800.0, radial_speed: 10.0, downrange: 0.2 };
+            let r2 = launch::direct_injection_state(&d, &em, &site.id, t, az, &b, &mut |_, e| *e = [0.0; 6]).unwrap();
+            black_box((r.state, r2.state, launch::launch_geometry(&em, &site, t, az)));
+        }
+    });
+    println!("1000 x (launchState + directInjectionState + launchGeometry): {}", st.fmt("ms", 2));
+    let (_, f9) = d.vehicles.iter().find(|(id, _)| id == "falcon-9").unwrap();
+    let mut stack = f9.clone();
+    stack.push(plan::Stage { wet_mass: 2000.0, dry_mass: 600.0, engines: vec![plan::Engine { thrust: 4000.0, isp: 320.0, restartable: None, throttleable: None }] });
+    let earth = launch::earth_data(&d);
+    let geom = ascent::Geometry { along_track: 400.0, cross_track: 50.0 };
+    let st = wall(10, 2, || {
+        black_box(ascent::compute_ascent(&stack, earth.gm, earth.reference_radius, black_box(250e3), geom, &d.ascent_earth).unwrap());
+    });
+    println!("computeAscent (Falcon 9, 250 km): {}", st.fmt("ms", 2));
+    let st = wall(10, 2, || {
+        black_box(ascent::compute_direct_ascent(&stack, earth.gm, earth.reference_radius, black_box(-2e6), 200e3, geom, &d.ascent_earth).unwrap());
+    });
+    println!("computeDirectAscent (Falcon 9, C3 -2 km2/s2): {}", st.fmt("ms", 2));
+    // Whole replays of named plans from replay.txt (no spheres, default options).
+    let asset = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).unwrap();
+    let w = sendit_core::data::world();
+    let (eph, fm) = sendit_core::data::ephemeris(&w, Some(&asset), Some(&d.checkpoint_version)).unwrap();
+    let mut world = sendit_core::mission::replay::MissionWorld { eph, fm, d: &d };
+    let text = std::fs::read_to_string(dir().join("replay.txt")).unwrap();
+    for name in ["model2-nospheres", "staged", "lunar-free-return/cape-canaveral", "venus-flyby/cape-canaveral"] {
+        let line = text.lines().find(|l| l.starts_with(&format!("replay {name} "))).unwrap();
+        let p = plan::decode_plan(line.split(' ').nth(2).unwrap(), &d).unwrap();
+        let o = sendit_core::mission::replay::ReplayOptions::default();
+        let first = sendit_core::mission::replay::replay(&p, &mut world, &o, None, None);
+        let st = wall(5, 1, || {
+            black_box(sendit_core::mission::replay::replay(&p, &mut world, &o, None, None).digest);
+        });
+        println!("replay {name} ({} steps, chunks warm): {}", first.steps, st.fmt("ms", 1));
+    }
+    black_box(plan::decode_plan(black_box("x"), &d).is_ok());
+}
+
+/// The accepted reference submissions of objectives.txt (verdict line "accepted", explicit site): (plan, mission id, version, site).
+pub fn reference_submissions() -> Vec<(String, String, String, String)> {
+    let text = std::fs::read_to_string(dir().join("objectives.txt")).unwrap();
+    let unhex = |s: &str| sendit_core::parity3::unhex(s);
+    let lines: Vec<&str> = text.lines().collect();
+    lines
+        .windows(2)
+        .filter(|w| w[0].starts_with("verify ") && w[1].starts_with("accepted"))
+        .map(|w| w[0])
+        .map(|l| l.split(' ').collect::<Vec<_>>())
+        .filter(|t| t[4] != "-")
+        .map(|t| (unhex(t[1]), unhex(t[2]), unhex(t[3]), t[4].to_string()))
+        .collect()
+}
+
+/// Leaderboard path: one chunk built cold, every campaign reference replay
+/// (chunks warm), and the verification end to end from a fresh verifier
+/// (asset decode and cold chunk building included). One line per reference.
+fn bench_verify() {
+    use sendit_core::mission::{mdata::MissionData, objectives::mission_replay_options, plan, replay, verify::{Verdict, Verifier}};
+    let d = MissionData::parse(sendit_core::data::MISSION_JSON);
+    let asset = std::fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/physics/data/checkpoints-1950-2100.bin")).unwrap();
+    let w = sendit_core::data::world();
+    let k = {
+        let (eph, _) = sendit_core::data::ephemeris(&w, Some(&asset), None).unwrap();
+        eph.chunk_index(d.campaign[0].epoch.unwrap())
+    };
+    let st = wall(5, 1, || {
+        let (mut eph, _) = sendit_core::data::ephemeris(&w, Some(&asset), None).unwrap();
+        eph.ensure_chunk(k);
+        black_box(eph.has_chunk(k));
+    });
+    println!("one chunk cold (asset decode + build chunk {k}): {}", st.fmt("ms", 1));
+    let subs = reference_submissions();
+    let mut v = Verifier::new(&d, Some(&asset)).unwrap();
+    let (mut tr, mut tv) = (0.0, 0.0);
+    for (s, id, ver, site) in &subs {
+        let m = d.mission(id).unwrap();
+        let p = plan::decode_plan(s, &d).unwrap();
+        let o = mission_replay_options(m);
+        let first = replay::replay(&p, &mut v.world, &o, None, None);
+        let rs = wall(3, 0, || {
+            black_box(replay::replay(&p, &mut v.world, &o, None, None).digest);
+        });
+        let t0 = Instant::now();
+        let mut cold = Verifier::new(&d, Some(&asset)).unwrap();
+        let verdict = cold.verify(s, id, ver, Some(site));
+        let cold_ms = t0.elapsed().as_secs_f64() * 1e3;
+        assert!(matches!(verdict, Verdict::Accepted { .. }), "{id}/{site}: {verdict:?}");
+        let mut rs = rs.0;
+        rs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        tr += rs[1];
+        tv += cold_ms;
+        println!("{id}/{site}: {} steps, replay warm {:.1} ms, verify cold {:.1} ms", first.steps, rs[1], cold_ms);
+    }
+    println!("total over {} references: replay warm {:.0} ms, verify cold {:.0} ms", subs.len(), tr, tv);
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("verify") {
+        bench_verify();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("chunk") {
+        bench_chunk();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("mission") {
+        bench_mission();
+        return;
+    }
     let world = World::parse(&std::fs::read_to_string(dir().join("world.txt")).unwrap());
     let (mut eph, mut fm) = parity::load_world(&world, |k| std::fs::read(dir().join(format!("chunk_{k}.bin"))).unwrap());
     let n = world.layout.count;

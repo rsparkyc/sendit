@@ -65,6 +65,44 @@ pub struct World {
     pub fields: Vec<Option<BodyField>>,
     pub relativity: Option<usize>,
     pub chunks: Vec<i64>,
+    /// Massive-body physics (zonal terms and the Sun's 1PN), for the chunk builder.
+    pub nbody: crate::nbody::Physics,
+    /// Initial states [x,y,z,vx,vy,vz] per body at the epoch.
+    pub initial: Vec<f64>,
+}
+
+/// Parse a `zonalterm` record (after its keyword); rotation models are resolved by id.
+pub fn parse_zonal_term(l: &mut Line<'_>, models: &[IauRotation]) -> crate::nbody::ZonalTerm {
+    let body = l.n();
+    let j2 = l.f();
+    let has_j4 = l.word() == "j4";
+    let j4v = l.f();
+    let has_jn = l.word() == "jn";
+    let njn = l.n();
+    let jn = l.fs(njn);
+    let has_tess = l.word() == "tess";
+    let nt = l.n();
+    let tess: Vec<TesseralTerm> = (0..nt).map(|_| (l.f() as u32, l.f() as u32, l.f(), l.f())).collect();
+    let pm = l.word();
+    let radius = l.f();
+    let pole = [l.f(), l.f(), l.f()];
+    let rot = l.word();
+    let pole_spacing = l.f();
+    let ntg = l.n();
+    let targets = (0..ntg).map(|_| l.n()).collect();
+    crate::nbody::ZonalTerm {
+        body,
+        j2,
+        j4: if has_j4 { Some(j4v) } else { None },
+        jn: if has_jn { Some(jn) } else { None },
+        tesseral: if has_tess { Some(tess) } else { None },
+        prime_meridian: if pm == "earth-rotation-angle" { PrimeMeridianKind::EarthRotationAngle } else { PrimeMeridianKind::Iau },
+        radius,
+        pole,
+        rotation: if rot == "none" { None } else { Some(models.iter().find(|m| m.id == rot).unwrap_or_else(|| panic!("no model {rot}")).clone()) },
+        pole_spacing,
+        targets,
+    }
 }
 
 impl World {
@@ -82,6 +120,9 @@ impl World {
         let mut bodies: Vec<(String, Option<BodyField>)> = Vec::new();
         let mut relativity = None;
         let mut chunks = Vec::new();
+        let mut zonal = Vec::new();
+        let mut nbody_rel = None;
+        let mut initial = Vec::new();
         let mut pending: Vec<(usize, String, String)> = Vec::new(); // body, rotation id, prime meridian
         for mut l in lines(text) {
             match l.word() {
@@ -146,6 +187,15 @@ impl World {
                     let n = l.n();
                     chunks = (0..n).map(|_| l.i()).collect();
                 }
+                "zonalterm" => zonal.push(parse_zonal_term(&mut l, &models)),
+                "nbodyrelativity" => {
+                    let r = l.f();
+                    nbody_rel = if r >= 0.0 { Some(r as usize) } else { None };
+                }
+                "initial" => {
+                    let n = l.n();
+                    initial = l.fs(6 * n);
+                }
                 w => panic!("world.txt line {}: unknown record {w}", l.number),
             }
         }
@@ -177,8 +227,10 @@ impl World {
             sys_start: u("sysStart"),
             sys_moons: u("sysMoons"),
             system_of: s("systemOf"),
+            samples: u("samples"),
+            sample_stride: u("sampleStride"),
         };
-        World { models, layout, gm: a("gm"), t0, body_ids: bodies.iter().map(|b| b.0.clone()).collect(), fields: bodies.into_iter().map(|b| b.1).collect(), relativity, chunks }
+        World { models, layout, gm: a("gm"), t0, body_ids: bodies.iter().map(|b| b.0.clone()).collect(), fields: bodies.into_iter().map(|b| b.1).collect(), relativity, chunks, nbody: crate::nbody::Physics { zonal, relativity: nbody_rel }, initial }
     }
 }
 

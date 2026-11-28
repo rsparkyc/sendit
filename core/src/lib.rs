@@ -17,14 +17,23 @@
 //!  - signed zeros and NaN follow the TypeScript (e.g. `y0 * 0` is kept).
 
 pub mod cheb;
+pub mod chunk;
 pub mod dmath;
 pub mod dop853;
 mod dop853_coefficients;
 pub mod exact_math;
 pub mod fixture;
 pub mod gravity;
+pub mod json;
+pub mod mission;
+pub mod nbody;
 pub mod orientation;
+pub mod data;
 pub mod parity;
+pub mod parity2;
+pub mod parity3;
+pub mod parity4;
+pub mod parity5;
 pub mod simd;
 pub mod spacecraft;
 #[cfg(target_arch = "wasm32")]

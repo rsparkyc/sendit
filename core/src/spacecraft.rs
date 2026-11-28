@@ -31,10 +31,18 @@ impl Ephemeris for crate::cheb::ChebEphemeris {
     }
     #[inline]
     fn positions(&mut self, t: f64, out: &mut [f64]) {
+        if self.builder.is_some() {
+            let k = self.chunk_index(t);
+            self.ensure_chunk(k);
+        }
         crate::cheb::ChebEphemeris::positions(self, t, out)
     }
     #[inline]
     fn body_state(&mut self, body: usize, t: f64, out: &mut [f64]) {
+        if self.builder.is_some() {
+            let k = self.chunk_index(t);
+            self.ensure_chunk(k);
+        }
         crate::cheb::ChebEphemeris::body_state(self, body, t, out)
     }
 }
@@ -467,6 +475,10 @@ impl<E: Ephemeris> StepView<'_, '_, E> {
     }
     pub fn interpolate(&mut self, t: f64, out: &mut [f64]) -> Result<(), DopError> {
         self.integ.interpolate(self.rhs, t, out)
+    }
+    /// The propagation's ephemeris (the event finder reads body states inside the step).
+    pub fn body_state(&mut self, body: usize, t: f64, out: &mut [f64]) {
+        self.rhs.ephem.body_state(body, t, out)
     }
 }
 
