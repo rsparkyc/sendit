@@ -225,7 +225,8 @@ html.touch .row.steps .btn { flex: 1 0 22%; }
 .obj .mark { font-weight: 700; }
 .obj.ok .mark { color: var(--accent); }
 .obj.no .mark { color: var(--bad); }
-.obj.stale { opacity: 0.6; }
+.obj.stale, .score.stale { opacity: 0.6; }
+.obj small.placeholder, .score.placeholder { font-style: italic; opacity: 0.7; }
 .score { font-size: 12px; color: var(--muted); }
 .score.success { color: #0b1a10; background: var(--accent); font-weight: 700; padding: 5px 8px; border-radius: 4px; }
 .engine { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }

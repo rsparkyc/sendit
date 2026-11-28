@@ -188,13 +188,16 @@ export class MissionPanel {
           this.objectives.append(
             el('li', { className: `obj ${state}${current ? '' : ' stale'}` },
               el('span', { className: 'mark', textContent: state === 'ok' ? '✓' : state === 'no' ? '✗' : '…' }),
-              el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), el('small', { textContent: tidyDetail(convertText(r?.detail ?? '', objectiveBodies([o])[0] ?? null)) }), extend)));
+              el('span', { className: 'otext' }, el('b', { textContent: objectiveText(o) }), el('br'), r ? el('small', { textContent: tidyDetail(convertText(r.detail ?? '', objectiveBodies([o])[0] ?? null)) }) : el('small', { className: 'placeholder', textContent: 'computing…' }), extend)));
         }
         if (ev?.success) {
           const k = ev.keys;
           setText(this.score, `MISSION COMPLETE · score ${(k?.score ?? ev.score).toLocaleString('en-US')} · Δv total ${k ? fmtDvFine(k.deltaV / 10) : fmtDvFine(ev.deltaV)}${ev.ascentDeltaV > 0 ? ` (ascent ${fmtDv(ev.ascentDeltaV)} + flown ${fmtDv(ev.flightDeltaV)})` : ''} · time ${((k?.time ?? ev.missionTime) / DAY).toFixed(2)} d`);
-        } else setText(this.score, ev ? (ev.ruleViolations?.length ? 'Not scored: the plan breaks the mission rules' : 'Objectives not met yet') : '');
-        this.score.className = `score${ev?.success ? ' success' : ''}`;
+        } else setText(this.score, ev ? (ev.ruleViolations?.length ? 'Not scored: the plan breaks the mission rules' : 'Objectives not met yet') : 'Computing…');
+        // A grade for an earlier plan stays up, dimmed, until the new one lands; with none
+        // yet (first load, mission switch, reset) a placeholder holds the line's height.
+        if (ev && !current) this.score.textContent += ' · updating…';
+        this.score.className = `score${ev?.success ? ' success' : ''}${!ev ? ' placeholder' : current ? '' : ' stale'}`;
         const sc = m.def.scoring;
         const siteNote = m.def.launchSites?.length ? ` Par is the same for every site; the Δv and time limits above are for the chosen site${s.plan.start.kind === 'launch' ? ` (${siteName(LAUNCH_SITES.find((x) => x.id === (s.plan.start as { site: string }).site)?.name ?? '')})` : ''}.` : '';
         const vehicleNote = m.def.rules.vehicle ? ' Δv is the TOTAL: the ascent (what the vehicle spends reaching your parking orbit) plus everything flown after insertion, by any stage. The reference drops the upper stage with propellant still in it, so par can be beaten: a better site, azimuth or parking orbit, or using more of the upper stage, all lower the total.' : '';
