@@ -33,6 +33,7 @@ import { LIMITS, MAX_PARKING_ALTITUDE, DIRECT_C3_RANGE, DIRECT_ALTITUDE_RANGE, D
 import { BISECT_MAX, NODES } from '../../src/mission/events';
 import { SERVER_RULES } from '../../server/leaderboard/engine';
 import { configFromEnv } from '../../server/leaderboard/config';
+import { deriveMeta } from '../../src/app/body-meta';
 
 const DATA = new URL('../data/', import.meta.url).pathname;
 mkdirSync(DATA, { recursive: true });
@@ -44,13 +45,16 @@ it('generate core/data', () => {
   writeFileSync(DATA + 'world.txt', W.text());
 
   const world = worldFromBodyData(eph, J2000_BODIES);
+  // Parent body (src/app/body-meta.ts deriveMeta, as the sandbox's sphere list uses it). deriveMeta
+  // compares Math.hypot / Math.cbrt values, which only decide a comparison: the index is data here.
+  const meta = deriveMeta(J2000_BODIES.map((b) => ({ id: b.id, gm: b.gm, radius: b.radius, state0: b.state })));
   const rot = (id: string) => (Object.prototype.hasOwnProperty.call(IAU_ROTATION, id) ? id : null);
   const data = {
     physicsModel: PHYSICS_MODEL,
     fingerprint: world.fingerprint,
     checkpointVersion: checkpointVersion(eph, J2000_BODIES),
-    bodies: J2000_BODIES.map((b) => ({
-      id: b.id, gm: b.gm, radius: b.radius, referenceRadius: b.referenceRadius, atmosphere: ATMOSPHERE_HEIGHT[b.id] ?? 0,
+    bodies: J2000_BODIES.map((b, i) => ({
+      id: b.id, parent: meta[i].parent, gm: b.gm, radius: b.radius, referenceRadius: b.referenceRadius, atmosphere: ATMOSPHERE_HEIGHT[b.id] ?? 0,
       pole: b.pole ? [b.pole[0], b.pole[1], b.pole[2]] : null, rotation: rot(b.id), j2: b.j2 ?? null, j2Radius: b.j2Radius ?? null,
     })),
     earthRotation: { ra0: EARTH_ROTATION.ra0, ra1: EARTH_ROTATION.ra1, dec0: EARTH_ROTATION.dec0, dec1: EARTH_ROTATION.dec1, w0: EARTH_ROTATION.w0, wDot: EARTH_ROTATION.wDot, w1: EARTH_ROTATION.w1 ?? 0 },

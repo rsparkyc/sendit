@@ -5,6 +5,7 @@
  "bodies": [
   {
    "id": "sun",
+   "parent": -1,
    "gm": 132712440041279420000,
    "radius": 695700000,
    "referenceRadius": 696000000,
@@ -16,6 +17,7 @@
   },
   {
    "id": "mercury",
+   "parent": 0,
    "gm": 22031868551400,
    "radius": 2439400,
    "referenceRadius": 2439400,
@@ -27,6 +29,7 @@
   },
   {
    "id": "venus",
+   "parent": 0,
    "gm": 324858592000000,
    "radius": 6051800,
    "referenceRadius": 6051800,
@@ -38,6 +41,7 @@
   },
   {
    "id": "earth",
+   "parent": 0,
    "gm": 398600435507022.56,
    "radius": 6371008.399999999,
    "referenceRadius": 6378136.6,
@@ -49,6 +53,7 @@
   },
   {
    "id": "moon",
+   "parent": 3,
    "gm": 4902800118457.549,
    "radius": 1737400,
    "referenceRadius": 1738000,
@@ -60,6 +65,7 @@
   },
   {
    "id": "mars",
+   "parent": 0,
    "gm": 42828375815756.1,
    "radius": 3389500,
    "referenceRadius": 3396000,
@@ -71,6 +77,7 @@
   },
   {
    "id": "jupiter",
+   "parent": 0,
    "gm": 126686532097721810,
    "radius": 69911000,
    "referenceRadius": 71492000,
@@ -82,6 +89,7 @@
   },
   {
    "id": "saturn",
+   "parent": 0,
    "gm": 37931207357361660,
    "radius": 58232000,
    "referenceRadius": 60330000,
@@ -93,6 +101,7 @@
   },
   {
    "id": "uranus",
+   "parent": 0,
    "gm": 5793950737840896,
    "radius": 25362000,
    "referenceRadius": 25559000,
@@ -104,6 +113,7 @@
   },
   {
    "id": "neptune",
+   "parent": 0,
    "gm": 6835103145462294,
    "radius": 24622000,
    "referenceRadius": 24764000,
@@ -115,6 +125,7 @@
   },
   {
    "id": "pluto",
+   "parent": 0,
    "gm": 869326122631.1509,
    "radius": 1188300,
    "referenceRadius": 1188300,
@@ -126,6 +137,7 @@
   },
   {
    "id": "io",
+   "parent": 6,
    "gm": 5959915466180.539,
    "radius": 1821490,
    "referenceRadius": 1821490,
@@ -137,6 +149,7 @@
   },
   {
    "id": "europa",
+   "parent": 6,
    "gm": 3202712099607.295,
    "radius": 1560800,
    "referenceRadius": 1560800,
@@ -148,6 +161,7 @@
   },
   {
    "id": "ganymede",
+   "parent": 6,
    "gm": 9887832752719.639,
    "radius": 2631200,
    "referenceRadius": 2631200,
@@ -159,6 +173,7 @@
   },
   {
    "id": "callisto",
+   "parent": 6,
    "gm": 7179283402579.837,
    "radius": 2410300,
    "referenceRadius": 2410300,
@@ -170,6 +185,7 @@
   },
   {
    "id": "tethys",
+   "parent": 7,
    "gm": 41213528854.89587,
    "radius": 531100,
    "referenceRadius": 531100,
@@ -181,6 +197,7 @@
   },
   {
    "id": "dione",
+   "parent": 7,
    "gm": 73116071724.82066,
    "radius": 561400,
    "referenceRadius": 561400,
@@ -192,6 +209,7 @@
   },
   {
    "id": "rhea",
+   "parent": 7,
    "gm": 153941751914.65628,
    "radius": 763500,
    "referenceRadius": 763500,
@@ -203,6 +221,7 @@
   },
   {
    "id": "titan",
+   "parent": 7,
    "gm": 8978137095521.047,
    "radius": 2574760,
    "referenceRadius": 2574760,
@@ -214,6 +233,7 @@
   },
   {
    "id": "iapetus",
+   "parent": 7,
    "gm": 120515106013.76419,
    "radius": 734300,
    "referenceRadius": 734300,
@@ -225,6 +245,7 @@
   },
   {
    "id": "mimas",
+   "parent": 7,
    "gm": 2503488768.152587,
    "radius": 198200,
    "referenceRadius": 198200,
@@ -236,6 +257,7 @@
   },
   {
    "id": "enceladus",
+   "parent": 7,
    "gm": 7210366688.598896,
    "radius": 252100,
    "referenceRadius": 252100,
@@ -247,6 +269,7 @@
   },
   {
    "id": "ariel",
+   "parent": 8,
    "gm": 83430746772.82457,
    "radius": 578900,
    "referenceRadius": 578900,
@@ -258,6 +281,7 @@
   },
   {
    "id": "umbriel",
+   "parent": 8,
    "gm": 85403004223.26411,
    "radius": 584700,
    "referenceRadius": 584700,
@@ -269,6 +293,7 @@
   },
   {
    "id": "titania",
+   "parent": 8,
    "gm": 222800635187.9754,
    "radius": 788900,
    "referenceRadius": 788900,
@@ -280,6 +305,7 @@
   },
   {
    "id": "oberon",
+   "parent": 8,
    "gm": 214209839940.7347,
    "radius": 761400,
    "referenceRadius": 761400,
@@ -291,6 +317,7 @@
   },
   {
    "id": "miranda",
+   "parent": 8,
    "gm": 4105527241.1815605,
    "radius": 235800,
    "referenceRadius": 235800,
@@ -302,6 +329,7 @@
   },
   {
    "id": "triton",
+   "parent": 9,
    "gm": 1428495462910.464,
    "radius": 1352600,
    "referenceRadius": 1352600,
@@ -313,6 +341,7 @@
   },
   {
    "id": "charon",
+   "parent": 10,
    "gm": 106101138823.6118,
    "radius": 606000,
    "referenceRadius": 606000,

@@ -1673,6 +1673,8 @@ Object.assign(window, {
     pool,
     planner,
     replayStats: replayClient.stats,
+    /** Rust core shadow mode (core-flag.ts; off unless ?core=shadow): replays compared, mismatches. */
+    coreStats: replayClient.core,
     nodesOf: () => nodesOf(store.get().plan),
     /** The current plan's problems as messages (empty: replayable). A plan with errors is never replayed, so tests waiting for a settled replay check this first. */
     planErrors: (): string[] => { const e = planErrors(store.get().plan); return [...e.plan, ...[...e.burns].flatMap(([i, m]) => m.map((x) => `burns[${i}]: ${x}`)), ...[...e.separations].flatMap(([j, m]) => m.map((x) => `separations[${j}]: ${x}`))]; },

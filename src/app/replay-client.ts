@@ -17,6 +17,7 @@
 import type { Evaluation, MissionPlan, ReplayResult } from './mission-layer';
 import type { Ephemeris } from './physics';
 import type { FromReplay, ToReplay } from './protocol';
+import { CORE_WASM_URL, coreMode, type CoreMode } from './core-flag';
 
 export const DEBOUNCE_MS = 12;
 export const CANCEL_AFTER_MS = 150;
@@ -59,6 +60,9 @@ export class ReplayClient {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
   readonly stats = { runs: 0, cancels: 0, lastLatencyMs: 0, lastReplayMs: 0, latencies: [] as number[] };
+  /** Rust core shadow mode (core-flag.ts): replays compared, mismatches, the last mismatch or error, timings. */
+  readonly core: { mode: CoreMode; compared: number; mismatches: number; errors: number; last: string | null; lastTsMs: number; lastCoreMs: number } =
+    { mode: coreMode(), compared: 0, mismatches: 0, errors: 0, last: null, lastTsMs: 0, lastCoreMs: 0 };
 
   constructor(
     private readonly eph: Ephemeris,
@@ -76,6 +80,7 @@ export class ReplayClient {
       this.workerFailed(w, `replay worker failed: ${e.message || 'could not load or crashed'}`);
     };
     w.onmessageerror = () => this.workerFailed(w, 'replay worker: a message could not be read');
+    if (this.core.mode !== 'off') w.postMessage({ type: 'core', mode: this.core.mode, wasmUrl: new URL(CORE_WASM_URL, location.href).href } satisfies ToReplay);
     return w;
   }
 
@@ -163,6 +168,26 @@ export class ReplayClient {
   }
 
   private onMessage(w: Worker, m: FromReplay): void {
+    if (m.type === 'core-parity') {
+      const c = this.core;
+      c.compared++;
+      c.lastTsMs = m.tsMs;
+      c.lastCoreMs = m.coreMs;
+      if (m.mismatch !== null) {
+        c.mismatches++;
+        c.last = m.mismatch;
+        console.warn(`sendit core (shadow): replay ${m.id} differs from the TypeScript: ${m.mismatch}`);
+      } else {
+        console.info(`sendit core (shadow): replay ${m.id} bit-identical (${m.samples} samples; TypeScript ${m.tsMs.toFixed(0)} ms, core ${m.coreMs.toFixed(0)} ms)`);
+      }
+      return;
+    }
+    if (m.type === 'core-error') {
+      this.core.errors++;
+      this.core.last = m.message;
+      console.warn(`sendit core (shadow): ${m.message}`);
+      return;
+    }
     if (m.type === 'chunk') {
       this.hooks.onChunk(m.k, m.coeffs);
       return;

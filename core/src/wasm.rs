@@ -88,7 +88,7 @@ pub extern "C" fn set_simd(on: i32) {
 /// (u32::MAX if nothing was compared). The summary is in report_ptr/report_len.
 /// Sections: 0 dmath, 1 dop853, 2 gravity, 3 orientation, 4 ephem, 5 golden eval,
 /// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative, 10 n-body integrator,
-/// 11 chunks (needs add_file: the checkpoint asset and the chunk bins), 12 plan codec, 13 launch, 14 ascent, 15 replay, 16 objectives (both need the checkpoint asset).
+/// 11 chunks (needs add_file: the checkpoint asset and the chunk bins), 12 plan codec, 13 launch, 14 ascent, 15 replay, 16 objectives (both need the checkpoint asset), 17 sandbox spheres (no fixture).
 #[unsafe(no_mangle)]
 pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
     let t = text(ptr, len);
@@ -109,6 +109,7 @@ pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
             let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
             crate::parity5::objectives(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON), &asset)
         }
+        17 => crate::parity5::sandbox_spheres(&crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON), &crate::data::world().initial),
         11 => {
             let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
             crate::parity2::chunks(t, &crate::data::world(), &asset, file)
@@ -327,4 +328,95 @@ pub extern "C" fn chunk_cold(k: i32) -> u32 {
     let (mut eph, _) = crate::data::ephemeris(&crate::data::world(), Some(&asset), None).expect("ephemeris");
     eph.ensure_chunk(k as i64);
     eph.has_chunk(k as i64) as u32
+}
+
+// ---------------------------------------------------------------------------
+// The browser engine (phase three): the app's replay worker's call, behind
+// its feature flag. One MissionWorld per instance; chunks are built from the
+// checkpoint asset or handed in (bit-identical either way).
+
+struct Engine {
+    world: crate::mission::replay::MissionWorld<'static>,
+    state0: Vec<f64>,
+    samples: Vec<f64>,
+}
+
+thread_local! {
+    static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
+}
+
+/// A fresh engine over the built-in world, with the checkpoint asset if add_file
+/// gave one. Returns 0, or 1 with the reason in report_ptr/report_len.
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_new() -> u32 {
+    let d = mission_data();
+    let w = crate::data::world();
+    let asset = file("checkpoints-1950-2100.bin");
+    match crate::data::ephemeris(&w, asset.as_deref(), Some(&d.checkpoint_version)) {
+        Ok((eph, fm)) => {
+            ENGINE.with(|e| *e.borrow_mut() = Some(Engine { world: crate::mission::replay::MissionWorld { eph, fm, d }, state0: w.initial, samples: Vec::new() }));
+            0
+        }
+        Err(m) => {
+            REPORT.with(|rep| *rep.borrow_mut() = m);
+            1
+        }
+    }
+}
+
+/// Install chunk k (little-endian float64 bytes), unless the engine has it.
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_add_chunk(k: i32, ptr: *const u8, len: usize) {
+    ENGINE.with(|e| {
+        let mut g = e.borrow_mut();
+        let en = g.as_mut().expect("engine_new first");
+        if !en.world.eph.has_chunk(k as i64) {
+            en.world.eph.add_chunk(k as i64, crate::fixture::f64s_le(bytes(ptr, len)));
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_has_chunk(k: i32) -> u32 {
+    ENGINE.with(|e| e.borrow().as_ref().expect("engine_new first").world.eph.has_chunk(k as i64) as u32)
+}
+
+/// replayWithSamples(plan, world, replayOptions(mission), perStep). Input:
+/// "mission id\nper step\nencoded plan". Returns 0 replayed, 1 the plan did not
+/// decode. Report lines: outcome, digest, steps, final t (hex bits), final state
+/// (hex bits, comma separated), reason (the rest). Samples: engine_samples_ptr/len.
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_replay(ptr: *const u8, len: usize) -> u32 {
+    let t = text(ptr, len);
+    let mut f = t.splitn(3, '\n');
+    let (mission, per_step, plan) = (f.next().unwrap_or(""), f.next().unwrap_or("12"), f.next().unwrap_or(""));
+    let per_step: u32 = per_step.parse().unwrap_or(12).max(1);
+    ENGINE.with(|e| {
+        let mut g = e.borrow_mut();
+        let en = g.as_mut().expect("engine_new first");
+        let d = en.world.d;
+        let p = match crate::mission::plan::decode_plan(plan, d) {
+            Ok(p) => p,
+            Err(m) => {
+                REPORT.with(|rep| *rep.borrow_mut() = m);
+                en.samples.clear();
+                return 1;
+            }
+        };
+        let o = crate::mission::engine::replay_options_for(d, mission, &en.state0);
+        let (r, s) = crate::mission::engine::replay_with_samples(&p, &mut en.world, &o, per_step);
+        en.samples = s;
+        let fs: Vec<String> = r.final_state.iter().map(|v| format!("{:016x}", v.to_bits())).collect();
+        REPORT.with(|rep| *rep.borrow_mut() = format!("{}\n{}\n{}\n{:016x}\n{}\n{}", r.outcome, r.digest, r.steps, r.final_t.to_bits(), fs.join(","), r.reason));
+        0
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_samples_ptr() -> *const f64 {
+    ENGINE.with(|e| e.borrow().as_ref().map_or(std::ptr::null(), |en| en.samples.as_ptr()))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_samples_len() -> usize {
+    ENGINE.with(|e| e.borrow().as_ref().map_or(0, |en| en.samples.len()))
 }

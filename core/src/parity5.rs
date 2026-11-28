@@ -360,3 +360,23 @@ pub fn objectives(text: &str, d: &MissionData, asset: &[u8]) -> Report {
     r.section = format!("objectives ({nkey} key vectors, {nrep} replays, {neval} evaluations, {nconf} conformance checks, {nverify} verdicts)");
     r
 }
+
+/// Sandbox spheres of influence (src/app/replay-options.ts sandboxSpheres)
+/// against the 27 radii pinned by src/app/replay-options.test.ts: ids, order
+/// and bits. Needs no fixture (computed from the built-in data).
+pub fn sandbox_spheres(d: &MissionData, state0: &[f64]) -> Report {
+    use crate::mission::sandbox::{sandbox_spheres, PINNED};
+    let mut r = Report::new("sandbox spheres");
+    let got = sandbox_spheres(d, state0);
+    if got.len() != PINNED.len() {
+        r.fail(format!("sandbox spheres: {} spheres, pinned {}", got.len(), PINNED.len()));
+    }
+    for (i, ((id, rad), (pid, bits))) in got.iter().zip(PINNED.iter()).enumerate() {
+        if id != pid {
+            r.fail(format!("sandbox spheres[{i}]: body {id}, pinned {pid}"));
+        }
+        r.cmp(*rad, f64::from_bits(*bits), || format!("sandbox spheres[{i}] {id}: got {:016x}, pinned {bits:016x}", rad.to_bits()));
+    }
+    r.section = format!("sandbox spheres ({} radii)", got.len());
+    r
+}

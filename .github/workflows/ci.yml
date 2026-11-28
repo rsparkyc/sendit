@@ -2,7 +2,7 @@ name: CI
 
 # Layout (README, "CI"): independent jobs in parallel.
 #   unit      typecheck + vitest
-#   build     the production site, shared with the browser jobs as the artifact site-dist
+#   build     the production site (with the Rust core's wasm), shared with the browser jobs as the artifact site-dist
 #   engines   the cross-engine determinism suites (determinism, ephemeris), one job per engine
 #   ui        the UI suites (incl. smoke and mobile) on Chromium in 5 shards and on WebKit in 6 shards
 #   firefox   smoke.e2e.ts on headed Firefox under Xvfb (headless Linux Firefox has no WebGL)
@@ -52,7 +52,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,6 +66,14 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      # The Rust core's WebAssembly module (public/core/sendit_core.wasm), served by the site for check.html's
+      # core-parity section (e2e/determinism.e2e.ts, every engine) and the ?core=shadow flag. The toolchain
+      # is the one core/rust-toolchain.toml pins.
+      - name: Install the Rust toolchain (core/rust-toolchain.toml)
+        working-directory: core
+        run: rustup toolchain install && rustc --version
+      - name: Build the Rust core as WebAssembly
+        run: sh core/scripts/build-web.sh
       - name: Build the site
         run: pnpm build
       - name: Build the leaderboard bundle

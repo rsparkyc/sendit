@@ -4,6 +4,7 @@
 //! TypeScript before the next is ported (see core/README.md).
 
 pub mod ascent;
+pub mod engine;
 pub mod jsfmt;
 pub mod events;
 pub mod launch;
@@ -11,4 +12,5 @@ pub mod mdata;
 pub mod objectives;
 pub mod plan;
 pub mod replay;
+pub mod sandbox;
 pub mod verify;

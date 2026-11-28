@@ -141,3 +141,8 @@ fn objectives() {
     let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
     check(sendit_core::parity5::objectives(&read("objectives.txt"), &d, &asset()));
 }
+#[test]
+fn sandbox_spheres() {
+    let d = sendit_core::mission::mdata::MissionData::parse(sendit_core::data::MISSION_JSON);
+    check(sendit_core::parity5::sandbox_spheres(&d, &sendit_core::data::world().initial));
+}
