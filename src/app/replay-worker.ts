@@ -22,12 +22,19 @@
  *
  * Sampling density adapts to the last run's step count so a long low-orbit
  * flight does not ship tens of thousands of points to draw.
+ *
+ * RUST CORE, SHADOW MODE (feature flag core-flag.ts, default off). With
+ * {type: 'core', mode: 'shadow'} the worker loads the core's WebAssembly
+ * module and, after posting each full result, flies the same plan in it (with
+ * the chunks the TypeScript built) and posts a 'core-parity' comparison. The
+ * posted result is always the TypeScript's.
  */
 import { evaluateMission, makeWorld, replayWithSamples, type MissionPlan } from './mission-layer';
 import { missionById } from './missions';
 import { BODY_DATA, ReplayEphemeris } from './physics';
 import type { FromReplay, ToReplay } from './protocol';
 import { replayOptions } from './replay-options';
+import { compareReplays, compileCore, CoreEngine } from './core-engine';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -106,18 +113,46 @@ async function run(job: { id: number; plan: MissionPlan; missionId: string }): P
       }
     }
     const steps = last.steps * (plan.duration / last.duration);
-    const r = replayWithSamples(plan, world, opts, last.steps ? perStepFor(steps) : 12);
+    const perStep = last.steps ? perStepFor(steps) : 12;
+    const r = replayWithSamples(plan, world, opts, perStep);
     last = { ms: r.ms, steps: r.result.steps, duration: plan.duration };
     const evaluation = evaluateMission(def, r.result, world, plan.epoch, plan);
+    const shadow = core ? { result: { ...r.result, finalState: [...r.result.finalState] }, samples: r.samples.slice() } : null;
     post({ type: 'result', id: job.id, result: r.result, evaluation, samples: r.samples, ms: r.ms, preview: null }, [r.samples.buffer]);
+    if (shadow) await shadowRun(job, shadow, r.ms, perStep);
   } catch (e) {
     post({ type: 'error', id: job.id, message: e instanceof Error ? `${e.message}\n${e.stack ?? ''}` : String(e) });
   }
 }
 
+let core: Promise<CoreEngine | null> | null = null;
+
+/** Fly the plan in the Rust core and compare with the TypeScript's replay (shadow mode). */
+async function shadowRun(job: { id: number; plan: MissionPlan; missionId: string }, ts: Parameters<typeof compareReplays>[0], tsMs: number, perStep: number): Promise<void> {
+  const engine = await core;
+  if (!engine) return;
+  try {
+    // The chunks the TypeScript replay used (bit-identical to the core's own builds, and already paid for).
+    for (const k of eph.physics.builtChunks()) if (!engine.has(k)) engine.addChunk(k, eph.physics.getChunk(k)!);
+    const t0 = performance.now();
+    const c = engine.replay(job.plan, job.missionId, perStep);
+    const coreMs = performance.now() - t0;
+    post({ type: 'core-parity', id: job.id, mismatch: compareReplays(ts, c), tsMs, coreMs, samples: c.samples.length / 8 });
+  } catch (e) {
+    post({ type: 'core-error', message: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 self.onmessage = (ev: MessageEvent<ToReplay>) => {
   const m = ev.data;
-  if (m.type === 'chunks') {
+  if (m.type === 'core') {
+    core = m.mode === 'shadow'
+      ? compileCore(m.wasmUrl).then((mod) => CoreEngine.create(mod, null)).catch((e) => {
+          post({ type: 'core-error', message: `core module did not load: ${e instanceof Error ? e.message : String(e)}` });
+          return null;
+        })
+      : null;
+  } else if (m.type === 'chunks') {
     for (const c of m.chunks) eph.add(c.k, c.coeffs);
   } else if (m.type === 'run') {
     pending = { id: m.id, plan: m.plan, missionId: m.missionId };

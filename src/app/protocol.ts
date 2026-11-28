@@ -17,7 +17,9 @@ export type FromWorker =
 export type ToReplay =
   /** Chunks the main thread already has (a respawned worker starts with these). */
   | { type: 'chunks'; chunks: { k: number; coeffs: Float64Array }[] }
-  | { type: 'run'; id: number; plan: import('./mission-layer').MissionPlan; missionId: string };
+  | { type: 'run'; id: number; plan: import('./mission-layer').MissionPlan; missionId: string }
+  /** Feature flag (core-flag.ts): 'shadow' loads the Rust core and checks every full replay against it. */
+  | { type: 'core'; mode: import('./core-flag').CoreMode; wasmUrl: string };
 
 export type FromReplay =
   | { type: 'ready' }
@@ -35,7 +37,14 @@ export type FromReplay =
       /** Non-null for a preview: the plan was flown only to this mission time (s), not scored. */
       preview: number | null;
     }
-  | { type: 'error'; id: number; message: string };
+  | { type: 'error'; id: number; message: string }
+  /**
+   * Shadow mode: the core's replay of run `id` compared with the TypeScript's
+   * (mismatch null: bit-identical). Sent after the run's result; `error`: the
+   * core could not load or failed (the TypeScript result stands either way).
+   */
+  | { type: 'core-parity'; id: number; mismatch: string | null; tsMs: number; coreMs: number; samples: number }
+  | { type: 'core-error'; message: string };
 
 // ---------------------------------------------------------------------------
 // Planner worker (planner-worker.ts): porkchop grids, departure burns, the

@@ -9,6 +9,7 @@
  *  - body[data-result] "PASS" | "FAIL", body[data-error] (why, on a failure), body[data-ms] (worker time)
  *  - body[data-model2] JSON: Model2Result plus { verdict: "PASS" | "FAIL" }, or { verdict: "FAIL", error }
  *  - body[data-staged] JSON: StagedResult plus { verdict }, or { verdict: "FAIL", error }
+ *  - body[data-core] JSON: CoreCheckResult plus { verdict }, or { verdict: "FAIL", error }
  */
 import { EXPECTED_HEX, toHex } from '../fixtures/determinism';
 import { DATA, DIGEST, MODEL } from '../fixtures/model2-replay';
@@ -16,6 +17,7 @@ import type { Model2Result } from './model2-worker';
 import * as STAGED from '../fixtures/staged-replay';
 import type { StagedResult } from './staged-worker';
 import type { CheckResult } from './worker';
+import type { CoreCheckResult } from './core-worker';
 
 const NAMES = ['x', 'y', 'z', 'vx', 'vy', 'vz', 'mass'];
 const UNITS = ['m', 'm', 'm', 'm/s', 'm/s', 'm/s', 'kg'];
@@ -39,12 +41,14 @@ function cell(text: string, cls?: string): HTMLTableCellElement {
 let scenarioDone = false;
 let model2Done = false;
 let stagedDone = false;
+let coreDone = false;
 
 function updateTitle(): void {
   const r = document.body.dataset.result;
   const m = model2Done ? (JSON.parse(document.body.dataset.model2!) as { verdict: string }).verdict : undefined;
   const st = stagedDone ? (JSON.parse(document.body.dataset.staged!) as { verdict: string }).verdict : undefined;
-  const all = r && m && st ? (r === 'PASS' && m === 'PASS' && st === 'PASS' ? 'PASS' : 'FAIL') : 'Running…';
+  const co = coreDone ? (JSON.parse(document.body.dataset.core!) as { verdict: string }).verdict : undefined;
+  const all = r && m && st && co ? (r === 'PASS' && m === 'PASS' && st === 'PASS' && co === 'PASS' ? 'PASS' : 'FAIL') : 'Running…';
   document.title = `${all}: sendit determinism check`;
 }
 
@@ -96,11 +100,36 @@ function staged(r: (StagedResult & { verdict: 'PASS' | 'FAIL' }) | { verdict: 'F
   updateTitle();
 }
 
+function coreCheck(r: (CoreCheckResult & { verdict: 'PASS' | 'FAIL' }) | { verdict: 'FAIL'; error: string }): void {
+  if (coreDone) return;
+  coreDone = true;
+  const v = $('core-verdict');
+  if ('error' in r) {
+    v.textContent = `FAIL: ${r.error}`;
+  } else {
+    const bad = r.cases.filter((c) => c.mismatch !== null || (c.pinned !== null && c.digest !== c.pinned)).length;
+    v.textContent = r.verdict === 'PASS' ? `PASS (${r.cases.length} replays bit-identical)` : `FAIL (${bad} of ${r.cases.length} replays differ)`;
+    const rows = $('core-rows');
+    for (const c of r.cases) {
+      const ok = c.mismatch === null && (c.pinned === null || c.digest === c.pinned);
+      const tr = document.createElement('tr');
+      const why = c.mismatch ?? (ok ? 'match' : `TypeScript digest ${c.digest}, V8 ${c.pinned}`);
+      tr.append(cell(c.name), cell(c.digest), cell(c.coreDigest), cell(String(c.samples)), cell(ok ? (c.pinned ? 'match (and V8)' : 'match') : why, ok ? 'match' : 'mismatch'), cell(`${c.tsMs.toFixed(0)} / ${c.coreMs.toFixed(0)}`));
+      rows.append(tr);
+    }
+    $('core-time').textContent = `${r.loadMs.toFixed(0)} ms (module ${(r.moduleBytes / 1024).toFixed(0)} KiB); all of it ${r.totalMs.toFixed(0)} ms`;
+  }
+  v.className = r.verdict === 'PASS' ? 'pass' : 'fail';
+  document.body.dataset.core = JSON.stringify(r);
+  updateTitle();
+}
+
 // Anything that escapes a handler fails what is still pending, with the reason.
 const failAll = (message: string) => {
   fail(message);
   model2({ verdict: 'FAIL', error: message });
   staged({ verdict: 'FAIL', error: message });
+  coreCheck({ verdict: 'FAIL', error: message });
 };
 addEventListener('error', (e) => failAll(`page error: ${e.message}`));
 addEventListener('unhandledrejection', (e) => failAll(`unhandled rejection: ${String(e.reason)}`));
@@ -169,3 +198,15 @@ st.onmessage = (ev: MessageEvent<StagedResult | { error: string }>) => {
   staged({ ...r, verdict: ok ? 'PASS' : 'FAIL' });
 };
 st.postMessage(null);
+
+const co = new Worker(new URL('./core-worker.ts', import.meta.url), { type: 'module' });
+const cofail = (error: string) => coreCheck({ verdict: 'FAIL', error });
+co.onerror = (e) => cofail(`worker error: ${e.message || 'could not load worker'}`);
+co.onmessageerror = () => cofail('worker message could not be read');
+co.onmessage = (ev: MessageEvent<CoreCheckResult | { error: string }>) => {
+  if ('error' in ev.data) return cofail(ev.data.error);
+  const r = ev.data;
+  const ok = r.cases.length > 0 && r.cases.every((c) => c.mismatch === null && (c.pinned === null || c.digest === c.pinned));
+  coreCheck({ ...r, verdict: ok ? 'PASS' : 'FAIL' });
+};
+co.postMessage(null);

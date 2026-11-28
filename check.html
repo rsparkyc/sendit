@@ -13,10 +13,10 @@
       }
       body { margin: 0 auto; max-width: 60rem; padding: 1rem; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
       code, td, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-      #m2-verdict, #st-verdict { font-size: 1.5rem; font-weight: 700; }
+      #m2-verdict, #st-verdict, #core-verdict { font-size: 1.5rem; font-weight: 700; }
       #verdict { font-size: 2.5rem; font-weight: 700; margin: 0.5rem 0; }
-      #verdict.pass, #m2-verdict.pass, #st-verdict.pass { color: var(--pass); }
-      #verdict.fail, #m2-verdict.fail, #st-verdict.fail { color: var(--fail); }
+      #verdict.pass, #m2-verdict.pass, #st-verdict.pass, #core-verdict.pass { color: var(--pass); }
+      #verdict.fail, #m2-verdict.fail, #st-verdict.fail, #core-verdict.fail { color: var(--fail); }
       .scroll { overflow-x: auto; }
       table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
       th, td { border-bottom: 1px solid var(--line); padding: 0.3rem 0.5rem; text-align: left; white-space: nowrap; }
@@ -49,6 +49,18 @@
     <dl>
       <dt>Digest and ascent bits</dt><dd id="st-digest" class="mono">–</dd>
       <dt>Time (in worker)</dt><dd id="st-time">–</dd>
+    </dl>
+    <h2>Rust core (WebAssembly) against the TypeScript</h2>
+    <p>Flies the two fixtures above and the initial plan of every short campaign mission twice in a fourth worker: in TypeScript and in the Rust core compiled to WebAssembly (which builds its own chunks from the checkpoint asset and computes its own replay options). Compares outcome, digest, steps, final state and every trajectory sample bit for bit, and the fixtures' digests with the V8 values.</p>
+    <div id="core-verdict">Running…</div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Case</th><th>TypeScript digest</th><th>Core digest</th><th>Samples</th><th>Result</th><th>TS / core ms</th></tr></thead>
+        <tbody id="core-rows"></tbody>
+      </table>
+    </div>
+    <dl>
+      <dt>Core load (asset, module, engine)</dt><dd id="core-time">–</dd>
     </dl>
     <dl>
       <dt>Run time (in worker)</dt><dd id="time">–</dd>

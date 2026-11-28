@@ -96,3 +96,26 @@ test('a staged replay with a launch-vehicle ascent gives the V8 digest and ascen
   expect(ok, summary).toBe(true);
   expect({ model: got.model, data: got.data, digest: got.digest, outcome: got.outcome, ascent: got.ascent }, summary).toEqual({ model: MODEL, data: DATA, digest: DIGEST, outcome: 'completed', ascent: ASCENT_HEX });
 });
+
+// The Rust core as WebAssembly against the TypeScript in the same engine (src/check/core-worker.ts): the
+// fixtures (also against V8) and the short campaign missions' initial plans. Needs public/core/sendit_core.wasm
+// (core/scripts/build-web.sh; CI's build job makes it). 120 s allows for 2 CPUs under Docker.
+test('the Rust core (wasm) replays bit-identically to the TypeScript in this engine', async ({ page, browser }, info) => {
+  test.setTimeout(150_000);
+  const seen = watch(page);
+  const t0 = Date.now();
+  await page.goto(`${BASE}/check.html`);
+  const ok = await page
+    .waitForFunction(() => document.body.dataset.core !== undefined, null, { timeout: 120_000 })
+    .then(() => true, () => false);
+  const raw = await page.evaluate(() => document.body.dataset.core ?? null);
+  type Case = { name: string; digest: string; coreDigest: string; pinned: string | null; mismatch: string | null; samples: number; tsMs: number; coreMs: number };
+  const got = raw ? (JSON.parse(raw) as { verdict: string; error?: string; cases?: Case[]; loadMs?: number; totalMs?: number }) : { verdict: 'FAIL', error: 'no result after 120 s' };
+  const rows = (got.cases ?? []).map((c) => `  ${c.name.padEnd(30)} ts ${c.digest} core ${c.coreDigest}${c.pinned ? ` v8 ${c.pinned}` : ''} ${c.samples} samples ${c.mismatch ?? 'identical'} (${c.tsMs.toFixed(0)} / ${c.coreMs.toFixed(0)} ms)`).join('\n');
+  const summary = `[${info.project.name} ${browser.version()}] core parity ${got.verdict}${got.error ? `: ${got.error}` : ''} (load ${got.loadMs?.toFixed(0)} ms, total ${got.totalMs?.toFixed(0)} ms, page ${Date.now() - t0} ms)\n${rows}${seen.length ? `\n  page said:\n    ${seen.join('\n    ')}` : ''}`;
+  console.log(summary);
+  await info.attach('core-parity', { body: summary, contentType: 'text/plain' });
+  expect(ok, summary).toBe(true);
+  expect(got.verdict, summary).toBe('PASS');
+  expect(got.cases?.length ?? 0, summary).toBeGreaterThanOrEqual(8);
+});
