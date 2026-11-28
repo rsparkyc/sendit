@@ -35,7 +35,7 @@ import { formatMet, el } from './dom';
 import { fmtTime, otherTime, parseTime, timeMode, onTimeMode, setTimeMode, nextTimeMode, TIME_MODE_LABEL, setTimeEpoch } from './timefmt';
 import { Labels, type LabelItem } from './labels';
 import type { Placed } from './label-layout';
-import { geocentricLatitudeDeg, LAUNCH_SITES, makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, planErrors, errorCount, type EventKind, type MissionPlan } from './mission-layer';
+import { geocentricLatitudeDeg, LAUNCH_SITES, makeWorld, REPLAY_SAMPLE_STRIDE, simulationStartOffset, snapSeparationTime, planErrors, errorCount, type EventKind, type MissionPlan } from './mission-layer';
 import { initialPlan, launchOf, missionById, missionForLoadedPlan, MISSIONS } from './missions';
 import { nodesOf, separationsOf, stageAt } from './nodes';
 import { orbitAbout, OrbitPanel, type OrbitSource } from './orbit-ui';
@@ -449,7 +449,12 @@ const timeline = new Timeline(store, {
   crossings: () => (viewSettings.showNodes ? crossings.map((c) => ({ t: c.t, ascending: c.ascending, words: `${c.ascending ? 'Ascending' : 'Descending'} node (crosses ${crossingLabel})` })) : []),
   period: (t) => periodAt(t),
   separations: () => { const p = store.get().plan; return separationsOf(p).map((x) => ({ t: p.epoch + x.time, label: `Separation ${separationTag(p, x)}` })); },
-  moveSeparation: (j, t) => { editor.moveSeparation(j, t - store.get().plan.epoch); },
+  moveSeparation: (j, t) => { editor.moveSeparation(j, Math.round(t - store.get().plan.epoch)); },
+  snapSeparation: (j, t, last) => {
+    // Whole seconds, then off any burn (the validator's rule): a drop inside a burn lands just before or after it.
+    const p = store.get().plan;
+    return p.epoch + snapSeparationTime(p.burns, Math.round(t - p.epoch), Math.round(last - p.epoch), simulationStartOffset(p.start), p.duration);
+  },
   selectSeparation: (j) => { const p = store.get().plan; const sp = p.separations?.[j]; store.set({ selectedSeparation: j, selectedNode: null, ...(sp ? { t: p.epoch + sp.time, paused: true, loadingTarget: p.epoch + sp.time } : {}) }); layout.showTab('nodes'); },
 });
 layout.bottom.prepend(timeline.root);

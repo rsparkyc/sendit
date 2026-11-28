@@ -16,7 +16,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { dragSeparationLater, solveGeo } from './geo';
+import { dragSeparationIntoBurn, dragSeparationLater, solveGeo } from './geo';
 
 const BASE = 'http://localhost:4173';
 const SHOTS = 'test-results/vehicles';
@@ -257,6 +257,16 @@ test.describe('geostationary on the vehicle, to the leaderboard', () => {
     await settled(page); // the moved separation is a valid plan: it is replayed and settles
     const moved = await page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time);
     expect(moved).toBeGreaterThan(flown.stages.find((s: any) => s.separatedAt !== null && !s.droppedInAscent).separatedAt);
+    await page.getByRole('button', { name: /Undo the last plan edit/ }).click();
+    await settled(page);
+    expect(await page.evaluate(() => (window as any).sendit.store.get().replay.result.digest)).toBe(flown.digest);
+    // Drag the separation into the satellite's burn: it snaps to just before or after the burn, a plan with no errors.
+    const burn = await dragSeparationIntoBurn(page);
+    await expect.poll(() => page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time)).not.toBe(burn.before);
+    const snapped = await page.evaluate(() => (window as any).sendit.store.get().plan.separations[0].time as number);
+    expect(snapped <= burn.start || snapped >= burn.end, `snapped to ${snapped}, burn ${burn.start}..${burn.end}`).toBe(true);
+    expect(await page.evaluate(() => (window as any).sendit.planErrors())).toEqual([]);
+    await settled(page);
     await page.getByRole('button', { name: /Undo the last plan edit/ }).click();
     await settled(page);
     expect(await page.evaluate(() => (window as any).sendit.store.get().replay.result.digest)).toBe(flown.digest);

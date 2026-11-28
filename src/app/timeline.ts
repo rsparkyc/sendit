@@ -107,6 +107,11 @@ export interface TimelineMarks {
   separations?(): { t: number; label: string }[];
   /** A separation marker was dragged to absolute time t (on release: one edit). */
   moveSeparation?(j: number, t: number): void;
+  /**
+   * Where separation j would land if dropped at absolute time t (`last`: where it shows now, a valid time): a time no
+   * burn is firing at. The drag preview follows it live, and the drop commits it.
+   */
+  snapSeparation?(j: number, t: number, last: number): number;
   /** A separation marker was tapped. */
   selectSeparation?(j: number): void;
 }
@@ -438,7 +443,8 @@ export class Timeline {
       if (Math.abs(dx) > 3) d.moved = true;
       if (!d.moved) return;
       const [a, b] = this.span();
-      d.t = Math.max(a, Math.min(b, d.t0 + (dx / Math.max(1, r.width)) * (w1 - w0)));
+      const raw = Math.max(a, Math.min(b, d.t0 + (dx / Math.max(1, r.width)) * (w1 - w0)));
+      d.t = this.marks.snapSeparation ? this.marks.snapSeparation(j, raw, d.t) : raw;
       tk.style.left = `${((d.t - w0) / (w1 - w0)) * 100}%`;
       tk.title = `Separation → ${fmtTime(d.t - this.store.get().plan.epoch, 0)} (release to move)`;
     });
@@ -448,7 +454,7 @@ export class Timeline {
       this.sepDrag = null;
       tk.classList.remove('dragging');
       if (!commit) return this.render(this.store.get());
-      if (d.moved) this.marks.moveSeparation?.(j, Math.round(d.t));
+      if (d.moved) this.marks.moveSeparation?.(j, this.marks.snapSeparation ? d.t : Math.round(d.t));
       else this.marks.selectSeparation?.(j);
     };
     tk.addEventListener('pointerup', () => end(true));

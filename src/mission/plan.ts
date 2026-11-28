@@ -567,6 +567,39 @@ export function ascentRestartIssues(plan: MissionPlan, upperStage: number): Plan
 const G0_PLAN = 9.80665;
 
 /**
+ * True when burn b is still firing at time t (strictly inside start..start+duration): a separation there is the
+ * 'burn-spans-separation' error. A separation exactly at a burn's start or cutoff is fine.
+ */
+export function burnSpansTime(b: Pick<PlanBurn, 'start' | 'duration'>, t: number): boolean {
+  return t > b.start && t < b.start + b.duration;
+}
+
+/**
+ * Where a separation dragged to mission time t should land: t itself when no burn is firing there, else the
+ * nearer of the outermost whole seconds at or before the burn's start / at or after its cutoff that no burn spans
+ * (pass over back-to-back burns) and lie within [lo, hi]. `dir` (-1 / +1) forces the side, for keyboard steps.
+ * With no such time, `fallback` (the last valid position). Validity is burnSpansTime, the validator's rule.
+ */
+export function snapSeparationTime(burns: readonly Pick<PlanBurn, 'start' | 'duration'>[], t: number, fallback: number, lo = -Infinity, hi = Infinity, dir: -1 | 0 | 1 = 0): number {
+  const spans = (x: number) => burns.some((b) => burnSpansTime(b, x));
+  if (!spans(t)) return t;
+  const walk = (d: -1 | 1): number | null => {
+    let x = t;
+    for (let guard = 0; guard <= burns.length && spans(x); guard++) {
+      const b = burns.find((q) => burnSpansTime(q, x))!;
+      x = d < 0 ? Math.floor(b.start) : Math.ceil(b.start + b.duration);
+    }
+    return !spans(x) && x >= lo && x <= hi ? x : null;
+  };
+  const before = dir > 0 ? null : walk(-1);
+  const after = dir < 0 ? null : walk(1);
+  if (before === null && after === null) return fallback;
+  if (before === null) return after!;
+  if (after === null) return before;
+  return t - before <= after - t ? before : after;
+}
+
+/**
  * Stage sequence of a structurally valid plan whose flight starts with stage
  * `first` active (0, or the stage a vehicle launch reaches orbit in): every
  * burn names the active stage, no burn spans a separation, no separation
@@ -590,7 +623,7 @@ export function stagingIssues(plan: MissionPlan, first: number): PlanIssue[] {
       if (k !== active) out.push({ code: 'burn-stage', path: `burns[${a.index}].stage`, burn: a.index, message: `burns[${a.index}] fires stage ${k}, but stage ${active} is the active stage at ${b.start} s` });
       const end = b.start + b.duration;
       for (let j = 0; j < seps.length; j++) {
-        if (seps[j].time > b.start && seps[j].time < end) out.push({ code: 'burn-spans-separation', path: `burns[${a.index}].duration`, burn: a.index, message: `burns[${a.index}] (${b.start}..${end} s) is still firing at separations[${j}] (${seps[j].time} s)` });
+        if (burnSpansTime(b, seps[j].time)) out.push({ code: 'burn-spans-separation', path: `burns[${a.index}].duration`, burn: a.index, message: `burns[${a.index}] (${b.start}..${end} s) is still firing at separations[${j}] (${seps[j].time} s)` });
       }
     }
   }

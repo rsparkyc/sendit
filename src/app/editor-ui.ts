@@ -26,7 +26,7 @@ import { groupCrossings, type PlaneCrossing } from './plane-nodes';
 import { formatDistance, formatSpeed } from './format';
 import { fmtAngle, fmtDv, fmtDvFine, fmtMass, tidyDetail, siteName } from './numfmt';
 import {
-  LAUNCH_SITES, PAR_SCORE, allowedSites, briefingText, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, errorCount, simulationStartOffset,
+  LAUNCH_SITES, PAR_SCORE, allowedSites, briefingText, missionForSite, siteOption, azimuthAllowed, azimuthForInclination, groundRelativeAzimuthDeg, launchPlane, launchSite, planErrors, errorCount, simulationStartOffset, snapSeparationTime,
   type BriefingDistance, type MissionDefinition, type MissionPlan, type Objective, type PlanFrame,
 } from './mission-layer';
 
@@ -712,7 +712,11 @@ export class NodesPanel {
       nudge: (d) => {
         const j = selSep();
         const sp = j !== null ? ctx.store.get().plan.separations?.[j] : undefined;
-        if (j !== null && sp) ctx.editor.moveSeparation(j, Math.round((sp.time + d) * 100) / 100, `sep:${j}`);
+        if (j === null || !sp) return;
+        // A step into a burn skips over it (a separation while a burn fires is a plan error); no room: stay put.
+        const p = ctx.store.get().plan;
+        const t = snapSeparationTime(p.burns, Math.round((sp.time + d) * 100) / 100, sp.time, simulationStartOffset(p.start), p.duration, d > 0 ? 1 : -1);
+        if (t !== sp.time) ctx.editor.moveSeparation(j, t, `sep:${j}`);
       },
       commit: (text) => {
         const j = selSep();

@@ -18,7 +18,7 @@ import { replay, type BurnReport, type LaunchInsertion, type Outcome, type Repla
 import { SAMPLE_MISSIONS } from '../mission/samples';
 import { PARKING_BAND, VEHICLES, catalogueStages, type VehicleSpec } from '../mission/vehicles';
 import { OLD_VERSION_MESSAGE } from '../mission/objectives';
-import { stagingIssues } from '../mission/plan';
+import { snapSeparationTime, stagingIssues } from '../mission/plan';
 import { BODY_DATA } from './physics';
 import { CAMPAIGN } from '../mission/campaign';
 import type { EventKind, TrajectoryEvent } from '../mission/events';
@@ -38,7 +38,7 @@ export {
   CAMPAIGN, DEFAULT_ASCENT_TIME_S, LAUNCH_SITES, LIMITS, PAR_SCORE, initialMissionPlan, missionReplayOptions, validatePlanIssues, PHYSICS_MODEL, PLAN_FORMAT, PlanError, SAMPLE_MISSIONS,
   asymptotePlaneNormals, azimuthAllowed, azimuthForInclination, checkPlanConformance, stellarDay, decodePlan, encodePlan, evaluate, geocentricLatitudeDeg, groundRelativeAzimuthDeg,
   launchFromParams, launchPlane, launchSite, launchToParams, makePlan, orbitNormalOf, planeCrossings, replay, simulationStartOffset, validatePlan, isVehicleLaunch, vehicleStages,
-  VEHICLES, PARKING_BAND, catalogueStages, OLD_VERSION_MESSAGE, exactExp, exactLn,
+  VEHICLES, PARKING_BAND, catalogueStages, OLD_VERSION_MESSAGE, exactExp, exactLn, snapSeparationTime,
 };
 export type { VehicleSpec };
 export type {
