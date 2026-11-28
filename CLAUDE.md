@@ -3,6 +3,14 @@
 An orbital mission planner played in the browser, with a server-side leaderboard. README.md is the
 reference for physics, the editor, CI, hosting and the deploy pipeline; this file holds the working rules.
 
+## How much to ask
+
+Lean toward acting. In this repo the owner would rather Claude do something and be told to stop next time
+than stop to ask permission for routine work. Without asking first: commit to a branch, push, open a PR,
+queue it with auto-merge, fix CI, and let deploys run. When a behaviour turns out to overstep, a rule
+against it gets added here; anything not ruled out here is fair game. Still check before deleting data
+(the leaderboard table, buckets with content) or touching AWS resources that aren't sendit's.
+
 ## Changing code
 
 - **Physics must stay bit-identical.** Replays are checked against golden digests and must match across
