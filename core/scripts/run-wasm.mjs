@@ -8,7 +8,7 @@
 // Default module: core/target/wasm/wasm32-unknown-unknown/release/sendit_core.wasm
 // (build with core/scripts/build.sh). --simd enables the f64x2 positions() path
 // (requires a module built with +simd128).
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const core = fileURLToPath(new URL('..', import.meta.url));
@@ -67,7 +67,19 @@ if (mode === 'parity') {
   const sections = [
     [0, 'dmath.txt'], [1, 'dop853.txt'], [2, 'gravity.txt'], [3, 'orientation.txt'], [4, 'ephem.txt'],
     [5, null], [6, 'deriv.txt'], [7, 'prop.txt'], [8, 'corrector.txt'], [9, 'deriv-rel.txt'],
+    [10, 'nbody.txt'], [11, 'chunks.txt'], [12, 'plan.txt'], [13, 'launch.txt'], [14, 'ascent.txt'], [15, 'replay.txt'], [16, 'objectives.txt'],
   ];
+  // Section 11 reads the checkpoint asset and the chunk bins through add_file.
+  const addFile = (name, b) => {
+    const n = new TextEncoder().encode(name);
+    const np = put(n);
+    const p = put(b);
+    X.add_file(np, n.length, p, b.length);
+    X.dealloc(np, n.length);
+    X.dealloc(p, b.length);
+  };
+  addFile('checkpoints-1950-2100.bin', readFileSync(core + '../src/physics/data/checkpoints-1950-2100.bin'));
+  for (const f of readdirSync(fx)) if (/^chunkA?_-?\d+\.bin$/.test(f)) addFile(f, readFileSync(fx + f));
   let bad = 0;
   for (const [id, file] of sections) {
     const b = file ? readFileSync(fx + file) : new Uint8Array(1);
@@ -80,6 +92,58 @@ if (mode === 'parity') {
   }
   console.log(bad === 0 ? `wasm parity (${simd ? 'simd' : 'scalar'}): all sections bit-identical` : `wasm parity: ${bad} section(s) FAILED`);
   process.exit(bad === 0 ? 0 : 1);
+}
+
+// ---------------------------------------------------------------------------
+// Leaderboard path benchmark (node run-wasm.mjs bench-verify [module.wasm]):
+// one chunk cold, every campaign reference replay (chunks warm), the
+// verification from a fresh verifier (asset decode and cold chunks included).
+if (mode === 'bench-verify') {
+  const n = new TextEncoder().encode('checkpoints-1950-2100.bin');
+  const b = readFileSync(core + '../src/physics/data/checkpoints-1950-2100.bin');
+  X.add_file(put(n), n.length, put(b), b.length);
+  const unhex = (s) => (s === '-' ? '' : Buffer.from(s, 'hex').toString('utf8'));
+  const subs = readFileSync(fx + 'objectives.txt', 'utf8').split('\n').filter((l, i, a) => l.startsWith('verify ') && a[i + 1]?.startsWith('accepted')).map((l) => l.split(' ')).filter((t) => t[4] !== '-')
+    .map((t) => ({ plan: unhex(t[1]), id: unhex(t[2]), version: unhex(t[3]), site: t[4] }));
+  const call = (f, s) => {
+    const e = new TextEncoder().encode(s);
+    const p = put(e);
+    const r = f(p, e.length);
+    X.dealloc(p, e.length);
+    return r;
+  };
+  const k = Number(process.argv.find((a) => a.startsWith('--chunk='))?.slice(8) ?? 77);
+  const ch = [];
+  for (let r = 0; r < 6; r++) {
+    const t0 = performance.now();
+    X.chunk_cold(k);
+    if (r > 0) ch.push(performance.now() - t0);
+  }
+  const st = stats(ch);
+  console.log(`one chunk cold (asset decode + build chunk ${k}): median ${st.median.toFixed(1)} ms (range ${st.min.toFixed(1)}..${st.max.toFixed(1)})`);
+  X.verifier_new();
+  let tr = 0;
+  let tv = 0;
+  for (const s of subs) {
+    const steps = call(X.verifier_replay, `${s.plan}\n${s.id}`);
+    const rs = [];
+    for (let r = 0; r < 3; r++) {
+      const t0 = performance.now();
+      call(X.verifier_replay, `${s.plan}\n${s.id}`);
+      rs.push(performance.now() - t0);
+    }
+    rs.sort((a, b) => a - b);
+    const t0 = performance.now();
+    X.verifier_new();
+    const code = call(X.verifier_verify, `${s.plan}\n${s.id}\n${s.version}\n${s.site}`);
+    const cold = performance.now() - t0;
+    if (code !== 0) throw new Error(`${s.id}/${s.site}: ${report()}`);
+    tr += rs[1];
+    tv += cold;
+    console.log(`${s.id}/${s.site}: ${steps} steps, replay warm ${rs[1].toFixed(1)} ms, verify cold ${cold.toFixed(1)} ms`);
+  }
+  console.log(`total over ${subs.length} references: replay warm ${tr.toFixed(0)} ms, verify cold ${tv.toFixed(0)} ms`);
+  process.exit(0);
 }
 
 // ---------------------------------------------------------------------------

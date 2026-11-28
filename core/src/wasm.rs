@@ -29,6 +29,18 @@ struct State {
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static REPORT: RefCell<String> = const { RefCell::new(String::new()) };
+    static FILES: RefCell<std::collections::HashMap<String, Vec<u8>>> = RefCell::new(std::collections::HashMap::new());
+}
+
+/// Install a named byte file (the checkpoint asset, chunk bins) for sections that read several files.
+#[unsafe(no_mangle)]
+pub extern "C" fn add_file(name: *const u8, name_len: usize, ptr: *const u8, len: usize) {
+    let n = text(name, name_len).to_string();
+    let b = bytes(ptr, len).to_vec();
+    FILES.with(|f| f.borrow_mut().insert(n, b));
+}
+fn file(name: &str) -> Option<Vec<u8>> {
+    FILES.with(|f| f.borrow().get(name).cloned())
 }
 
 fn bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
@@ -75,7 +87,8 @@ pub extern "C" fn set_simd(on: i32) {
 /// Run one parity section over the fixture text; returns the number of mismatches
 /// (u32::MAX if nothing was compared). The summary is in report_ptr/report_len.
 /// Sections: 0 dmath, 1 dop853, 2 gravity, 3 orientation, 4 ephem, 5 golden eval,
-/// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative.
+/// 6 deriv, 7 prop, 8 corrector, 9 relativistic derivative, 10 n-body integrator,
+/// 11 chunks (needs add_file: the checkpoint asset and the chunk bins), 12 plan codec, 13 launch, 14 ascent, 15 replay, 16 objectives (both need the checkpoint asset).
 #[unsafe(no_mangle)]
 pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
     let t = text(ptr, len);
@@ -84,6 +97,22 @@ pub extern "C" fn run_section(section: u32, ptr: *const u8, len: usize) -> u32 {
         1 => parity::dop853(t),
         2 => parity::gravity(t),
         9 => parity::deriv_rel(t),
+        10 => crate::parity2::nbody(t, &crate::data::world()),
+        12 => crate::parity3::plan_codec(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON)),
+        13 => crate::parity3::launch(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON)),
+        14 => crate::parity4::ascent(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON)),
+        15 => {
+            let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+            crate::parity4::replay(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON), &asset)
+        }
+        16 => {
+            let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+            crate::parity5::objectives(t, &crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON), &asset)
+        }
+        11 => {
+            let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+            crate::parity2::chunks(t, &crate::data::world(), &asset, file)
+        }
         _ => STATE.with(|s| {
             let mut g = s.borrow_mut();
             let st = g.as_mut().expect("set_world first");
@@ -238,4 +267,64 @@ pub extern "C" fn samples_ptr() -> *const f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn samples_len() -> usize {
     STATE.with(|s| s.borrow().as_ref().unwrap().samples.len())
+}
+
+// ---------------------------------------------------------------------------
+// The leaderboard verifier (phase-four shape): one call per submission.
+
+fn mission_data() -> &'static crate::mission::mdata::MissionData {
+    static D: std::sync::OnceLock<crate::mission::mdata::MissionData> = std::sync::OnceLock::new();
+    D.get_or_init(|| crate::mission::mdata::MissionData::parse(crate::data::MISSION_JSON))
+}
+
+thread_local! {
+    static VERIFIER: RefCell<Option<crate::mission::verify::Verifier<'static>>> = const { RefCell::new(None) };
+}
+
+/// A fresh verifier (checkpoint asset from add_file; no chunks built yet).
+#[unsafe(no_mangle)]
+pub extern "C" fn verifier_new() {
+    let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+    let v = crate::mission::verify::Verifier::new(mission_data(), Some(&asset)).expect("verifier");
+    VERIFIER.with(|x| *x.borrow_mut() = Some(v));
+}
+
+/// Verify a submission: the input is "plan\nmission id\nversion\nsite" (site "-": the plan's own).
+/// Returns 0 accepted, 1 rejected; the verdict as text in report_ptr/report_len.
+#[unsafe(no_mangle)]
+pub extern "C" fn verifier_verify(ptr: *const u8, len: usize) -> u32 {
+    let t = text(ptr, len);
+    let f: Vec<&str> = t.split('\n').collect();
+    let site = if f[3] == "-" { None } else { Some(f[3]) };
+    let v = VERIFIER.with(|x| x.borrow_mut().as_mut().expect("verifier_new first").verify(f[0], f[1], f[2], site));
+    let code = if matches!(v, crate::mission::verify::Verdict::Accepted { .. }) { 0 } else { 1 };
+    REPORT.with(|rep| *rep.borrow_mut() = format!("{v:?}"));
+    code
+}
+
+/// Replay a plan for a campaign mission with the verifier's world (chunks stay warm); returns the step count.
+#[unsafe(no_mangle)]
+pub extern "C" fn verifier_replay(ptr: *const u8, len: usize) -> u32 {
+    let t = text(ptr, len);
+    let f: Vec<&str> = t.split('\n').collect();
+    let d = mission_data();
+    let m = d.mission(f[1]).expect("mission");
+    let p = crate::mission::plan::decode_plan(f[0], d).expect("plan");
+    let o = crate::mission::objectives::mission_replay_options(m);
+    VERIFIER.with(|x| {
+        let mut g = x.borrow_mut();
+        let v = g.as_mut().expect("verifier_new first");
+        let r = crate::mission::replay::replay(&p, &mut v.world, &o, None, None);
+        REPORT.with(|rep| *rep.borrow_mut() = r.digest.clone());
+        r.steps as u32
+    })
+}
+
+/// Build chunk k cold: a fresh ephemeris from the checkpoint asset (asset decode included).
+#[unsafe(no_mangle)]
+pub extern "C" fn chunk_cold(k: i32) -> u32 {
+    let asset = file("checkpoints-1950-2100.bin").expect("add_file the checkpoint asset first");
+    let (mut eph, _) = crate::data::ephemeris(&crate::data::world(), Some(&asset), None).expect("ephemeris");
+    eph.ensure_chunk(k as i64);
+    eph.has_chunk(k as i64) as u32
 }

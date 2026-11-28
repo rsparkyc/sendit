@@ -1,0 +1,2698 @@
+{
+ "physicsModel": 2,
+ "fingerprint": "76a862ea",
+ "checkpointVersion": "87364e3630c0060b",
+ "bodies": [
+  {
+   "id": "sun",
+   "gm": 132712440041279420000,
+   "radius": 695700000,
+   "referenceRadius": 696000000,
+   "atmosphere": 0,
+   "pole": [0.12235349347232782, -0.42307208364764326, 0.8977971010607901],
+   "rotation": "sun",
+   "j2": 2.1961391516529825e-7,
+   "j2Radius": 696000000
+  },
+  {
+   "id": "mercury",
+   "gm": 22031868551400,
+   "radius": 2439400,
+   "referenceRadius": 2439400,
+   "atmosphere": 0,
+   "pole": [0.09137781820826625, -0.4696473503642596, 0.8781124419089661],
+   "rotation": "mercury",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "venus",
+   "gm": 324858592000000,
+   "radius": 6051800,
+   "referenceRadius": 6051800,
+   "atmosphere": 200000,
+   "pole": [0.018690814168902073, -0.3877088083617989, 0.9215923900425705],
+   "rotation": "venus",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "earth",
+   "gm": 398600435507022.56,
+   "radius": 6371008.399999999,
+   "referenceRadius": 6378136.6,
+   "atmosphere": 122000,
+   "pole": [6.123233995736766e-17, 0, 1],
+   "rotation": "earth",
+   "j2": 0.00108262539,
+   "j2Radius": 6378136.6
+  },
+  {
+   "id": "moon",
+   "gm": 4902800118457.549,
+   "radius": 1737400,
+   "referenceRadius": 1738000,
+   "atmosphere": 0,
+   "pole": [-0.02260867140418245, -0.4118309009426125, 0.9109797785934295],
+   "rotation": "moon",
+   "j2": 0.000203214360135,
+   "j2Radius": 1738000
+  },
+  {
+   "id": "mars",
+   "gm": 42828375815756.1,
+   "radius": 3389500,
+   "referenceRadius": 3396000,
+   "atmosphere": 125000,
+   "pole": [0.4461552707768573, -0.4062426653624658, 0.7974411396443181],
+   "rotation": "mars",
+   "j2": 0.001956608633534895,
+   "j2Radius": 3396000
+  },
+  {
+   "id": "jupiter",
+   "gm": 126686532097721810,
+   "radius": 69911000,
+   "referenceRadius": 71492000,
+   "atmosphere": 450000,
+   "pole": [-0.014597290902157927, -0.43032959427365014, 0.9025537986129101],
+   "rotation": "jupiter",
+   "j2": 0.0146965063,
+   "j2Radius": 71492000
+  },
+  {
+   "id": "saturn",
+   "gm": 37931207357361660,
+   "radius": 58232000,
+   "referenceRadius": 60330000,
+   "atmosphere": 0,
+   "pole": [0.0854788318610717, 0.0732357578775289, 0.9936447519469775],
+   "rotation": "saturn",
+   "j2": 0.01629061510215236,
+   "j2Radius": 60330000
+  },
+  {
+   "id": "uranus",
+   "gm": 5793950737840896,
+   "radius": 25362000,
+   "referenceRadius": 25559000,
+   "atmosphere": 0,
+   "pole": [-0.21199958153779855, -0.9415591572895124, -0.2617680858165514],
+   "rotation": "uranus",
+   "j2": 0.003508966976546036,
+   "j2Radius": 25559000
+  },
+  {
+   "id": "neptune",
+   "gm": 6835103145462294,
+   "radius": 24622000,
+   "referenceRadius": 24764000,
+   "atmosphere": 0,
+   "pole": [0.3585765089087283, -0.6380951021167844, 0.6813644604126335],
+   "rotation": "neptune",
+   "j2": 0.003536205996177839,
+   "j2Radius": 24764000
+  },
+  {
+   "id": "pluto",
+   "gm": 869326122631.1509,
+   "radius": 1188300,
+   "referenceRadius": 1188300,
+   "atmosphere": 0,
+   "pole": [-0.677967909916917, 0.7272096774535675, -0.10735733855105338],
+   "rotation": "pluto",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "io",
+   "gm": 5959915466180.539,
+   "radius": 1821490,
+   "referenceRadius": 1821490,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "io",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "europa",
+   "gm": 3202712099607.295,
+   "radius": 1560800,
+   "referenceRadius": 1560800,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "europa",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "ganymede",
+   "gm": 9887832752719.639,
+   "radius": 2631200,
+   "referenceRadius": 2631200,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "ganymede",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "callisto",
+   "gm": 7179283402579.837,
+   "radius": 2410300,
+   "referenceRadius": 2410300,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "callisto",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "tethys",
+   "gm": 41213528854.89587,
+   "radius": 531100,
+   "referenceRadius": 531100,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "tethys",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "dione",
+   "gm": 73116071724.82066,
+   "radius": 561400,
+   "referenceRadius": 561400,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "dione",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "rhea",
+   "gm": 153941751914.65628,
+   "radius": 763500,
+   "referenceRadius": 763500,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "rhea",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "titan",
+   "gm": 8978137095521.047,
+   "radius": 2574760,
+   "referenceRadius": 2574760,
+   "atmosphere": 1270000,
+   "pole": null,
+   "rotation": "titan",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "iapetus",
+   "gm": 120515106013.76419,
+   "radius": 734300,
+   "referenceRadius": 734300,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "iapetus",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "mimas",
+   "gm": 2503488768.152587,
+   "radius": 198200,
+   "referenceRadius": 198200,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": null,
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "enceladus",
+   "gm": 7210366688.598896,
+   "radius": 252100,
+   "referenceRadius": 252100,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": null,
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "ariel",
+   "gm": 83430746772.82457,
+   "radius": 578900,
+   "referenceRadius": 578900,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "ariel",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "umbriel",
+   "gm": 85403004223.26411,
+   "radius": 584700,
+   "referenceRadius": 584700,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "umbriel",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "titania",
+   "gm": 222800635187.9754,
+   "radius": 788900,
+   "referenceRadius": 788900,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "titania",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "oberon",
+   "gm": 214209839940.7347,
+   "radius": 761400,
+   "referenceRadius": 761400,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "oberon",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "miranda",
+   "gm": 4105527241.1815605,
+   "radius": 235800,
+   "referenceRadius": 235800,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "miranda",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "triton",
+   "gm": 1428495462910.464,
+   "radius": 1352600,
+   "referenceRadius": 1352600,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "triton",
+   "j2": null,
+   "j2Radius": null
+  },
+  {
+   "id": "charon",
+   "gm": 106101138823.6118,
+   "radius": 606000,
+   "referenceRadius": 606000,
+   "atmosphere": 0,
+   "pole": null,
+   "rotation": "charon",
+   "j2": null,
+   "j2Radius": null
+  }
+ ],
+ "earthRotation": {
+  "ra0": 0,
+  "ra1": -0.641,
+  "dec0": 90,
+  "dec1": -0.557,
+  "w0": 190.46061837504,
+  "wDot": 360.9856122880876,
+  "w1": 0.641
+ },
+ "wgs84": {
+  "a": 6378137,
+  "f": 0.0033528106647474805
+ },
+ "launch": {
+  "defaultAscentTimeS": 540,
+  "defaultDownrangeDeg": 13.5,
+  "maxParkingAltitude": 2000000
+ },
+ "sites": [
+  {
+   "id": "cape-canaveral",
+   "latDeg": 28.5619,
+   "lonDeg": -80.5772,
+   "heightM": 0,
+   "azimuthMinDeg": 35,
+   "azimuthMaxDeg": 120
+  },
+  {
+   "id": "vandenberg",
+   "latDeg": 34.6321,
+   "lonDeg": -120.6106,
+   "heightM": 0,
+   "azimuthMinDeg": 147,
+   "azimuthMaxDeg": 201
+  },
+  {
+   "id": "kourou",
+   "latDeg": 5.239,
+   "lonDeg": -52.7686,
+   "heightM": 0,
+   "azimuthMinDeg": -10.5,
+   "azimuthMaxDeg": 93.5
+  },
+  {
+   "id": "baikonur",
+   "latDeg": 45.92,
+   "lonDeg": 63.3422,
+   "heightM": 90,
+   "azimuthMinDeg": 25,
+   "azimuthMaxDeg": 65
+  },
+  {
+   "id": "tanegashima",
+   "latDeg": 30.4009,
+   "lonDeg": 130.9749,
+   "heightM": 0,
+   "azimuthMinDeg": 90,
+   "azimuthMaxDeg": 160
+  },
+  {
+   "id": "mahia",
+   "latDeg": -39.2615,
+   "lonDeg": 177.8649,
+   "heightM": 0,
+   "azimuthMinDeg": 0,
+   "azimuthMaxDeg": 195
+  },
+  {
+   "id": "equator",
+   "latDeg": 0,
+   "lonDeg": 0,
+   "heightM": 0,
+   "azimuthMinDeg": 0,
+   "azimuthMaxDeg": 360
+  }
+ ],
+ "ascentBodies": {
+  "earth": {
+   "id": "earth",
+   "atmosphere": {
+    "rho0": 1.225,
+    "scaleHeightM": 7200
+   },
+   "backPressureLoss": 0.12,
+   "dragArea": 0.25,
+   "poweredInsertionAltitudeM": 185000,
+   "steps": 200
+  },
+  "moon": {
+   "id": "moon",
+   "atmosphere": null,
+   "backPressureLoss": 0,
+   "dragArea": 0,
+   "poweredInsertionAltitudeM": 18000,
+   "steps": 200
+  }
+ },
+ "planLimits": {
+  "maxEncodedLength": 16384,
+  "maxBurns": 200,
+  "maxEngines": 8,
+  "maxStages": 6,
+  "maxSeparations": 5,
+  "maxLaunchParams": 16,
+  "maxDuration": 1262304000,
+  "maxEpoch": 6311520000,
+  "minRtol": 1e-13,
+  "maxRtol": 0.00001,
+  "maxMass": 1000000000,
+  "maxThrust": 1000000000,
+  "maxIsp": 100000,
+  "maxPosition": 100000000000000,
+  "maxVelocity": 1000000,
+  "maxIdLength": 32,
+  "directC3Range": [-60000000, 400000000],
+  "directAltitudeRange": [150000, 2000000],
+  "directParams": 5
+ },
+ "events": {
+  "nodes": 4,
+  "bisectMax": 80
+ },
+ "parkingBand": [180000, 1000000],
+ "vehicles": [
+  {
+   "id": "falcon-9",
+   "stages": [
+    {
+     "wetMass": 435000,
+     "dryMass": 24100,
+     "engines": [
+      {
+       "thrust": 8226000,
+       "isp": 311
+      }
+     ]
+    },
+    {
+     "wetMass": 111500,
+     "dryMass": 4000,
+     "engines": [
+      {
+       "thrust": 981000,
+       "isp": 348
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "atlas-v-401",
+   "stages": [
+    {
+     "wetMass": 307243,
+     "dryMass": 23154,
+     "engines": [
+      {
+       "thrust": 4152000,
+       "isp": 337.8
+      }
+     ]
+    },
+    {
+     "wetMass": 23146,
+     "dryMass": 2316,
+     "engines": [
+      {
+       "thrust": 99200,
+       "isp": 450.5
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ariane-5-eca",
+   "stages": [
+    {
+     "wetMass": 594334.4386679409,
+     "dryMass": 68400,
+     "engines": [
+      {
+       "thrust": 9230000,
+       "isp": 274.5
+      },
+      {
+       "thrust": 1390000,
+       "isp": 432
+      }
+     ]
+    },
+    {
+     "wetMass": 138765.56133205906,
+     "dryMass": 14700,
+     "engines": [
+      {
+       "thrust": 1390000,
+       "isp": 432
+      }
+     ]
+    },
+    {
+     "wetMass": 19440,
+     "dryMass": 4540,
+     "engines": [
+      {
+       "thrust": 67000,
+       "isp": 446
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "soyuz-2-1b",
+   "stages": [
+    {
+     "wetMass": 209126.25495382692,
+     "dryMass": 15136,
+     "engines": [
+      {
+       "thrust": 4085200,
+       "isp": 319
+      },
+      {
+       "thrust": 990200,
+       "isp": 319
+      }
+     ]
+    },
+    {
+     "wetMass": 59294.74504617308,
+     "dryMass": 6545,
+     "engines": [
+      {
+       "thrust": 990200,
+       "isp": 319
+      }
+     ]
+    },
+    {
+     "wetMass": 27755,
+     "dryMass": 2355,
+     "engines": [
+      {
+       "thrust": 294300,
+       "isp": 359
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "electron",
+   "stages": [
+    {
+     "wetMass": 10200,
+     "dryMass": 950,
+     "engines": [
+      {
+       "thrust": 234000,
+       "isp": 311
+      }
+     ]
+    },
+    {
+     "wetMass": 2300,
+     "dryMass": 250,
+     "engines": [
+      {
+       "thrust": 25800,
+       "isp": 343
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "minotaur-v",
+   "stages": [
+    {
+     "wetMass": 49500,
+     "dryMass": 4100,
+     "engines": [
+      {
+       "thrust": 2224000,
+       "isp": 286,
+       "restartable": false,
+       "throttleable": false
+      }
+     ]
+    },
+    {
+     "wetMass": 27800,
+     "dryMass": 3300,
+     "engines": [
+      {
+       "thrust": 1223000,
+       "isp": 308,
+       "restartable": false,
+       "throttleable": false
+      }
+     ]
+    },
+    {
+     "wetMass": 7290,
+     "dryMass": 1120,
+     "engines": [
+      {
+       "thrust": 289000,
+       "isp": 300,
+       "restartable": false,
+       "throttleable": false
+      }
+     ]
+    },
+    {
+     "wetMass": 2464,
+     "dryMass": 454,
+     "engines": [
+      {
+       "thrust": 68600,
+       "isp": 288,
+       "restartable": false,
+       "throttleable": false
+      }
+     ]
+    },
+    {
+     "wetMass": 1148,
+     "dryMass": 82,
+     "engines": [
+      {
+       "thrust": 54800,
+       "isp": 290,
+       "restartable": false,
+       "throttleable": false
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "campaign": [
+  {
+   "id": "plane-change",
+   "title": "Plane change",
+   "version": 3,
+   "briefing": "Reach a circular orbit at {orbit}, inclined 64-66° to the equator, from Cape Canaveral on a Soyuz. Range safety stops the Cape from launching steeper than about 60°, so the last few degrees have to be turned after launch. You can steer some of the inclination in the ascent, and turn the rest in orbit; you can launch straight to {orbit}, or launch lower and climb. Each choice moves the bill between the launcher and the upper stage. Which combination is cheapest?",
+   "briefingDistances": {
+    "orbit": {
+     "kind": "altitude",
+     "body": "earth",
+     "value": 400000
+    }
+   },
+   "epoch": 852854469.184,
+   "start": {
+    "kind": "launch",
+    "site": "cape-canaveral",
+    "azimuthDeg": 35,
+    "altitudeM": 400000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 209126.25495382692,
+       "dryMass": 15136,
+       "engines": [
+        {
+         "thrust": 4085200,
+         "isp": 319
+        },
+        {
+         "thrust": 990200,
+         "isp": 319
+        }
+       ]
+      },
+      {
+       "wetMass": 59294.74504617308,
+       "dryMass": 6545,
+       "engines": [
+        {
+         "thrust": 990200,
+         "isp": 319
+        }
+       ]
+      },
+      {
+       "wetMass": 27755,
+       "dryMass": 2355,
+       "engines": [
+        {
+         "thrust": 294300,
+         "isp": 359
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    }
+   },
+   "spacecraft": {
+    "wetMass": 7500,
+    "dryMass": 3750,
+    "engines": [
+     {
+      "thrust": 25000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 86400,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 10065.6,
+     "ascentDeltaV": 9295,
+     "time": 21871,
+     "maxDeltaV": 10130,
+     "maxTime": 27600
+    },
+    {
+     "site": "vandenberg",
+     "offered": false,
+     "reason": "its corridor reaches 64-66° directly, so there is no plane change to make; the mission is about the Cape corridor’s 60° limit"
+    },
+    {
+     "site": "kourou",
+     "offered": false,
+     "reason": "its corridor reaches 64-66° directly, so there is no plane change to make; the mission is about the Cape corridor’s 60° limit"
+    },
+    {
+     "site": "baikonur",
+     "offered": false,
+     "reason": "its corridor reaches 64-66° directly, so there is no plane change to make; the mission is about the Cape corridor’s 60° limit"
+    },
+    {
+     "site": "tanegashima",
+     "offered": false,
+     "reason": "its corridor reaches 64-66° directly, so there is no plane change to make; the mission is about the Cape corridor’s 60° limit"
+    },
+    {
+     "site": "mahia",
+     "offered": false,
+     "reason": "its corridor reaches 64-66° directly, so there is no plane change to make; the mission is about the Cape corridor’s 60° limit"
+    },
+    {
+     "site": "equator",
+     "offered": false,
+     "reason": "its corridor reaches 64-66° directly, so there is no plane change to make; the mission is about the Cape corridor’s 60° limit"
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "orbit",
+     "body": "earth",
+     "periapsis": [6728136.6, 6828136.6],
+     "apoapsis": [6728136.6, 6828136.6],
+     "inclination": [64, 66],
+     "reference": "equator",
+     "revolutions": 3
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 10130
+    },
+    {
+     "kind": "max-time",
+     "max": 27600
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 10065.6,
+    "deltaVWeight": 1,
+    "timeRef": 21871,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "geo-from-leo",
+   "title": "Geostationary",
+   "version": 4,
+   "briefing": "Climb from a low parking orbit to geostationary orbit: {geo}, circular, within 1° of the equator, held for three revolutions, on an Ariane 5. Its hydrogen upper stage burns at the equator crossing to raise apogee; separate it there, and your satellite circularises and removes the launch-site inclination together at apogee, where the plane change is cheapest. A site near the equator pays twice: more of Earth’s rotation in the ascent, less plane to remove.",
+   "briefingDistances": {
+    "geo": {
+     "kind": "radius",
+     "body": "earth",
+     "value": 42164000
+    }
+   },
+   "epoch": 852854469.184,
+   "start": {
+    "kind": "launch",
+    "site": "equator",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 594334.4386679409,
+       "dryMass": 68400,
+       "engines": [
+        {
+         "thrust": 9230000,
+         "isp": 274.5
+        },
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 138765.56133205906,
+       "dryMass": 14700,
+       "engines": [
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 19440,
+       "dryMass": 4540,
+       "engines": [
+        {
+         "thrust": 67000,
+         "isp": 446
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    }
+   },
+   "spacecraft": {
+    "wetMass": 10000,
+    "dryMass": 4500,
+    "engines": [
+     {
+      "thrust": 10000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 518400,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 13719.4,
+     "ascentDeltaV": 9362.3,
+     "time": 301637,
+     "maxDeltaV": 14350,
+     "maxTime": 518400
+    },
+    {
+     "site": "vandenberg",
+     "offered": false,
+     "reason": "its corridor’s lowest inclination is about 56°: removing that at apogee costs more than the Ariane’s upper stage and the satellite carry together"
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 13277.5,
+     "ascentDeltaV": 9297.6,
+     "time": 321188,
+     "maxDeltaV": 13860,
+     "maxTime": 518400
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 14506.2,
+     "ascentDeltaV": 9504.5,
+     "time": 280890,
+     "maxDeltaV": 15230,
+     "maxTime": 518400
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 13759.5,
+     "ascentDeltaV": 9370.8,
+     "time": 324457,
+     "maxDeltaV": 14400,
+     "maxTime": 518400
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 14064.8,
+     "ascentDeltaV": 9423.4,
+     "time": 283221,
+     "maxDeltaV": 14740,
+     "maxTime": 518400
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 13259.5,
+     "ascentDeltaV": 9295.7,
+     "time": 280168,
+     "maxDeltaV": 13840,
+     "maxTime": 518400
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "orbit",
+     "body": "earth",
+     "periapsis": [42064000, 42264000],
+     "apoapsis": [42064000, 42264000],
+     "inclination": [0, 1],
+     "reference": "equator",
+     "revolutions": 3
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 15230
+    },
+    {
+     "kind": "max-time",
+     "max": 518400
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 13259.5,
+    "deltaVWeight": 1,
+    "timeRef": 280168,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "earth-escape",
+   "title": "Escape",
+   "version": 4,
+   "briefing": "Leave Earth for good with at least 3 km/s to spare (hyperbolic excess speed). The Soyuz upper stage gives you a strong first kick; after it separates, your own stage pushes only 5 kN, and one long burn would spend its thrust far from perigee. Split the rest over several perigee passes, raising apogee each time, so every burn happens deep in Earth’s gravity where it counts most.",
+   "epoch": 852854469.184,
+   "start": {
+    "kind": "launch",
+    "site": "equator",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 209126.25495382692,
+       "dryMass": 15136,
+       "engines": [
+        {
+         "thrust": 4085200,
+         "isp": 319
+        },
+        {
+         "thrust": 990200,
+         "isp": 319
+        }
+       ]
+      },
+      {
+       "wetMass": 59294.74504617308,
+       "dryMass": 6545,
+       "engines": [
+        {
+         "thrust": 990200,
+         "isp": 319
+        }
+       ]
+      },
+      {
+       "wetMass": 27755,
+       "dryMass": 2355,
+       "engines": [
+        {
+         "thrust": 294300,
+         "isp": 359
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    }
+   },
+   "spacecraft": {
+    "wetMass": 5000,
+    "dryMass": 2000,
+    "engines": [
+     {
+      "thrust": 5000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 345600,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 12656.1,
+     "ascentDeltaV": 9010.2,
+     "time": 223565,
+     "maxDeltaV": 12950,
+     "maxTime": 279600
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 12904,
+     "ascentDeltaV": 9250.9,
+     "time": 158551,
+     "maxDeltaV": 13200,
+     "maxTime": 198600
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 12594.8,
+     "ascentDeltaV": 8951.1,
+     "time": 259811,
+     "maxDeltaV": 12890,
+     "maxTime": 325200
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 12798.3,
+     "ascentDeltaV": 9147.2,
+     "time": 177385,
+     "maxDeltaV": 13100,
+     "maxTime": 222000
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 12666.7,
+     "ascentDeltaV": 9020.9,
+     "time": 218525,
+     "maxDeltaV": 12960,
+     "maxTime": 273600
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 12710.8,
+     "ascentDeltaV": 9063.5,
+     "time": 201285,
+     "maxDeltaV": 13010,
+     "maxTime": 252000
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 12589.6,
+     "ascentDeltaV": 8948.7,
+     "time": 261698,
+     "maxDeltaV": 12890,
+     "maxTime": 327600
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "escape",
+     "body": "earth",
+     "minSpeed": 3000
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 13200
+    },
+    {
+     "kind": "max-time",
+     "max": 327600
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 12589.6,
+    "deltaVWeight": 1,
+    "timeRef": 261698,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "lunar-flyby",
+   "title": "Lunar flyby",
+   "version": 4,
+   "briefing": "Fly past the Moon at {pass} without hitting it, on a Falcon 9. Launch when your site passes under the Moon’s orbital plane (from a site too far from the equator to reach that plane, into a plane through where the Moon will be), so one prograde burn of the upper stage in the parking orbit does the job; the burn’s timing sets where you meet the Moon. Launch steeply or high and the upper stage runs short: your probe has to finish the burn.",
+   "briefingDistances": {
+    "pass": {
+     "kind": "altitude-band",
+     "body": "moon",
+     "lo": 100000,
+     "hi": 10000000
+    }
+   },
+   "epoch": 852854469.184,
+   "start": {
+    "kind": "launch",
+    "site": "equator",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "window": [852854469.184, 858038469.184],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 435000,
+       "dryMass": 24100,
+       "engines": [
+        {
+         "thrust": 8226000,
+         "isp": 311
+        }
+       ]
+      },
+      {
+       "wetMass": 111500,
+       "dryMass": 4000,
+       "engines": [
+        {
+         "thrust": 981000,
+         "isp": 348
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ]
+   },
+   "spacecraft": {
+    "wetMass": 6500,
+    "dryMass": 3250,
+    "engines": [
+     {
+      "thrust": 10000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 604800,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 12161.5,
+     "ascentDeltaV": 9023.9,
+     "time": 378384,
+     "maxDeltaV": 12500,
+     "maxTime": 604800
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 12389.8,
+     "ascentDeltaV": 9244.7,
+     "time": 319447,
+     "maxDeltaV": 12730,
+     "maxTime": 604800
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 12156.3,
+     "ascentDeltaV": 9018.9,
+     "time": 392478,
+     "maxDeltaV": 12490,
+     "maxTime": 604800
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 12289.8,
+     "ascentDeltaV": 9143.7,
+     "time": 315288,
+     "maxDeltaV": 12630,
+     "maxTime": 604800
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 12176.8,
+     "ascentDeltaV": 9032.6,
+     "time": 312476,
+     "maxDeltaV": 12510,
+     "maxTime": 604800
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 12224.7,
+     "ascentDeltaV": 9079.6,
+     "time": 319546,
+     "maxDeltaV": 12560,
+     "maxTime": 604800
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 12155.4,
+     "ascentDeltaV": 9017.3,
+     "time": 383120,
+     "maxDeltaV": 12490,
+     "maxTime": 604800
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "flyby",
+     "body": "moon",
+     "minAltitude": 100000,
+     "maxAltitude": 10000000
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 12730
+    },
+    {
+     "kind": "max-time",
+     "max": 604800
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 12155.4,
+    "deltaVWeight": 1,
+    "timeRef": 383120,
+    "timeWeight": 1
+   },
+   "spheres": [
+    {
+     "body": "moon",
+     "radius": 66100000
+    }
+   ]
+  },
+  {
+   "id": "lunar-free-return",
+   "title": "Free return",
+   "version": 4,
+   "briefing": "One injection, no corrections: swing around the Moon and fall back into Earth’s atmosphere below 11.5 km/s, as Apollo’s free-return trajectories did. The budget covers the ascent and the injection only, and a minute’s change in its timing misses the return corridor.",
+   "epoch": 852854469.184,
+   "start": {
+    "kind": "launch",
+    "site": "kourou",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "window": [852854469.184, 858038469.184],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 435000,
+       "dryMass": 24100,
+       "engines": [
+        {
+         "thrust": 8226000,
+         "isp": 311
+        }
+       ]
+      },
+      {
+       "wetMass": 111500,
+       "dryMass": 4000,
+       "engines": [
+        {
+         "thrust": 981000,
+         "isp": 348
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ]
+   },
+   "spacecraft": {
+    "wetMass": 6500,
+    "dryMass": 3250,
+    "engines": [
+     {
+      "thrust": 10000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 1036800,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 12186.5,
+     "ascentDeltaV": 9023.9,
+     "time": 622093,
+     "maxDeltaV": 12320,
+     "maxTime": 1036800
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 12394.8,
+     "ascentDeltaV": 9244.7,
+     "time": 747573,
+     "maxDeltaV": 12530,
+     "maxTime": 1036800
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 12181.3,
+     "ascentDeltaV": 9018.9,
+     "time": 599591,
+     "maxDeltaV": 12320,
+     "maxTime": 1036800
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 12294.8,
+     "ascentDeltaV": 9143.7,
+     "time": 680249,
+     "maxDeltaV": 12430,
+     "maxTime": 1036800
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 12181.8,
+     "ascentDeltaV": 9032.6,
+     "time": 751581,
+     "maxDeltaV": 12320,
+     "maxTime": 1036800
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 12229.7,
+     "ascentDeltaV": 9079.6,
+     "time": 594163,
+     "maxDeltaV": 12370,
+     "maxTime": 1036800
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 12185.4,
+     "ascentDeltaV": 9017.3,
+     "time": 531881,
+     "maxDeltaV": 12320,
+     "maxTime": 1036800
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "sequence",
+     "steps": [
+      {
+       "kind": "flyby",
+       "body": "moon",
+       "minAltitude": 100000,
+       "maxAltitude": 20000000
+      },
+      {
+       "kind": "reentry",
+       "body": "earth",
+       "maxSpeed": 11500
+      }
+     ]
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 12530
+    },
+    {
+     "kind": "max-time",
+     "max": 1036800
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 12181.3,
+    "deltaVWeight": 1,
+    "timeRef": 599591,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "lunar-orbit",
+   "title": "Lunar orbit",
+   "version": 4,
+   "briefing": "Enter orbit around the Moon (periselene {peri}, aposelene below {apo}) and stay for three revolutions. Ariane’s hydrogen upper stage is efficient but weak: the injection takes about ten minutes, so centre it on the right point and aim for a low pass. Then separate it; your spacecraft brakes at periselene.",
+   "briefingDistances": {
+    "peri": {
+     "kind": "altitude-band",
+     "body": "moon",
+     "lo": 50000,
+     "hi": 500000
+    },
+    "apo": {
+     "kind": "altitude",
+     "body": "moon",
+     "value": 5000000
+    }
+   },
+   "epoch": 852854469.184,
+   "start": {
+    "kind": "launch",
+    "site": "tanegashima",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 594334.4386679409,
+       "dryMass": 68400,
+       "engines": [
+        {
+         "thrust": 9230000,
+         "isp": 274.5
+        },
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 138765.56133205906,
+       "dryMass": 14700,
+       "engines": [
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 19440,
+       "dryMass": 4540,
+       "engines": [
+        {
+         "thrust": 67000,
+         "isp": 446
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [852854469.184, 858038469.184]
+   },
+   "spacecraft": {
+    "wetMass": 7400,
+    "dryMass": 4400,
+    "engines": [
+     {
+      "thrust": 20000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 518400,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 13243.4,
+     "ascentDeltaV": 9329,
+     "time": 293839,
+     "maxDeltaV": 13560,
+     "maxTime": 367800
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 13369.5,
+     "ascentDeltaV": 9563.7,
+     "time": 378562,
+     "maxDeltaV": 13680,
+     "maxTime": 473400
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 13485.1,
+     "ascentDeltaV": 9323.6,
+     "time": 255655,
+     "maxDeltaV": 13820,
+     "maxTime": 319800
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 13257.4,
+     "ascentDeltaV": 9457.5,
+     "time": 375541,
+     "maxDeltaV": 13570,
+     "maxTime": 469800
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 13107.9,
+     "ascentDeltaV": 9338.3,
+     "time": 376853,
+     "maxDeltaV": 13410,
+     "maxTime": 471600
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 13149.9,
+     "ascentDeltaV": 9384.4,
+     "time": 354569,
+     "maxDeltaV": 13460,
+     "maxTime": 443400
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 13561.2,
+     "ascentDeltaV": 9323.7,
+     "time": 245977,
+     "maxDeltaV": 13910,
+     "maxTime": 307800
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "orbit",
+     "body": "moon",
+     "periapsis": [1788000, 2238000],
+     "apoapsis": [1788000, 6738000],
+     "revolutions": 3
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 13910
+    },
+    {
+     "kind": "max-time",
+     "max": 473400
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 13107.9,
+    "deltaVWeight": 1,
+    "timeRef": 376853,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "venus-flyby",
+   "title": "Venus flyby",
+   "version": 4,
+   "briefing": "Fly past Venus ({pass}) in the spring 2028 window on an Atlas V. Pick a departure date from the porkchop plot, then a launch site, time and azimuth whose parking orbit contains the departure direction: it lies 35° north of the equator, so the parking orbit must be inclined at least that much, which costs the ascent some of Earth’s rotation. The Centaur has just enough for the departure if you launch well; your probe’s small engine can make up only a little.",
+   "briefingDistances": {
+    "pass": {
+     "kind": "altitude-band",
+     "body": "venus",
+     "lo": 300000,
+     "hi": 30000000
+    }
+   },
+   "epoch": 890395269.184,
+   "start": {
+    "kind": "launch",
+    "site": "tanegashima",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 307243,
+       "dryMass": 23154,
+       "engines": [
+        {
+         "thrust": 4152000,
+         "isp": 337.8
+        }
+       ]
+      },
+      {
+       "wetMass": 23146,
+       "dryMass": 2316,
+       "engines": [
+        {
+         "thrust": 99200,
+         "isp": 450.5
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [875620869.184, 896702469.184]
+   },
+   "spacecraft": {
+    "wetMass": 2750,
+    "dryMass": 2000,
+    "engines": [
+     {
+      "thrust": 4000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 22464000,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 13333.2,
+     "ascentDeltaV": 9679.2,
+     "time": 14901508,
+     "maxDeltaV": 13630,
+     "maxTime": 17193600
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 13913.6,
+     "ascentDeltaV": 10095.7,
+     "time": 14873104,
+     "maxDeltaV": 14220,
+     "maxTime": 17107200
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 13341.3,
+     "ascentDeltaV": 9681.9,
+     "time": 14938837,
+     "maxDeltaV": 13640,
+     "maxTime": 17193600
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 13726.9,
+     "ascentDeltaV": 9855.3,
+     "time": 14945793,
+     "maxDeltaV": 14040,
+     "maxTime": 17193600
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 13284.5,
+     "ascentDeltaV": 9637.8,
+     "time": 14873942,
+     "maxDeltaV": 13580,
+     "maxTime": 17107200
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 13380.6,
+     "ascentDeltaV": 9696.7,
+     "time": 14921908,
+     "maxDeltaV": 13680,
+     "maxTime": 17193600
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 13337.1,
+     "ascentDeltaV": 9682,
+     "time": 14910035,
+     "maxDeltaV": 13630,
+     "maxTime": 17193600
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "flyby",
+     "body": "venus",
+     "minAltitude": 300000,
+     "maxAltitude": 30000000
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 14220
+    },
+    {
+     "kind": "max-time",
+     "max": 17193600
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 13284.5,
+    "deltaVWeight": 1,
+    "timeRef": 14873942,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "mars-flyby",
+   "title": "Mars flyby",
+   "version": 4,
+   "briefing": "Fly past Mars ({pass}) in the 2028-29 window on a Falcon 9. Its upper stage can just make the departure from a low parking orbit launched close to due east; a higher orbit or a steeper launch leaves it short, and your probe carries only about 800 m/s for the difference and the corrections.",
+   "briefingDistances": {
+    "pass": {
+     "kind": "altitude-band",
+     "body": "mars",
+     "lo": 200000,
+     "hi": 20000000
+    }
+   },
+   "epoch": 911563269.184,
+   "start": {
+    "kind": "launch",
+    "site": "cape-canaveral",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 435000,
+       "dryMass": 24100,
+       "engines": [
+        {
+         "thrust": 8226000,
+         "isp": 311
+        }
+       ]
+      },
+      {
+       "wetMass": 111500,
+       "dryMass": 4000,
+       "engines": [
+        {
+         "thrust": 981000,
+         "isp": 348
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [904651269.184, 920289669.184]
+   },
+   "spacecraft": {
+    "wetMass": 4850,
+    "dryMass": 3750,
+    "engines": [
+     {
+      "thrust": 4000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 34560000,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 12652.2,
+     "ascentDeltaV": 9009,
+     "time": 27331347,
+     "maxDeltaV": 12950,
+     "maxTime": 31449600
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 13148.8,
+     "ascentDeltaV": 9229,
+     "time": 27383479,
+     "maxDeltaV": 13470,
+     "maxTime": 31536000
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 12659.6,
+     "ascentDeltaV": 9011.8,
+     "time": 27358596,
+     "maxDeltaV": 12960,
+     "maxTime": 31536000
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 12933.7,
+     "ascentDeltaV": 9131.8,
+     "time": 27363644,
+     "maxDeltaV": 13240,
+     "maxTime": 31536000
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 12704.5,
+     "ascentDeltaV": 9017.6,
+     "time": 27375875,
+     "maxDeltaV": 13000,
+     "maxTime": 31536000
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 12764.3,
+     "ascentDeltaV": 9064.4,
+     "time": 27340869,
+     "maxDeltaV": 13070,
+     "maxTime": 31449600
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 12654.6,
+     "ascentDeltaV": 9011.9,
+     "time": 27332808,
+     "maxDeltaV": 12950,
+     "maxTime": 31449600
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "flyby",
+     "body": "mars",
+     "minAltitude": 200000,
+     "maxAltitude": 20000000
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 13470
+    },
+    {
+     "kind": "max-time",
+     "max": 31536000
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 12652.2,
+    "deltaVWeight": 1,
+    "timeRef": 27331347,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "mars-orbit",
+   "title": "Mars orbit",
+   "version": 4,
+   "briefing": "Capture into an elliptical orbit around Mars (periapsis {peri}, apoapsis {apo}) and hold it for two revolutions. The Falcon 9 upper stage does the departure; your orbiter must keep its propellant for the capture, so every m/s the upper stage falls short comes out of the capture margin. After ten months of cruise a small midcourse correction a month out puts periapsis where you want it; then brake there.",
+   "briefingDistances": {
+    "peri": {
+     "kind": "altitude-band",
+     "body": "mars",
+     "lo": 200000,
+     "hi": 1000000
+    },
+    "apo": {
+     "kind": "altitude-band",
+     "body": "mars",
+     "lo": 5000000,
+     "hi": 40000000
+    }
+   },
+   "epoch": 911563269.184,
+   "start": {
+    "kind": "launch",
+    "site": "cape-canaveral",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 435000,
+       "dryMass": 24100,
+       "engines": [
+        {
+         "thrust": 8226000,
+         "isp": 311
+        }
+       ]
+      },
+      {
+       "wetMass": 111500,
+       "dryMass": 4000,
+       "engines": [
+        {
+         "thrust": 981000,
+         "isp": 348
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [904651269.184, 920289669.184]
+   },
+   "spacecraft": {
+    "wetMass": 5100,
+    "dryMass": 2950,
+    "engines": [
+     {
+      "thrust": 10000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 34560000,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 13868.2,
+     "ascentDeltaV": 9010.1,
+     "time": 26068351,
+     "maxDeltaV": 14260,
+     "maxTime": 29980800
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 14315.5,
+     "ascentDeltaV": 9231.4,
+     "time": 26120880,
+     "maxDeltaV": 14730,
+     "maxTime": 30067200
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 13874,
+     "ascentDeltaV": 9013,
+     "time": 26099251,
+     "maxDeltaV": 14270,
+     "maxTime": 30067200
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 14168.5,
+     "ascentDeltaV": 9135.5,
+     "time": 26106534,
+     "maxDeltaV": 14580,
+     "maxTime": 30067200
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 13921.2,
+     "ascentDeltaV": 9019.6,
+     "time": 26110462,
+     "maxDeltaV": 14320,
+     "maxTime": 30067200
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 13977.7,
+     "ascentDeltaV": 9065.2,
+     "time": 26077970,
+     "maxDeltaV": 14380,
+     "maxTime": 30067200
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 13871.1,
+     "ascentDeltaV": 9013.8,
+     "time": 26070642,
+     "maxDeltaV": 14260,
+     "maxTime": 30067200
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "orbit",
+     "body": "mars",
+     "periapsis": [3596000, 4396000],
+     "apoapsis": [8396000, 43396000],
+     "revolutions": 2
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 14730
+    },
+    {
+     "kind": "max-time",
+     "max": 30067200
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 13868.2,
+    "deltaVWeight": 1,
+    "timeRef": 26068351,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "venus-to-mercury",
+   "title": "Venus to Mercury",
+   "version": 4,
+   "briefing": "Reach Mercury slowly enough to matter: pass it below {pass} at under 13 km/s, after a flyby of Venus. Going straight to Mercury costs about the same to leave Earth but arrives near 16 km/s; Venus’s gravity bends the path for free. Launch in late 2031 on an Atlas V: the Centaur has the departure with a few per cent to spare, and your light probe has only about 500 m/s, so launch well.",
+   "briefingDistances": {
+    "pass": {
+     "kind": "altitude",
+     "body": "mercury",
+     "value": 50000000
+    }
+   },
+   "epoch": 1003492869.184,
+   "start": {
+    "kind": "launch",
+    "site": "equator",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 307243,
+       "dryMass": 23154,
+       "engines": [
+        {
+         "thrust": 4152000,
+         "isp": 337.8
+        }
+       ]
+      },
+      {
+       "wetMass": 23146,
+       "dryMass": 2316,
+       "engines": [
+        {
+         "thrust": 99200,
+         "isp": 450.5
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [996580869.184, 1009800069.184]
+   },
+   "spacecraft": {
+    "wetMass": 1400,
+    "dryMass": 1200,
+    "engines": [
+     {
+      "thrust": 2000,
+      "isp": 320
+     }
+    ]
+   },
+   "maxDuration": 38880000,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 14522.6,
+     "ascentDeltaV": 9416.1,
+     "time": 28963760,
+     "maxDeltaV": 14940,
+     "maxTime": 33350400
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 14908.6,
+     "ascentDeltaV": 9756.1,
+     "time": 28943121,
+     "maxDeltaV": 15330,
+     "maxTime": 33350400
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 14419.1,
+     "ascentDeltaV": 9350.8,
+     "time": 28976081,
+     "maxDeltaV": 14830,
+     "maxTime": 33350400
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 14680.5,
+     "ascentDeltaV": 9596.4,
+     "time": 28927693,
+     "maxDeltaV": 15090,
+     "maxTime": 33350400
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 14502,
+     "ascentDeltaV": 9422,
+     "time": 28927111,
+     "maxDeltaV": 14910,
+     "maxTime": 33350400
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 14662.5,
+     "ascentDeltaV": 9517.4,
+     "time": 28983025,
+     "maxDeltaV": 15080,
+     "maxTime": 33350400
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 14417.7,
+     "ascentDeltaV": 9337.4,
+     "time": 28956240,
+     "maxDeltaV": 14830,
+     "maxTime": 33350400
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "sequence",
+     "steps": [
+      {
+       "kind": "flyby",
+       "body": "venus",
+       "minAltitude": 300000,
+       "maxAltitude": 200000000
+      },
+      {
+       "kind": "flyby",
+       "body": "mercury",
+       "minAltitude": 200000,
+       "maxAltitude": 50000000,
+       "maxSpeed": 13000
+      }
+     ]
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 15330
+    },
+    {
+     "kind": "max-time",
+     "max": 33350400
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 14417.7,
+    "deltaVWeight": 1,
+    "timeRef": 28956240,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "solar-escape",
+   "title": "Leave the Sun",
+   "version": 4,
+   "briefing": "Leave the solar system with at least 7.5 km/s of excess speed over the Sun. Even an Ariane 5 cannot do it alone: its upper stage gives about half the departure, then separates and your kick stage burns the rest in the same pass. Then fly behind Jupiter, so its gravity turns your path toward the direction Jupiter is moving and hands you some of its orbital speed. Launch in 2031 or 2032.",
+   "epoch": 978264069.184,
+   "start": {
+    "kind": "launch",
+    "site": "tanegashima",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 594334.4386679409,
+       "dryMass": 68400,
+       "engines": [
+        {
+         "thrust": 9230000,
+         "isp": 274.5
+        },
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 138765.56133205906,
+       "dryMass": 14700,
+       "engines": [
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 19440,
+       "dryMass": 4540,
+       "engines": [
+        {
+         "thrust": 67000,
+         "isp": 446
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [978264069.184, 1041422469.184]
+   },
+   "spacecraft": {
+    "wetMass": 8000,
+    "dryMass": 3100,
+    "engines": [
+     {
+      "thrust": 30000,
+      "isp": 450
+     }
+    ]
+   },
+   "maxDuration": 126230400,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 16470.3,
+     "ascentDeltaV": 9351.1,
+     "time": 71779226,
+     "maxDeltaV": 17040,
+     "maxTime": 82598400
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 16658.3,
+     "ascentDeltaV": 9576.8,
+     "time": 71774032,
+     "maxDeltaV": 17230,
+     "maxTime": 82598400
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 16463.8,
+     "ascentDeltaV": 9352.7,
+     "time": 71726933,
+     "maxDeltaV": 17040,
+     "maxTime": 82512000
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 16569.6,
+     "ascentDeltaV": 9472.6,
+     "time": 71754379,
+     "maxDeltaV": 17140,
+     "maxTime": 82598400
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 16462,
+     "ascentDeltaV": 9348.7,
+     "time": 71745635,
+     "maxDeltaV": 17040,
+     "maxTime": 82512000
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 16486.3,
+     "ascentDeltaV": 9390.1,
+     "time": 71721931,
+     "maxDeltaV": 17060,
+     "maxTime": 82512000
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 16464.3,
+     "ascentDeltaV": 9350.8,
+     "time": 71741530,
+     "maxDeltaV": 17040,
+     "maxTime": 82512000
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "escape",
+     "body": "sun",
+     "minSpeed": 7500
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 17230
+    },
+    {
+     "kind": "max-time",
+     "max": 82598400
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 16462,
+    "deltaVWeight": 1,
+    "timeRef": 71745635,
+    "timeWeight": 1
+   }
+  },
+  {
+   "id": "jupiter-saturn",
+   "title": "Jupiter to Saturn",
+   "version": 4,
+   "briefing": "Fly past Jupiter and on to Saturn (below {pass}) in under 7.4 years. The planets line up for this only about every 20 years; launch in 2034. The departure is split across a separation: the Ariane upper stage burns out, your kick stage finishes it. Aim the Jupiter flyby so it bends you toward where Saturn will be, and trim the path after the flyby with what the kick stage has left.",
+   "briefingDistances": {
+    "pass": {
+     "kind": "altitude",
+     "body": "saturn",
+     "value": 2000000000
+    }
+   },
+   "epoch": 1086782469.184,
+   "start": {
+    "kind": "launch",
+    "site": "equator",
+    "azimuthDeg": 90,
+    "altitudeM": 200000
+   },
+   "rules": {
+    "launchOnly": true,
+    "sites": [
+     "cape-canaveral",
+     "vandenberg",
+     "kourou",
+     "baikonur",
+     "tanegashima",
+     "mahia",
+     "equator"
+    ],
+    "vehicle": {
+     "kind": "vehicle",
+     "lowerStages": [
+      {
+       "wetMass": 594334.4386679409,
+       "dryMass": 68400,
+       "engines": [
+        {
+         "thrust": 9230000,
+         "isp": 274.5
+        },
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 138765.56133205906,
+       "dryMass": 14700,
+       "engines": [
+        {
+         "thrust": 1390000,
+         "isp": 432
+        }
+       ]
+      },
+      {
+       "wetMass": 19440,
+       "dryMass": 4540,
+       "engines": [
+        {
+         "thrust": 67000,
+         "isp": 446
+        }
+       ]
+      }
+     ],
+     "altitude": [180000, 1000000],
+     "ascentTimeS": 540,
+     "downrangeDeg": 13.5,
+     "circularization": "j2-mean"
+    },
+    "window": [1072958469.184, 1104494469.184]
+   },
+   "spacecraft": {
+    "wetMass": 8000,
+    "dryMass": 3100,
+    "engines": [
+     {
+      "thrust": 30000,
+      "isp": 450
+     }
+    ]
+   },
+   "maxDuration": 252460800,
+   "atmosphereIsFailure": true,
+   "launchSites": [
+    {
+     "site": "cape-canaveral",
+     "offered": true,
+     "deltaV": 16541.8,
+     "ascentDeltaV": 9335.8,
+     "time": 201772637,
+     "maxDeltaV": 17120,
+     "maxTime": 232070400
+    },
+    {
+     "site": "vandenberg",
+     "offered": true,
+     "deltaV": 16721.8,
+     "ascentDeltaV": 9577.1,
+     "time": 201767197,
+     "maxDeltaV": 17300,
+     "maxTime": 232070400
+    },
+    {
+     "site": "kourou",
+     "offered": true,
+     "deltaV": 16430.2,
+     "ascentDeltaV": 9269.2,
+     "time": 201707865,
+     "maxDeltaV": 17010,
+     "maxTime": 231984000
+    },
+    {
+     "site": "baikonur",
+     "offered": true,
+     "deltaV": 16644.6,
+     "ascentDeltaV": 9469.3,
+     "time": 201728770,
+     "maxDeltaV": 17220,
+     "maxTime": 232070400
+    },
+    {
+     "site": "tanegashima",
+     "offered": true,
+     "deltaV": 16521.2,
+     "ascentDeltaV": 9345.7,
+     "time": 201704941,
+     "maxDeltaV": 17100,
+     "maxTime": 231984000
+    },
+    {
+     "site": "mahia",
+     "offered": true,
+     "deltaV": 16565.5,
+     "ascentDeltaV": 9393,
+     "time": 201713127,
+     "maxDeltaV": 17140,
+     "maxTime": 231984000
+    },
+    {
+     "site": "equator",
+     "offered": true,
+     "deltaV": 16408.7,
+     "ascentDeltaV": 9265.8,
+     "time": 201682521,
+     "maxDeltaV": 16990,
+     "maxTime": 231984000
+    }
+   ],
+   "objectives": [
+    {
+     "kind": "sequence",
+     "steps": [
+      {
+       "kind": "flyby",
+       "body": "jupiter",
+       "minAltitude": 100000,
+       "maxAltitude": 1000000000
+      },
+      {
+       "kind": "flyby",
+       "body": "saturn",
+       "minAltitude": 1000000,
+       "maxAltitude": 2000000000
+      }
+     ]
+    },
+    {
+     "kind": "max-delta-v",
+     "max": 17300
+    },
+    {
+     "kind": "max-time",
+     "max": 232070400
+    }
+   ],
+   "scoring": {
+    "deltaVRef": 16408.7,
+    "deltaVWeight": 1,
+    "timeRef": 201682521,
+    "timeWeight": 1
+   }
+  }
+ ],
+ "leaderboard": {
+  "launchOnlyByDefault": true,
+  "earliest": -1577880000,
+  "latest": 3155760000,
+  "maxDuration": 1262304000,
+  "minRtol": 1e-12,
+  "maxRtol": 1e-10,
+  "maxSteps": 100000
+ }
+}
